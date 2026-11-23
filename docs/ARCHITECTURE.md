@@ -19,17 +19,20 @@ Meridian/
 │   └── (src/layout, src/panels, src/store, src/api)
 ├── data/                      # 【全局唯一静态配置源】
 │   └── production.json        # 由产线编辑器导出，严格遵循 sim/production_schema.md (v1.0.0)
-├── docs/                      # 【正式版架构、协议与部署文档】
-│   └── ARCHITECTURE.md        # 本文件
+├── docs/                      # 【正式版架构、协议、调研与部署文档】
+│   ├── ARCHITECTURE.md        # 本文件
+│   └── prun_research.md       # PrUn 经济机制调研参考
 ├── scripts/                   # 【构建与运行脚本】
 │   └── cargo.sh               # 复用局部 Rust 工具链的 Cargo 包装脚本
-└── sim/                       # 【v0 Python 验证原型 & 产线编辑工具】
-    ├── production_schema.md   # 产线 JSON Schema v1.0.0 规范
-    ├── recipe_editor.html     # 离线产线可视化编辑与体检器
-    └── ...                    # 早期经济学验证脚本（保留作对照，不与正式核心混杂）
+├── sim/                       # 【v0 Python 验证原型 & 产线编辑工具】
+│   ├── production_schema.md   # 产线 JSON Schema v1.0.0 规范
+│   ├── recipe_editor.html     # 离线产线可视化编辑与体检器
+│   └── ...                    # 早期经济学验证脚本（保留作对照，不与正式核心混杂）
+└── archive/                   # 【早期实验代码与旧页面归档】
+    └── legacy_v0/             # exp0~exp6、server.py、早期 HTML 探索页面
 ```
 
-> 注：根目录遗留的 `exp*.py`、`server.py`、`index.html`、`planet_viewer.html`、`system_viewer.html`、`ui_sample.html` 为更早的实验原型文件，待正式工程稳定后再统一归档清理；`sim/` 目录当前保留原位以免影响独立进行的产线编辑器迭代。
+> 注：`sim/` 目录暂保留原位，确保独立运行的产线编辑器工具链路径不变；正式版 Rust 内核稳定后可再按需归档。
 
 ---
 
