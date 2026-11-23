@@ -460,6 +460,229 @@ impl GameEngine {
         rows
     }
 
+    pub fn admin_overview(&self) -> serde_json::Value {
+        let mut order_counts_by_owner: HashMap<String, usize> = HashMap::new();
+        let mut station_stats = serde_json::Map::new();
+
+        for (sid, st) in &self.world.stations {
+            let mut bid_count = 0usize;
+            let mut ask_count = 0usize;
+            for o in st.bids.values().flat_map(|v| v.iter()) {
+                bid_count += 1;
+                *order_counts_by_owner.entry(o.owner_id.clone()).or_insert(0) += 1;
+            }
+            for o in st.asks.values().flat_map(|v| v.iter()) {
+                ask_count += 1;
+                *order_counts_by_owner.entry(o.owner_id.clone()).or_insert(0) += 1;
+            }
+            station_stats.insert(
+                sid.clone(),
+                serde_json::json!({
+                    "station_id": sid,
+                    "bid_orders": bid_count,
+                    "ask_orders": ask_count,
+                }),
+            );
+        }
+
+        let mut planets_detail: Vec<serde_json::Value> = self
+            .world
+            .planets
+            .values()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "archetype": p.archetype,
+                    "population": p.population,
+                    "wealth_tier": p.wealth_tier,
+                    "prosperity": p.prosperity,
+                    "treasury": from_money(p.treasury),
+                    "bank_reserves": from_money(p.bank.reserves),
+                    "bank_deposits": from_money(p.bank.total_deposits),
+                    "bank_loans": from_money(p.bank.total_loans),
+                    "bank_rate_bps": p.bank.annual_rate_bps,
+                    "waste_backlog": p.waste_backlog,
+                    "unclaimed_plots": p.unclaimed_plots_remaining,
+                    "land_listings_count": p.land_listings.len(),
+                    "primary_land_price": from_money(p.primary_land_price(self.world.cpi)),
+                    "demands": p.last_demands,
+                })
+            })
+            .collect();
+        planets_detail.sort_by(|a, b| {
+            a["id"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["id"].as_str().unwrap_or(""))
+        });
+
+        let companies_detail: Vec<serde_json::Value> = self
+            .world
+            .companies
+            .values()
+            .map(|c| {
+                let blds: Vec<serde_json::Value> = c
+                    .plots
+                    .iter()
+                    .filter_map(|pid| self.world.plots.get(pid))
+                    .flat_map(|pl| pl.building_ids.iter().filter_map(|bid| self.world.buildings.get(bid)))
+                    .map(|b| {
+                        serde_json::json!({
+                            "id": b.id,
+                            "planet_id": b.planet_id,
+                            "building_type": b.building_type,
+                            "recipe_id": b.recipe_id,
+                            "active": b.active,
+                            "active_batch": b.active_batch,
+                            "progress": b.progress,
+                            "idle_ticks": b.idle_ticks,
+                            "efficiency": b.efficiency,
+                        })
+                    })
+                    .collect();
+
+                let ships: Vec<serde_json::Value> = c
+                    .ships
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "id": s.id,
+                            "size": format!("{:?}", s.size).to_lowercase(),
+                            "capacity": s.capacity(),
+                            "location": s.location,
+                            "durability": s.durability,
+                            "busy_until": s.busy_until,
+                            "is_busy": s.is_busy(self.world.tick),
+                            "cargo": s.cargo,
+                        })
+                    })
+                    .collect();
+
+                let ground_inv: serde_json::Map<String, serde_json::Value> = c
+                    .ground_inv
+                    .iter()
+                    .filter_map(|(pid, m)| {
+                        let nz: serde_json::Map<String, serde_json::Value> = m
+                            .iter()
+                            .filter(|(_, q)| **q > 0)
+                            .map(|(k, &q)| (k.clone(), serde_json::json!(q)))
+                            .collect();
+                        if nz.is_empty() {
+                            None
+                        } else {
+                            Some((pid.clone(), serde_json::Value::Object(nz)))
+                        }
+                    })
+                    .collect();
+
+                let station_inv: serde_json::Map<String, serde_json::Value> = c
+                    .station_inv
+                    .iter()
+                    .filter_map(|(sid, m)| {
+                        let nz: serde_json::Map<String, serde_json::Value> = m
+                            .iter()
+                            .filter(|(_, q)| **q > 0)
+                            .map(|(k, &q)| (k.clone(), serde_json::json!(q)))
+                            .collect();
+                        if nz.is_empty() {
+                            None
+                        } else {
+                            Some((sid.clone(), serde_json::Value::Object(nz)))
+                        }
+                    })
+                    .collect();
+
+                let player_script = if c.is_player {
+                    self.runner.players.get(&c.id).map(|pvm| {
+                        let out = self.runner.last_player_outputs.get(&c.id);
+                        serde_json::json!({
+                            "enabled": pvm.enabled,
+                            "modules_count": pvm.bundle.modules.len(),
+                            "cpu_used_ms": out.map(|o| o.cpu_used_ms).unwrap_or(0.0),
+                            "error": out.and_then(|o| o.error.clone()),
+                            "timed_out": out.map(|o| o.timed_out).unwrap_or(false),
+                            "oom": out.map(|o| o.oom).unwrap_or(false),
+                        })
+                    })
+                } else {
+                    None
+                };
+
+                let npc_genome = if !c.is_player {
+                    self.runner.npc_genomes.get(&c.id).cloned()
+                } else {
+                    None
+                };
+
+                serde_json::json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "is_player": c.is_player,
+                    "profession": c.profession,
+                    "home_planet_id": c.home_planet_id,
+                    "cash": from_money(c.cash),
+                    "savings": from_money(c.savings),
+                    "debt": from_money(c.debt),
+                    "net_liquid": from_money(c.cash + c.savings - c.debt),
+                    "distress_ticks": c.distress_ticks,
+                    "plots_count": c.plots.len(),
+                    "open_orders_count": order_counts_by_owner.get(&c.id).copied().unwrap_or(0),
+                    "buildings": blds,
+                    "ships": ships,
+                    "ground_inv": ground_inv,
+                    "station_inv": station_inv,
+                    "player_script": player_script,
+                    "npc_genome": npc_genome,
+                })
+            })
+            .collect();
+
+        let mut companies_sorted = companies_detail;
+        companies_sorted.sort_by(|a, b| {
+            let va = a["net_liquid"].as_f64().unwrap_or(0.0);
+            let vb = b["net_liquid"].as_f64().unwrap_or(0.0);
+            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let in_flight: Vec<serde_json::Value> = self
+            .world
+            .in_flight
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "ship_id": f.ship_id,
+                    "owner_id": f.owner_id,
+                    "from": f.from,
+                    "to": f.to,
+                    "arrival_tick": f.arrival_tick,
+                    "cargo": f.cargo,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "tick": self.world.tick,
+            "cpi": self.world.cpi,
+            "paused": self.paused,
+            "tick_ms": self.tick_ms,
+            "conservation_error": self.world.conservation_error(),
+            "total_minted": from_money_i128(self.world.ledger.expected_circulation()),
+            "ledger": {
+                "total_minted": from_money_i128(self.world.ledger.total_minted),
+                "total_burned": from_money_i128(self.world.ledger.total_burned),
+                "total_trade_fees": from_money_i128(self.world.ledger.total_trade_fees),
+                "total_storage_fees": from_money_i128(self.world.ledger.total_storage_fees),
+                "total_wages_paid": from_money_i128(self.world.ledger.total_wages_paid),
+            },
+            "planets": planets_detail,
+            "stations": station_stats,
+            "companies": companies_sorted,
+            "market_tickers": self.market_tickers(),
+            "in_flight": in_flight,
+        })
+    }
+
     pub fn state_response(&self, company_id: &str) -> StateResponse {
         StateResponse {
             tick: self.world.tick,

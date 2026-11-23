@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Meridian · 服务器管理后台</title>
+  <style>
+    :root {
+      --bg: #141920;
+      --surface: #1b222c;
+      --card: #202732;
+      --head: #242d3a;
+      --border: rgba(56, 189, 248, 0.16);
+      --text: #e2e8f0;
+      --muted: #8b9bb0;
+      --blue: #38bdf8;
+      --green: #3fb950;
+      --red: #f85149;
+      --amber: #f2cc60;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+    header {
+      background: #1b222c;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 14px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 30;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand h1 { font-size: 13px; letter-spacing: 0.12em; color: #f8fafc; font-weight: 700; }
+    .badge-admin {
+      font-size: 10px; padding: 2px 6px; border-radius: 3px;
+      background: rgba(248, 81, 73, 0.16); color: #fca5a5; border: 1px solid rgba(248, 81, 73, 0.35);
+    }
+    .stats-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .pill {
+      background: #232b38; border: 1px solid rgba(148, 163, 184, 0.18);
+      padding: 3px 8px; border-radius: 3px; font-size: 11px; color: var(--muted);
+    }
+    .pill b { color: var(--text); margin-left: 4px; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    button, a.nav-btn, input.ms-in {
+      background: #252e3b; color: var(--text); border: 1px solid rgba(148, 163, 184, 0.24);
+      padding: 4px 9px; border-radius: 3px; font-size: 11px; cursor: pointer; text-decoration: none;
+    }
+    button:hover, a.nav-btn:hover { background: #2d3848; border-color: var(--blue); }
+    button.active { background: rgba(56, 189, 248, 0.22); border-color: var(--blue); color: #bae6fd; font-weight: 600; }
+    button.primary { background: rgba(63, 185, 80, 0.18); border-color: rgba(63, 185, 80, 0.5); color: #86efac; }
+    button.danger { background: rgba(248, 81, 73, 0.14); border-color: rgba(248, 81, 73, 0.45); color: #fca5a5; }
+    input.ms-in { width: 64px; cursor: text; }
+    .wrap { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 1100px) { .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .card-hd {
+      background: var(--head);
+      border-bottom: 1px solid var(--border);
+      padding: 7px 10px;
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      font-size: 11.5px; font-weight: 600;
+    }
+    .card-bd { padding: 8px 10px; }
+    .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.08); }
+    .kv span { color: var(--muted); }
+    .tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+    .table-scroll { max-height: 440px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th {
+      position: sticky; top: 0; background: #232b38; color: var(--muted);
+      font-weight: 500; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    td { padding: 6px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.09); vertical-align: top; }
+    tr.comp-row { cursor: pointer; }
+    tr.comp-row:hover { background: rgba(56, 189, 248, 0.08); }
+    tr.comp-row.selected { background: rgba(56, 189, 248, 0.14); }
+    .num { text-align: right; white-space: nowrap; }
+    .tag {
+      display: inline-block; padding: 1px 5px; border-radius: 2px; font-size: 10px; margin: 1px 2px 1px 0;
+      background: #171d26; border: 1px solid rgba(148, 163, 184, 0.2);
+    }
+    .tag.player { background: rgba(63, 185, 80, 0.18); border-color: rgba(63, 185, 80, 0.45); color: #86efac; }
+    .tag.npc { background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.3); color: #7dd3fc; }
+    .tag.on { border-color: rgba(63, 185, 80, 0.4); color: #86efac; }
+    .tag.off { border-color: rgba(248, 81, 73, 0.35); color: #fca5a5; }
+    .split-2 { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; }
+    @media (max-width: 1200px) { .split-2 { grid-template-columns: 1fr; } }
+    .detail-box {
+      background: #171d26; border: 1px solid var(--border); border-radius: 3px;
+      padding: 8px 10px; max-height: 440px; overflow: auto;
+    }
+    pre { font-size: 10.5px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; }
+    .green { color: var(--green); }
+    .red { color: var(--red); }
+    .blue { color: var(--blue); }
+    .amber { color: var(--amber); }
+    .confirm-reset {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.5);
+      padding: 2px 6px; border-radius: 3px; font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>子午线 · MERIDIAN 服务器管理后台</h1>
+      <span class="badge-admin">ADMIN ONLY</span>
+      <a href="/" class="nav-btn">玩家端前台 &rarr;</a>
+    </div>
+
+    <div class="stats-bar mono">
+      <div class="pill">回合 <b id="kTick">--</b></div>
+      <div class="pill">CPI <b id="kCpi">--</b></div>
+      <div class="pill">发行货币 <b id="kMinted" class="blue">--</b></div>
+      <div class="pill">守恒误差 <b id="kErr" class="green">0</b></div>
+      <div class="pill">企业 <b id="kCompCount">--</b></div>
+      <div class="pill">在途飞船 <b id="kFlightCount">--</b></div>
+      <div class="pill">状态 <b id="kStatus">--</b></div>
+    </div>
+
+    <div class="controls">
+      <button id="btnPauseResume" class="primary">暂停</button>
+      <button id="btnStep">步进 +1T</button>
+      <div class="tabs" id="speedBtns">
+        <button data-ms="200">0.2s</button>
+        <button data-ms="500">0.5s</button>
+        <button data-ms="1000">1.0s</button>
+        <button data-ms="2000">2.0s</button>
+        <button data-ms="5000">5.0s</button>
+      </div>
+      <input id="customMs" class="ms-in mono" type="number" min="50" max="60000" value="2000" title="自定义 tick_ms" />
+      <button id="btnSetMs">设毫秒</button>
+      <span id="resetBox">
+        <button id="btnAskReset" class="danger">重置星系</button>
+      </span>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <!-- Ledger Audit Bar -->
+    <div class="card">
+      <div class="card-bd mono" style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:space-between; font-size:11px;">
+        <span>累计发行: <b id="lMinted" class="blue">--</b></span>
+        <span>累计销毁: <b id="lBurned">--</b></span>
+        <span>累计工资: <b id="lWages" class="amber">--</b></span>
+        <span>交易税费: <b id="lTradeFee" class="green">--</b></span>
+        <span>Hub仓储费: <b id="lStoreFee">--</b></span>
+        <span id="wsBadge" class="muted">WS 连接中...</span>
+      </div>
+    </div>
+
+    <!-- 3 Planets + Hub Macro Strip -->
+    <div class="grid-4" id="planetGrid"></div>
+
+    <!-- Companies Inspector & Selected Detail Drawer -->
+    <div class="split-2">
+      <div class="card">
+        <div class="card-hd">
+          <span>全星系企业实时监控（玩家 + 演化 NPC 全明细）</span>
+          <div class="tabs" id="compFilters">
+            <button data-f="ALL" class="active">全部</button>
+            <button data-f="PLAYER">仅玩家</button>
+            <button data-f="NPC">仅 NPC</button>
+            <button data-f="P1">P1</button>
+            <button data-f="P2">P2</button>
+            <button data-f="P3">P3</button>
+            <input id="compSearch" class="ms-in" style="width:120px;" placeholder="搜索名称/ID..." />
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>公司 / 身份</th>
+                <th>母星 / 职业</th>
+                <th class="num">净流动</th>
+                <th class="num">现金 / 储蓄 / 负债</th>
+                <th class="num">预警</th>
+                <th>地/船/单</th>
+                <th>设施状态 (配方/停滞)</th>
+                <th>库存概览</th>
+              </tr>
+            </thead>
+            <tbody id="compBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <span id="detailTitle">选中企业完整 JSON / 基因 / 飞船详情（点击左侧任意行）</span>
+          <span id="detailSub" class="mono muted"></span>
+        </div>
+        <div class="card-bd">
+          <div class="detail-box mono" id="detailBox">
+            <span class="muted">点击左侧企业行即可查看其完整设施、飞船货舱、地面与站点库存、沙盒脚本状态或 NPC 基因组权重。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Market Matrix & In-Flight Ships -->
+    <div class="split-2">
+      <div class="card">
+        <div class="card-hd">
+          <span>16×4 全站即时报价与 50 回合量矩阵（买一 / 卖一 / 最新价 / 50T量）</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>物资</th>
+                <th class="num">ST:P1</th>
+                <th class="num">ST:HUB</th>
+                <th class="num">ST:P2</th>
+                <th class="num">ST:P3</th>
+                <th class="num">50T总量</th>
+              </tr>
+            </thead>
+            <tbody id="matrixBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <span>在途飞船实时航行列表</span>
+          <span class="mono muted" id="flightSummary">0 艘航行中</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>船ID</th>
+                <th>所属公司</th>
+                <th>航线</th>
+                <th class="num">抵达回合</th>
+                <th>货舱内容</th>
+              </tr>
+            </thead>
+            <tbody id="flightBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let overview = null;
+    let catalog = null;
+    let compFilter = 'ALL';
+    let compSearch = '';
+    let selectedCompId = null;
+    let confirmingReset = false;
+
+    const ITEM_NAMES = {};
+    const PROF_NAMES = {};
+
+    const fmt = (n, d = 1) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    async function simCtrl(action, tickMs) {
+      await fetch('/api/sim/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tickMs !== undefined ? { action, tick_ms: tickMs } : { action }),
+      });
+      await refreshAll();
+    }
+
+    async function loadCatalog() {
+      try {
+        const res = await fetch('/api/catalog');
+        if (!res.ok) return;
+        catalog = await res.json();
+        for (const it of catalog.items || []) ITEM_NAMES[it.id] = it.name;
+        for (const pr of catalog.professions || []) PROF_NAMES[pr.id] = pr.name;
+      } catch (_) {}
+    }
+
+    async function refreshAll() {
+      try {
+        const res = await fetch('/api/admin/overview');
+        if (!res.ok) return;
+        overview = await res.json();
+        renderAll();
+      } catch (_) {}
+    }
+
+    function renderResetBox() {
+      const box = document.getElementById('resetBox');
+      if (!confirmingReset) {
+        box.innerHTML = `<button id="btnAskReset" class="danger">重置星系</button>`;
+        document.getElementById('btnAskReset').onclick = () => {
+          confirmingReset = true;
+          renderResetBox();
+        };
+      } else {
+        box.innerHTML = `<span class="confirm-reset">
+          <span class="red">确认重置?</span>
+          <button id="btnDoReset" class="danger">确定</button>
+          <button id="btnCancelReset">取消</button>
+        </span>`;
+        document.getElementById('btnDoReset').onclick = async () => {
+          confirmingReset = false;
+          renderResetBox();
+          await simCtrl('reset');
+        };
+        document.getElementById('btnCancelReset').onclick = () => {
+          confirmingReset = false;
+          renderResetBox();
+        };
+      }
+    }
+
+    function renderAll() {
+      if (!overview) return;
+      document.getElementById('kTick').textContent = overview.tick;
+      document.getElementById('kCpi').textContent = Number(overview.cpi).toFixed(3);
+      document.getElementById('kMinted').textContent = fmt(overview.total_minted, 0);
+      const errEl = document.getElementById('kErr');
+      errEl.textContent = overview.conservation_error;
+      errEl.className = overview.conservation_error === 0 ? 'green' : 'red';
+
+      const comps = overview.companies || [];
+      const pCnt = comps.filter((c) => c.is_player).length;
+      const nCnt = comps.length - pCnt;
+      document.getElementById('kCompCount').textContent = `${comps.length} (${pCnt}玩家 / ${nCnt}NPC)`;
+      document.getElementById('kFlightCount').textContent = (overview.in_flight || []).length;
+
+      const stEl = document.getElementById('kStatus');
+      stEl.textContent = overview.paused ? '已暂停' : `运行 (${overview.tick_ms}ms)`;
+      stEl.className = overview.paused ? 'amber' : 'green';
+
+      const btnPR = document.getElementById('btnPauseResume');
+      btnPR.textContent = overview.paused ? '继续运行' : '暂停模拟';
+      btnPR.className = overview.paused ? 'primary' : 'danger';
+
+      document.querySelectorAll('#speedBtns button').forEach((b) => {
+        b.classList.toggle('active', Number(b.dataset.ms) === overview.tick_ms);
+      });
+      if (document.activeElement !== document.getElementById('customMs')) {
+        document.getElementById('customMs').value = overview.tick_ms;
+      }
+
+      const l = overview.ledger || {};
+      document.getElementById('lMinted').textContent = fmt(l.total_minted, 1);
+      document.getElementById('lBurned').textContent = fmt(l.total_burned, 1);
+      document.getElementById('lWages').textContent = fmt(l.total_wages_paid, 1);
+      document.getElementById('lTradeFee').textContent = fmt(l.total_trade_fees, 1);
+      document.getElementById('lStoreFee').textContent = fmt(l.total_storage_fees, 1);
+
+      renderPlanets();
+      renderCompanies();
+      renderMatrix();
+      renderFlights();
+      renderDetail();
+    }
+
+    function renderPlanets() {
+      const grid = document.getElementById('planetGrid');
+      const stations = overview.stations || {};
+      const cards = (overview.planets || []).map((p) => {
+        const st = stations['ST:' + p.id] || { bid_orders: 0, ask_orders: 0 };
+        const demCount = Object.keys(p.demands || {}).length;
+        return `<div class="card">
+          <div class="card-hd">
+            <span>${esc(p.name)} (${esc(p.id)})</span>
+            <span class="mono muted">${esc(p.archetype)}</span>
+          </div>
+          <div class="card-bd mono">
+            <div class="kv"><span>人口 / 繁荣</span><b>${Math.round(p.population).toLocaleString()} · ${Number(p.prosperity).toFixed(2)}x</b></div>
+            <div class="kv"><span>星球金库</span><b class="blue">${fmt(p.treasury, 0)}</b></div>
+            <div class="kv"><span>准备金 / 存 / 贷</span><b>${fmt(p.bank_reserves, 0)} / ${fmt(p.bank_deposits, 0)} / ${fmt(p.bank_loans, 0)}</b></div>
+            <div class="kv"><span>年化利率 / 废料</span><b>${(p.bank_rate_bps / 100).toFixed(2)}% · 废料 ${p.waste_backlog}</b></div>
+            <div class="kv"><span>余地 / 挂牌 / 买/卖单</span><b>${p.unclaimed_plots} / ${p.land_listings_count} / ${st.bid_orders}/${st.ask_orders}</b></div>
+            <div class="kv"><span>城市消费品类</span><b>${demCount} 项</b></div>
+          </div>
+        </div>`;
+      });
+
+      const hub = stations['ST:HUB'] || { bid_orders: 0, ask_orders: 0 };
+      const hubVol = (overview.market_tickers || [])
+        .filter((t) => t.station_id === 'ST:HUB')
+        .reduce((a, b) => a + (b.vol_50t || 0), 0);
+      cards.push(`<div class="card">
+        <div class="card-hd">
+          <span class="blue">中心贸易枢纽 (ST:HUB)</span>
+          <span class="mono muted">1.45 AU</span>
+        </div>
+        <div class="card-bd mono">
+          <div class="kv"><span>Hub 买单数</span><b>${hub.bid_orders}</b></div>
+          <div class="kv"><span>Hub 卖单数</span><b>${hub.ask_orders}</b></div>
+          <div class="kv"><span>Hub 50回合总量</span><b class="green">${hubVol}</b></div>
+          <div class="kv"><span>在途飞船总数</span><b>${(overview.in_flight || []).length}</b></div>
+        </div>
+      </div>`);
+      grid.innerHTML = cards.join('');
+    }
+
+    function renderCompanies() {
+      const comps = (overview.companies || []).filter((c) => {
+        if (compFilter === 'PLAYER' && !c.is_player) return false;
+        if (compFilter === 'NPC' && c.is_player) return false;
+        if (['P1', 'P2', 'P3'].includes(compFilter) && c.home_planet_id !== compFilter) return false;
+        if (compSearch) {
+          const q = compSearch.toLowerCase();
+          if (!c.id.toLowerCase().includes(q) && !c.name.toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
+
+      const body = document.getElementById('compBody');
+      body.innerHTML = comps.map((c) => {
+        const bTags = (c.buildings || []).map((b) => {
+          const cls = b.active ? 'on' : 'off';
+          const idleTxt = b.idle_ticks > 0 ? ` 闲${b.idle_ticks}` : '';
+          return `<span class="tag ${cls} mono">${esc(b.recipe_id)}${idleTxt}</span>`;
+        }).join('') || '<span class="muted">无设施</span>';
+
+        const gItems = Object.entries(c.ground_inv || {}).map(([pid, m]) =>
+          Object.entries(m).map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}:${q}`).join(' ')
+        ).join(' | ');
+        const sItems = Object.entries(c.station_inv || {}).map(([sid, m]) =>
+          `${esc(sid)}[` + Object.entries(m).map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}:${q}`).join(' ') + `]`
+        ).join(' ');
+
+        const shipsTxt = (c.ships || []).map((s) => `${s.location}(${Math.round(s.durability)}%)`).join(', ');
+        const selCls = selectedCompId === c.id ? 'selected' : '';
+        return `<tr class="comp-row ${selCls}" data-cid="${esc(c.id)}">
+          <td>
+            <span class="tag ${c.is_player ? 'player' : 'npc'}">${c.is_player ? '玩家' : 'NPC'}</span>
+            <b>${esc(c.name)}</b>
+            <div class="mono muted" style="font-size:10px;">${esc(c.id)}</div>
+          </td>
+          <td>
+            <div>${esc(c.home_planet_id)}</div>
+            <div class="muted" style="font-size:10px;">${esc(PROF_NAMES[c.profession] || c.profession)}</div>
+          </td>
+          <td class="num mono ${c.net_liquid >= 0 ? 'blue' : 'red'}"><b>${fmt(c.net_liquid, 1)}</b></td>
+          <td class="num mono" style="font-size:10.5px;">
+            <div>${fmt(c.cash, 0)} / <span class="green">${fmt(c.savings, 0)}</span> / <span class="${c.debt > 0 ? 'red' : 'muted'}">${fmt(c.debt, 0)}</span></div>
+          </td>
+          <td class="num mono ${c.distress_ticks > 0 ? 'red' : 'muted'}">${c.distress_ticks}</td>
+          <td class="mono" style="font-size:10.5px;">
+            <div>地${c.plots_count} · 船${(c.ships || []).length} · 单${c.open_orders_count}</div>
+            <div class="muted" style="font-size:10px;">${esc(shipsTxt)}</div>
+          </td>
+          <td>${bTags}</td>
+          <td style="font-size:10.5px; max-width:220px; word-break:break-word;">
+            ${gItems ? `<div><span class="muted">地:</span> ${gItems}</div>` : ''}
+            ${sItems ? `<div><span class="blue">站:</span> ${sItems}</div>` : ''}
+            ${!gItems && !sItems ? '<span class="muted">空仓</span>' : ''}
+          </td>
+        </tr>`;
+      }).join('');
+
+      body.querySelectorAll('tr.comp-row').forEach((tr) => {
+        tr.onclick = () => {
+          selectedCompId = tr.dataset.cid;
+          renderCompanies();
+          renderDetail();
+        };
+      });
+    }
+
+    function renderDetail() {
+      const titleEl = document.getElementById('detailTitle');
+      const subEl = document.getElementById('detailSub');
+      const box = document.getElementById('detailBox');
+      if (!selectedCompId || !overview) return;
+      const comp = (overview.companies || []).find((c) => c.id === selectedCompId);
+      if (!comp) {
+        box.innerHTML = '<span class="muted">该企业已被清算或重置</span>';
+        return;
+      }
+      titleEl.textContent = `${comp.name} (${comp.id})`;
+      subEl.textContent = `${comp.is_player ? 'PLAYER' : 'NPC'} · ${comp.home_planet_id}`;
+      box.innerHTML = `<pre>${esc(JSON.stringify(comp, null, 2))}</pre>`;
+    }
+
+    function renderMatrix() {
+      const tickers = overview.market_tickers || [];
+      const byKey = {};
+      const itemsSet = new Set();
+      for (const t of tickers) {
+        byKey[`${t.item_id}::${t.station_id}`] = t;
+        itemsSet.add(t.item_id);
+      }
+      const items = Array.from(itemsSet).sort();
+      const sids = ['ST:P1', 'ST:HUB', 'ST:P2', 'ST:P3'];
+
+      const cellHtml = (t) => {
+        if (!t) return '<td class="num muted">--</td>';
+        const bb = t.best_bid !== null && t.best_bid !== undefined ? Number(t.best_bid).toFixed(2) : '--';
+        const ba = t.best_ask !== null && t.best_ask !== undefined ? Number(t.best_ask).toFixed(2) : '--';
+        const lp = Number(t.last_price).toFixed(2);
+        return `<td class="num mono" style="font-size:10.5px;">
+          <span class="green">${bb}</span>/<span class="red">${ba}</span> · <b>${lp}</b>
+          ${t.vol_50t > 0 ? `<span class="blue">(${t.vol_50t})</span>` : ''}
+        </td>`;
+      };
+
+      document.getElementById('matrixBody').innerHTML = items.map((it) => {
+        const totVol = sids.reduce((s, sid) => s + (byKey[`${it}::${sid}`]?.vol_50t || 0), 0);
+        return `<tr>
+          <td><b>${esc(ITEM_NAMES[it] || it)}</b> <span class="muted mono">${esc(it)}</span></td>
+          ${sids.map((sid) => cellHtml(byKey[`${it}::${sid}`])).join('')}
+          <td class="num mono ${totVol > 0 ? 'green' : 'muted'}"><b>${totVol}</b></td>
+        </tr>`;
+      }).join('');
+    }
+
+    function renderFlights() {
+      const list = overview.in_flight || [];
+      document.getElementById('flightSummary').textContent = `${list.length} 艘航行中`;
+      const body = document.getElementById('flightBody');
+      if (list.length === 0) {
+        body.innerHTML = '<tr><td colspan="5" class="muted" style="text-align:center;padding:16px;">当前无在途飞船</td></tr>';
+        return;
+      }
+      body.innerHTML = list.map((f) => {
+        const cargoTxt = (f.cargo || []).map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}×${q}`).join(', ');
+        return `<tr class="mono">
+          <td>#${f.ship_id}</td>
+          <td>${esc(f.owner_id)}</td>
+          <td>${esc(f.from)} &rarr; ${esc(f.to)}</td>
+          <td class="num">T${f.arrival_tick}</td>
+          <td>${cargoTxt}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    document.getElementById('btnPauseResume').onclick = () => {
+      if (!overview) return;
+      simCtrl(overview.paused ? 'resume' : 'pause');
+    };
+    document.getElementById('btnStep').onclick = () => simCtrl('step');
+    document.querySelectorAll('#speedBtns button').forEach((b) => {
+      b.onclick = () => simCtrl('speed', Number(b.dataset.ms));
+    });
+    document.getElementById('btnSetMs').onclick = () => {
+      const v = Number(document.getElementById('customMs').value);
+      if (v >= 50) simCtrl('speed', v);
+    };
+    document.querySelectorAll('#compFilters button').forEach((b) => {
+      b.onclick = () => {
+        compFilter = b.dataset.f;
+        document.querySelectorAll('#compFilters button').forEach((x) => x.classList.toggle('active', x === b));
+        renderCompanies();
+      };
+    });
+    document.getElementById('compSearch').oninput = (e) => {
+      compSearch = e.target.value.trim();
+      renderCompanies();
+    };
+
+    function connectWs() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${proto}//${location.host}/ws`);
+      const badge = document.getElementById('wsBadge');
+      ws.onopen = () => { badge.textContent = 'WS 实时推送已连接'; badge.className = 'green'; };
+      ws.onclose = () => {
+        badge.textContent = 'WS 已断开，2秒后重连...';
+        badge.className = 'red';
+        setTimeout(connectWs, 2000);
+      };
+      ws.onmessage = () => { refreshAll(); };
+    }
+
+    renderResetBox();
+    loadCatalog().then(refreshAll);
+    connectWs();
+    setInterval(refreshAll, 3000);
+  </script>
+</body>
+</html>

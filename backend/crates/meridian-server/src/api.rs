@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use meridian_core::{from_money, Intent, MONEY_SCALE};
@@ -19,8 +19,13 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::engine::SharedEngine;
 use crate::storage::{CandleRow, TradeRow};
 
+const ADMIN_HTML: &str = include_str!("../assets/admin.html");
+
 pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
     let api_router = Router::new()
+        .route("/admin", get(admin_page_handler))
+        .route("/admin.html", get(admin_page_handler))
+        .route("/api/admin/overview", get(admin_overview_handler))
         .route("/api/health", get(health_handler))
         .route("/api/catalog", get(catalog_handler))
         .route("/api/state", get(state_handler))
@@ -54,6 +59,15 @@ struct HealthResp {
     tick_ms: u64,
     conservation_error: i128,
     companies_count: usize,
+}
+
+async fn admin_page_handler() -> Html<&'static str> {
+    Html(ADMIN_HTML)
+}
+
+async fn admin_overview_handler(State(engine): State<SharedEngine>) -> impl IntoResponse {
+    let eng = engine.lock().await;
+    Json(eng.admin_overview())
 }
 
 async fn health_handler(State(engine): State<SharedEngine>) -> Json<HealthResp> {

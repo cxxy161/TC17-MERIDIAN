@@ -11,11 +11,8 @@ export const RankingPanel: React.FC<PaneProps> = () => {
   return (
     <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between text-[11px] shrink-0">
-        <span className="font-medium">势力净资产排行（活跃 {rows.length} 家）</span>
-        <span className="mono text-[10px] text-emerald-400">
-          全星系发行 {state ? Math.round(state.total_minted).toLocaleString() : '--'} · 守恒误差 Δ=
-          {state?.conservation_error ?? 0}
-        </span>
+        <span className="font-medium">星系势力排行（活跃 {rows.length} 家）</span>
+        <span className="text-[10px] text-slate-400">仅展示公开净资产排名</span>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -25,10 +22,7 @@ export const RankingPanel: React.FC<PaneProps> = () => {
               <th className="px-3 py-1.5 font-normal">#</th>
               <th className="px-2 py-1.5 font-normal">公司名称</th>
               <th className="px-2 py-1.5 font-normal">职业</th>
-              <th className="px-2 py-1.5 text-right font-normal">净流动资产</th>
-              <th className="px-2 py-1.5 text-right font-normal">现金</th>
-              <th className="px-2 py-1.5 text-right font-normal">负债</th>
-              <th className="px-3 py-1.5 text-right font-normal">地/船</th>
+              <th className="px-3 py-1.5 text-right font-normal">公开净流动资产</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/60">
@@ -48,17 +42,8 @@ export const RankingPanel: React.FC<PaneProps> = () => {
                 <td className="px-2 py-1.5 font-sans text-slate-400">
                   {profNames.get(r.profession) ?? r.profession}
                 </td>
-                <td className="px-2 py-1.5 text-right text-sky-300 font-semibold">
+                <td className="px-3 py-1.5 text-right text-sky-300 font-semibold">
                   {r.net_liquid.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-                </td>
-                <td className="px-2 py-1.5 text-right text-slate-300">
-                  {r.cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                </td>
-                <td className="px-2 py-1.5 text-right text-rose-400">
-                  {r.debt > 0 ? r.debt.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '0'}
-                </td>
-                <td className="px-3 py-1.5 text-right text-slate-400">
-                  {r.plots_count}/{r.ships_count}
                 </td>
               </tr>
             ))}

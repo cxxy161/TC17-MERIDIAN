@@ -11,13 +11,9 @@ import {
   Globe2,
   Landmark,
   Layers,
-  Pause,
-  Play,
   Plus,
   Rocket,
-  RotateCcw,
   ShoppingBag,
-  SkipForward,
   Terminal,
   Trophy,
 } from 'lucide-react';
@@ -68,7 +64,6 @@ export const DesktopShell: React.FC = () => {
   const wsStatus = useGameStore((s) => s.wsStatus);
   const lastError = useGameStore((s) => s.lastError);
   const clearError = useGameStore((s) => s.clearError);
-  const simControl = useGameStore((s) => s.simControl);
 
   const initialWs = useRef(loadSavedWorkspaces());
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialWs.current.list);
@@ -78,7 +73,6 @@ export const DesktopShell: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addingWs, setAddingWs] = useState(false);
   const [newWsName, setNewWsName] = useState('');
-  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const topZRef = useRef(40);
   const floatSeqRef = useRef(1);
@@ -204,7 +198,6 @@ export const DesktopShell: React.FC = () => {
   const activeWorkspace = workspaces.find((w) => w.id === activeWsId) ?? workspaces[0];
   const cash = moneyToCredits(state?.player_snapshot?.company.cash);
   const paused = state?.paused ?? false;
-  const tickMs = state?.tick_ms ?? 2000;
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#161b22] text-slate-200 overflow-hidden">
@@ -270,7 +263,7 @@ export const DesktopShell: React.FC = () => {
           </div>
         </div>
 
-        {/* Metrics & Controls */}
+        {/* Player Metrics & Window Palette */}
         <div className="flex items-center gap-3 text-[11px] mono shrink-0">
           <div className="hidden md:flex items-center gap-3 text-slate-400">
             <span className="whitespace-nowrap">
@@ -282,71 +275,17 @@ export const DesktopShell: React.FC = () => {
             <span className="whitespace-nowrap">
               现金 <strong className="text-emerald-400">{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
             </span>
-            <span
-              className={`flex items-center gap-1 text-[10px] whitespace-nowrap ${
-                (state?.conservation_error ?? 0) === 0 ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
+            <span className="flex items-center gap-1.5 text-[10px] whitespace-nowrap text-slate-400">
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   wsStatus === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
                 }`}
               />
-              守恒 Δ={state?.conservation_error ?? 0}
+              {paused ? <span className="text-amber-300">服务器已暂停</span> : '在线同步'}
             </span>
           </div>
 
           <div className="flex items-center gap-1.5 pl-2 border-l border-slate-800">
-            <button
-              onClick={() => void simControl(paused ? 'resume' : 'pause')}
-              className={`${paused ? 'cta-green' : 'pill-btn'} flex items-center gap-1 whitespace-nowrap`}
-            >
-              {paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
-              {paused ? '继续' : '暂停'}
-            </button>
-            <button onClick={() => void simControl('step')} className="pill-btn flex items-center gap-1 whitespace-nowrap">
-              <SkipForward className="w-3 h-3" />
-              步进
-            </button>
-            <select
-              value={tickMs}
-              onChange={(e) => void simControl('speed', Number(e.target.value))}
-              className="bg-[#27303e] border border-slate-700 text-[10px] px-1.5 py-0.5 rounded-sm text-slate-300"
-              title="模拟节奏"
-            >
-              <option value={500}>极速 0.5s</option>
-              <option value={1000}>快速 1.0s</option>
-              <option value={2000}>标准 2.0s</option>
-              <option value={5000}>慢速 5.0s</option>
-            </select>
-            {confirmingReset ? (
-              <div className="flex items-center gap-1 bg-rose-950/50 border border-rose-500/40 rounded px-1.5 py-0.5 text-[10px] shrink-0">
-                <span className="text-rose-200">确认重置星系?</span>
-                <button
-                  onClick={() => {
-                    setConfirmingReset(false);
-                    void simControl('reset');
-                  }}
-                  className="px-1.5 py-0.5 rounded bg-rose-500/30 hover:bg-rose-500/45 text-rose-100"
-                >
-                  确定
-                </button>
-                <button
-                  onClick={() => setConfirmingReset(false)}
-                  className="px-1 py-0.5 text-slate-300 hover:text-slate-100"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmingReset(true)}
-                className="pill-btn text-slate-400 hover:text-rose-300"
-                title="重置星系"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
-            )}
             <button onClick={() => setPaletteOpen(true)} className="cta-blue whitespace-nowrap">
               ⌘K 临时窗口
             </button>

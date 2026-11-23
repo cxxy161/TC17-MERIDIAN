@@ -183,6 +183,31 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(book_res["station_id"], "ST:HUB");
         assert_eq!(book_res["item_id"], "steel");
+
+        // 6b. Inspect admin overview & /admin page endpoints
+        let admin_html_resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/admin").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(admin_html_resp.status(), StatusCode::OK);
+
+        let (st, admin_res) = read_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/admin/overview")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(admin_res["conservation_error"], 0);
+        assert_eq!(admin_res["companies"].as_array().unwrap().len(), 13);
+        assert_eq!(admin_res["planets"].as_array().unwrap().len(), 3);
     }
 
     // 7. Re-open SQLite DB cleanly and verify world + custom script + memory restored at tick 10!
