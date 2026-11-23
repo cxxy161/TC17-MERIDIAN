@@ -14,7 +14,6 @@ export const SessionGate: React.FC<{ children: React.ReactNode }> = ({ children 
   const bootstrap = useSessionStore((s) => s.bootstrap);
   const setUser = useSessionStore((s) => s.setUser);
 
-  const [serverUp, setServerUp] = useState(false);
   // 默认按「未实现」处理：后端下线或路由缺失时给出明确提示，而不是静默失败
   const [authImplemented, setAuthImplemented] = useState(false);
   // DEV 直通只是本组件的渲染开关，不往 store 里塞假会话
@@ -23,12 +22,6 @@ export const SessionGate: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const up = await fetch('/api/health', { credentials: 'same-origin' })
-        .then((r) => r.ok)
-        .catch(() => false);
-      if (!alive) return;
-      setServerUp(up);
-
       const result = await bootstrap();
       if (!alive) return;
       setAuthImplemented(result.status === 'authed' ? true : result.authImplemented);
@@ -58,7 +51,6 @@ export const SessionGate: React.FC<{ children: React.ReactNode }> = ({ children 
 
   return (
     <AuthScreen
-      serverUp={serverUp}
       authImplemented={authImplemented}
       onAuthed={setUser}
       onDevBypass={import.meta.env.DEV && !authImplemented ? devBypass : undefined}

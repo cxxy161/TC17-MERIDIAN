@@ -15,9 +15,7 @@ import { ApiError, authApi, setCurrentCompany, type SessionUser } from '../api/c
 type Mode = 'login' | 'register';
 
 export interface AuthScreenProps {
-  /** 后端 /api/health 是否可达 */
-  serverUp: boolean;
-  /** 后端是否已实现 /api/auth/*（未实现时给出明显提示，便于前后端分头开发） */
+  /** 后端是否已实现会话接口（未实现时给出明显提示，便于前后端分头开发） */
   authImplemented: boolean;
   /** 仅 DEV 且后端未实现鉴权时出现 */
   onDevBypass?: () => void;
@@ -145,7 +143,7 @@ const FieldError: React.FC<{ msg?: string }> = ({ msg }) =>
 
 /* --------------------------------------------------------------- AuthScreen */
 
-export const AuthScreen: React.FC<AuthScreenProps> = ({ serverUp, authImplemented, onDevBypass, onAuthed }) => {
+export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBypass, onAuthed }) => {
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [nickname, setNickname] = useState('');
@@ -220,7 +218,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ serverUp, authImplemente
         } else if (err.status === 429) {
           setBanner('请求过于频繁，请稍后再试');
         } else if (err.status === 404) {
-          setBanner('后端尚未实现 /api/auth/*，请先落地会话接口');
+          setBanner('账号服务暂不可用，请稍后再试');
         } else {
           setBanner(message);
         }
@@ -258,37 +256,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ serverUp, authImplemente
 
       <div className="relative z-10 flex h-full items-center justify-center px-6 py-8">
         <div className="grid w-full max-w-[860px] items-center gap-12 md:grid-cols-[1fr_360px]">
-          {/* 品牌栏 */}
+          {/* 品牌栏：只放名称与标语，不暴露任何运行时/环境信息 */}
           <div className="hidden select-none md:block">
-            <div className="mb-4 flex items-center gap-2 text-[10px] tracking-[0.32em] text-sky-400/80">
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
-              GATEWAY ONLINE
-            </div>
             <h1 className="text-[34px] font-semibold tracking-[0.30em] text-slate-100">MERIDIAN</h1>
             <div className="mt-2 text-[11px] tracking-[0.18em] text-slate-500">
               星际供应链 · 实时经济模拟
             </div>
-
-            <div className="mt-8 h-px w-full bg-gradient-to-r from-[rgba(56,189,248,0.35)] to-transparent" />
-
-            <dl className="mt-6 space-y-2 font-mono text-[10.5px] text-slate-500">
-              <div className="flex justify-between border-b border-white/[0.04] pb-1.5">
-                <dt>ENGINE</dt>
-                <dd className="text-slate-300">DETERMINISTIC TICK LOOP</dd>
-              </div>
-              <div className="flex justify-between border-b border-white/[0.04] pb-1.5">
-                <dt>SANDBOX</dt>
-                <dd className="text-slate-300">QUICKJS · 4 MB HEAP · 5 MS KILL</dd>
-              </div>
-              <div className="flex justify-between border-b border-white/[0.04] pb-1.5">
-                <dt>NPC</dt>
-                <dd className="text-slate-300">FREE-PLAY INTENT PARITY</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt>UPTIME TARGET</dt>
-                <dd className="text-emerald-400/90">24 / 7 · 2C · 500 MB</dd>
-              </div>
-            </dl>
           </div>
 
           {/* 表单卡片 */}
@@ -478,8 +451,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ serverUp, authImplemente
 
               {!authImplemented && (
                 <div className="border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[10px] leading-relaxed text-amber-300/80">
-                  后端尚未实现 <span className="font-mono">/api/auth/*</span>
-                  ，表单提交会失败。
+                  账号服务尚未就绪，表单提交会失败。
                   {onDevBypass && (
                     <button
                       type="button"
@@ -493,16 +465,6 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ serverUp, authImplemente
               )}
             </form>
 
-            <div className="flex items-center justify-between border-t border-[rgba(56,189,248,0.10)] px-5 py-2 text-[10px] text-slate-600">
-              <span className="font-mono tracking-wider">
-                {serverUp ? (
-                  <span className="text-emerald-400/70">● 网关可达</span>
-                ) : (
-                  <span className="text-rose-400/70">● 网关不可达</span>
-                )}
-              </span>
-              <span className="font-mono">v0.1.0</span>
-            </div>
           </div>
         </div>
       </div>
