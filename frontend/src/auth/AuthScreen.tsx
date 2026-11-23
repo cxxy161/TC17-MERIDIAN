@@ -451,7 +451,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
 
               {!authImplemented && (
                 <div className="border border-amber-500/25 bg-amber-500/[0.06] px-2.5 py-2 text-[10px] leading-relaxed text-amber-300/80">
-                  账号服务尚未就绪，表单提交会失败。
+                  当前后端未启用账号服务（可能是旧版本未重启），表单提交会失败。
                   {onDevBypass && (
                     <button
                       type="button"

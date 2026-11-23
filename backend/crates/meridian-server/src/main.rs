@@ -50,8 +50,24 @@ async fn main() {
         .unwrap_or(2000);
 
     let store = SqliteStore::open(&db_path).expect("failed to open SQLite WAL database");
-    let engine = GameEngine::bootstrap(data_path.clone(), store, tick_ms)
+    let mut engine = GameEngine::bootstrap(data_path.clone(), store, tick_ms)
         .expect("failed to bootstrap GameEngine");
+
+    // 可选：按环境变量创建初始管理员（幂等）
+    match engine.seed_admin_from_env() {
+        Ok(Some((email, company))) => {
+            info!("已创建初始管理员账号 {email}（公司 {company}）");
+        }
+        Ok(None) => {}
+        Err(e) => error!("初始管理员创建失败：{e}"),
+    }
+
+    // `--seed-admin`：只建号不进入模拟循环，便于对线上库做一次性初始化
+    if std::env::args().any(|a| a == "--seed-admin") {
+        info!("seed-admin 完成，退出");
+        return;
+    }
+
     let shared: SharedEngine = Arc::new(Mutex::new(engine));
 
     // Background deterministic tick loop

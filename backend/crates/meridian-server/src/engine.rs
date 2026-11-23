@@ -284,6 +284,43 @@ impl GameEngine {
         Ok(())
     }
 
+    /// 按环境变量创建初始管理员（幂等，已存在则跳过）。
+    ///
+    /// 需要同时设置 `MERIDIAN_ADMIN_EMAIL` 与 `MERIDIAN_ADMIN_PASSWORD`（≥8 位），
+    /// 可选 `MERIDIAN_ADMIN_NICKNAME`（默认 Admin）。优先接管未认领的 player1 公司。
+    pub fn seed_admin_from_env(&mut self) -> Result<Option<(String, String)>, String> {
+        let email = match std::env::var("MERIDIAN_ADMIN_EMAIL") {
+            Ok(v) if !v.trim().is_empty() => v.trim().to_lowercase(),
+            _ => return Ok(None),
+        };
+        let password = match std::env::var("MERIDIAN_ADMIN_PASSWORD") {
+            Ok(v) if v.chars().count() >= 8 => v,
+            Ok(_) => return Err("MERIDIAN_ADMIN_PASSWORD 少于 8 位".to_string()),
+            Err(_) => return Ok(None),
+        };
+        if self.store.email_taken(&email) {
+            return Ok(None);
+        }
+        let nickname = std::env::var("MERIDIAN_ADMIN_NICKNAME")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| (2..=16).contains(&s.chars().count()))
+            .unwrap_or_else(|| "Admin".to_string());
+        let (salt, hash) = crate::auth::hash_password(&password)?;
+        let now = crate::auth::now_secs();
+        let user_id = self
+            .store
+            .create_user(&email, &nickname, &hash, &salt, "admin", "", now)?;
+        let company_id = if self.company_is_unclaimed("player1") {
+            "player1".to_string()
+        } else {
+            format!("u{user_id}")
+        };
+        self.store.set_user_company(user_id, &company_id)?;
+        self.provision_player_company(&company_id, &nickname)?;
+        Ok(Some((email, company_id)))
+    }
+
     /// 公司是否还没有归属账号（用于「首个注册者接管 player1」）。
     pub fn company_is_unclaimed(&self, company_id: &str) -> bool {
         self.store.user_by_company(company_id).is_none()

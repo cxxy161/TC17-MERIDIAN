@@ -270,7 +270,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       // 后端 SPA fallback 会把未知路由回成 index.html + 200，必须验形状
       if (!data || typeof data.email !== 'string' || typeof data.nickname !== 'string') {
         setAccount(null);
-        setLoadError('后端尚未实现 /api/account（返回的不是账号数据）');
+        setLoadError('后端未返回账号数据（接口可能尚未实现或后端版本过旧）');
         return;
       }
       setAccount(data);
