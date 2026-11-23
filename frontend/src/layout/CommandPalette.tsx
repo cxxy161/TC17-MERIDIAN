@@ -21,8 +21,10 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
   const [query, setQuery] = useState('');
   const [floating, setFloating] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const planets = useGameStore((s) => s.state?.planets ?? []);
-  const items = useGameStore((s) => s.catalog?.items ?? []);
+  const state = useGameStore((s) => s.state);
+  const catalog = useGameStore((s) => s.catalog);
+  const planets = state?.planets ?? [];
+  const items = catalog?.items ?? [];
 
   useEffect(() => {
     if (open) {
