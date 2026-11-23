@@ -356,7 +356,7 @@ pub fn decide_npc_intents(
             if dest == &ship.location {
                 continue;
             }
-            let Some(&(ticks, fuel_req)) = snap.routes.get(&(ship.location.clone(), dest.clone())) else {
+            let Some((ticks, fuel_req)) = snap.route_cost(&ship.location, dest) else {
                 continue;
             };
             if fuel_have < fuel_req {

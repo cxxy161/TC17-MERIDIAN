@@ -95,5 +95,11 @@ pub struct WorldSnapshot {
     pub quotes: HashMap<StationId, HashMap<ItemId, MarketQuote>>,
     pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
     pub orders: Vec<Order>,
-    pub routes: HashMap<(String, String), (u32, u32)>,
+    pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
+}
+
+impl WorldSnapshot {
+    pub fn route_cost(&self, from: &str, to: &str) -> Option<(u32, u32)> {
+        self.routes.get(from).and_then(|m| m.get(to)).copied()
+    }
 }

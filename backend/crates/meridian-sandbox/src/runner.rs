@@ -31,6 +31,7 @@ impl Default for PlayerVmState {
 pub struct SimulationRunner {
     pub players: HashMap<CompanyId, PlayerVmState>,
     pub npc_genomes: HashMap<CompanyId, NpcGenome>,
+    pub extra_intents: HashMap<CompanyId, Vec<Intent>>,
     pub config: PlayerRunConfig,
     pub last_player_outputs: HashMap<CompanyId, PlayerRunOutput>,
 }
@@ -40,6 +41,7 @@ impl Default for SimulationRunner {
         Self {
             players: HashMap::new(),
             npc_genomes: HashMap::new(),
+            extra_intents: HashMap::new(),
             config: PlayerRunConfig::default(),
             last_player_outputs: HashMap::new(),
         }
@@ -146,14 +148,23 @@ impl SimulationRunner {
             })
             .collect();
 
-        let mut intents_by_company = Vec::with_capacity(outcomes.len());
-        for (cid, intents, maybe_player_out) in outcomes {
+        let mut intents_by_company = Vec::with_capacity(outcomes.len() + self.extra_intents.len());
+        let mut extra = std::mem::take(&mut self.extra_intents);
+        for (cid, mut intents, maybe_player_out) in outcomes {
             if let Some(pout) = maybe_player_out {
                 if let Some(pvm) = self.players.get_mut(&cid) {
                     pvm.memory_json = pout.memory_json.clone();
                 }
                 self.last_player_outputs.insert(cid.clone(), pout);
             }
+            if let Some(mut manual) = extra.remove(&cid) {
+                intents.append(&mut manual);
+            }
+            if !intents.is_empty() {
+                intents_by_company.push((cid, intents));
+            }
+        }
+        for (cid, intents) in extra {
             if !intents.is_empty() {
                 intents_by_company.push((cid, intents));
             }

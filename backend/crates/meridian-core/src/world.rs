@@ -28,6 +28,7 @@ pub struct TickReport {
     pub cpi: f64,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub catalog: ProductionCatalog,
     pub tick: u64,
@@ -1785,7 +1786,7 @@ impl World {
             );
         }
 
-        let mut routes = HashMap::new();
+        let mut routes: HashMap<String, HashMap<String, (u32, u32)>> = HashMap::new();
         for pid in self.planets.keys() {
             let sid = format!("ST:{pid}");
             for (a, b) in [
@@ -1803,7 +1804,10 @@ impl World {
                     self.hub_orbit_radius,
                     self.hub_orbit_angle,
                 ) {
-                    routes.insert((a.to_string(), b.to_string()), (r.ticks, r.fuel));
+                    routes
+                        .entry(a.to_string())
+                        .or_default()
+                        .insert(b.to_string(), (r.ticks, r.fuel));
                 }
             }
         }

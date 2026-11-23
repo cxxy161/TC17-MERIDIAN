@@ -1,9 +1,11 @@
 //! Fixed-point money conservation ledger.
 
+use serde::{Deserialize, Serialize};
+
 use crate::types::Money;
 
 /// Tracks cumulative base money minted/reclaimed so conservation invariants hold to exact i64 micro-units.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MoneyLedger {
     pub total_minted: i128,
     pub total_burned: i128,

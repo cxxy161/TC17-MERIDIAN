@@ -395,7 +395,13 @@ fn format_caught_error<'js>(err: CaughtError<'js>) -> String {
             }
             msg
         }
-        CaughtError::Value(val) => format!("Thrown JS value: {:?}", val.type_of()),
+        CaughtError::Value(val) => {
+            if val.is_null() {
+                "InternalError: out of memory (QuickJS heap limit reached)".to_string()
+            } else {
+                format!("Thrown JS value: {:?}", val.type_of())
+            }
+        }
         CaughtError::Error(e) => format!("{e}"),
     }
 }
@@ -556,12 +562,8 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_calc_route",
             Function::new(ctx.clone(), move |from: String, to: String| -> Option<String> {
-                let (ticks, fuel) = h.snapshot.routes.get(&(from, to))?;
-                serde_json::to_string(&JsRouteCost {
-                    ticks: *ticks,
-                    fuel: *fuel,
-                })
-                .ok()
+                let (ticks, fuel) = h.snapshot.route_cost(&from, &to)?;
+                serde_json::to_string(&JsRouteCost { ticks, fuel }).ok()
             })?,
         )?;
     }
@@ -661,7 +663,7 @@ fn install_host_bindings<'js>(
                     if ship.location != from {
                         return ERR_NOT_IN_RANGE;
                     }
-                    let Some((_ticks, fuel_needed)) = h.snapshot.routes.get(&(from.clone(), to.clone())) else {
+                    let Some((_ticks, fuel_needed)) = h.snapshot.route_cost(&from, &to) else {
                         return ERR_NO_PATH;
                     };
                     let Ok(raw_map) = serde_json::from_str::<HashMap<String, f64>>(&cargo_json) else {
@@ -705,7 +707,7 @@ fn install_host_bindings<'js>(
                                 .copied()
                                 .unwrap_or(0)
                         };
-                        if available_fuel < *fuel_needed {
+                        if available_fuel < fuel_needed {
                             return ERR_NOT_ENOUGH_RESOURCES;
                         }
                     }

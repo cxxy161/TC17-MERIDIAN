@@ -6,6 +6,6 @@ edition.workspace = true
 [dependencies]
 meridian-core = { path = "../meridian-core" }
 rayon = "1"
-rquickjs = { version = "0.9", features = ["loader", "array-buffer"] }
+rquickjs = { version = "0.9", features = ["loader", "array-buffer", "parallel"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

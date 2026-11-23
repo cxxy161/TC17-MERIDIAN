@@ -150,7 +150,7 @@ pub struct ProductionPack {
 }
 
 /// Indexed, validated production catalog loaded once at startup.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProductionCatalog {
     pub pack: ProductionPack,
     pub items: HashMap<ItemId, ItemDef>,
