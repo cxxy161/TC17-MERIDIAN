@@ -79,7 +79,7 @@ function buildFileTree(moduleNames: string[], explicitFolders: string[]): TreeIt
   return root.children;
 }
 
-export const FileExplorerPanel: React.FC<PaneProps> = ({ openTemp }) => {
+export const FileExplorerPanel: React.FC<PaneProps> = () => {
   const draftModules = useGameStore((s) => s.draftModules);
   const scripts = useGameStore((s) => s.scripts);
   const activeMod = useGameStore((s) => s.activeScriptModule);
@@ -378,13 +378,6 @@ export const FileExplorerPanel: React.FC<PaneProps> = ({ openTemp }) => {
             className="p-1 text-slate-300 hover:text-sky-300 hover:bg-sky-500/15 rounded-sm"
           >
             <FolderPlus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => openTemp('script', {})}
-            title="打开悬浮编辑器"
-            className="pill-btn py-0 text-[10px]"
-          >
-            编辑器
           </button>
         </div>
       </div>

@@ -1,7 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useGameStore } from '../store/useGameStore';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useGameStore, type LogHistoryLine } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 import { moneyToCredits } from '../types/meridian';
+import {
+  parseMessageToSegments,
+  toConsoleValue,
+  type ConsoleValue,
+} from '../utils/consoleFormat';
 
 function buildEvalContext(
   state: ReturnType<typeof useGameStore.getState>['state'],
@@ -95,17 +101,149 @@ function buildEvalContext(
   return { Game, Memory: mem };
 }
 
-function formatVal(v: unknown): string {
-  if (v === undefined) return 'undefined';
-  if (v === null) return 'null';
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
+function primitiveClass(valType: string): string {
+  switch (valType) {
+    case 'string':
+      return 'text-emerald-300';
+    case 'number':
+    case 'bigint':
+      return 'text-sky-300';
+    case 'boolean':
+      return 'text-amber-300';
+    case 'undefined':
+    case 'null':
+      return 'text-slate-500';
+    default:
+      return 'text-violet-300';
   }
 }
+
+/** DevTools-style collapsible console value renderer: objects/arrays/JSON always default to collapsed. */
+const ConsoleValueNode: React.FC<{ value: ConsoleValue; propKey?: string }> = ({
+  value,
+  propKey,
+}) => {
+  const [open, setOpen] = useState(false);
+
+  const keyPrefix = propKey !== undefined ? (
+    <span className="text-sky-200/80 mr-1 shrink-0">{propKey}:</span>
+  ) : null;
+
+  if (value.kind === 'primitive') {
+    return (
+      <span className="inline-flex items-baseline gap-0.5 break-all">
+        {keyPrefix}
+        <span className={primitiveClass(value.valType)}>{value.display}</span>
+      </span>
+    );
+  }
+
+  if (value.kind === 'function') {
+    return (
+      <span className="inline-flex items-baseline gap-0.5 text-violet-300/90 italic">
+        {keyPrefix}
+        <span>ƒ {value.name || 'anonymous'}()</span>
+      </span>
+    );
+  }
+
+  if (value.kind === 'circular') {
+    return (
+      <span className="inline-flex items-baseline gap-0.5 text-amber-400">
+        {keyPrefix}
+        <span>[Circular]</span>
+      </span>
+    );
+  }
+
+  if (value.kind === 'truncated') {
+    return (
+      <span className="inline-flex items-baseline gap-0.5 text-slate-500">
+        {keyPrefix}
+        <span>{value.label}</span>
+      </span>
+    );
+  }
+
+  const label =
+    value.kind === 'array'
+      ? `Array(${value.length})`
+      : value.tag
+        ? `${value.tag}`
+        : '';
+  const children = value.kind === 'array' ? value.items : value.entries;
+
+  return (
+    <span className="inline-block align-top max-w-full">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-0.5 text-left hover:bg-sky-500/10 rounded px-0.5 -ml-0.5 max-w-full"
+      >
+        {open ? (
+          <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+        ) : (
+          <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
+        )}
+        {keyPrefix}
+        {label && <span className="text-slate-400 mr-1 shrink-0">{label}</span>}
+        {!open && (
+          <span className="text-slate-300/90 truncate max-w-[460px] inline-block align-bottom">
+            {value.preview}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="pl-3.5 border-l border-slate-700/70 ml-1.5 mt-0.5 space-y-0.5">
+          {children.length === 0 ? (
+            <div className="text-slate-500 text-[10px]">(empty)</div>
+          ) : (
+            children.map((entry) => (
+              <div key={entry.key} className="leading-snug">
+                <ConsoleValueNode value={entry.value} propKey={entry.key} />
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </span>
+  );
+};
+
+const ConsoleLineContent: React.FC<{ line: LogHistoryLine }> = ({ line }) => {
+  if (line.values && line.values.length > 0) {
+    return (
+      <span className="inline-flex flex-wrap items-baseline gap-x-2 align-top">
+        {line.values.map((val, idx) => (
+          <ConsoleValueNode key={idx} value={val} />
+        ))}
+      </span>
+    );
+  }
+
+  const segments = line.level !== 'input' ? parseMessageToSegments(line.message) : null;
+  if (segments) {
+    return (
+      <span className="inline-flex flex-wrap items-baseline gap-x-1.5 align-top">
+        {segments.map((seg, idx) =>
+          typeof seg === 'string' ? (
+            <span key={idx} className="text-slate-300">
+              {seg}
+            </span>
+          ) : (
+            <ConsoleValueNode key={idx} value={seg} />
+          ),
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <span className={line.level === 'result' ? 'text-emerald-200' : 'text-slate-300'}>
+      {line.message}
+    </span>
+  );
+};
 
 export const ConsolePanel: React.FC<PaneProps> = () => {
   const history = useGameStore((s) => s.consoleHistory);
@@ -186,11 +324,26 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
       return;
     }
 
-    const logsOut: Array<{ level: 'log' | 'warn' | 'error'; msg: string }> = [];
+    const logsOut: Array<{ level: 'log' | 'warn' | 'error'; msg: string; values: ConsoleValue[] }> = [];
     const fakeConsole = {
-      log: (...args: unknown[]) => logsOut.push({ level: 'log', msg: args.map(formatVal).join(' ') }),
-      warn: (...args: unknown[]) => logsOut.push({ level: 'warn', msg: args.map(formatVal).join(' ') }),
-      error: (...args: unknown[]) => logsOut.push({ level: 'error', msg: args.map(formatVal).join(' ') }),
+      log: (...args: unknown[]) =>
+        logsOut.push({
+          level: 'log',
+          msg: '',
+          values: args.map((a) => toConsoleValue(a)),
+        }),
+      warn: (...args: unknown[]) =>
+        logsOut.push({
+          level: 'warn',
+          msg: '',
+          values: args.map((a) => toConsoleValue(a)),
+        }),
+      error: (...args: unknown[]) =>
+        logsOut.push({
+          level: 'error',
+          msg: '',
+          values: args.map((a) => toConsoleValue(a)),
+        }),
     };
 
     const { Game, Memory } = buildEvalContext(state, catalog, scripts);
@@ -225,10 +378,10 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
         await saveMemory(afterMem);
       }
 
-      const newLines = [
-        { tick, level: 'input' as const, message: raw },
-        ...logsOut.map((l) => ({ tick, level: l.level, message: l.msg })),
-        { tick, level: 'result' as const, message: formatVal(result) },
+      const newLines: LogHistoryLine[] = [
+        { tick, level: 'input', message: raw },
+        ...logsOut.map((l) => ({ tick, level: l.level, message: l.msg, values: l.values })),
+        { tick, level: 'result', message: '', values: [toConsoleValue(result)] },
       ];
       appendConsoleLines(newLines);
     } catch (e) {
@@ -261,14 +414,14 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
           </div>
         ) : (
           history.map((line, i) => (
-            <div key={i} className="leading-relaxed break-all whitespace-pre-wrap">
-              <span className="text-slate-600 mr-1.5">[{String(line.tick).padStart(4, '0')}]</span>
-              <span className={`${badgeStyle(line.level)} mr-1.5 font-semibold`}>
+            <div key={i} className="leading-relaxed flex items-start gap-1.5">
+              <span className="text-slate-600 shrink-0">[{String(line.tick).padStart(4, '0')}]</span>
+              <span className={`${badgeStyle(line.level)} font-semibold shrink-0`}>
                 {levelLabel(line.level)}
               </span>
-              <span className={line.level === 'result' ? 'text-emerald-200' : 'text-slate-300'}>
-                {line.message}
-              </span>
+              <div className="min-w-0 flex-1 break-all">
+                <ConsoleLineContent line={line} />
+              </div>
             </div>
           ))
         )}

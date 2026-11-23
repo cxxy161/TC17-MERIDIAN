@@ -44,7 +44,7 @@ const SCREEPS_COMPLETIONS = [
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
 ];
 
-export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
+export const ScriptIdePanel: React.FC<PaneProps> = () => {
   const scripts = useGameStore((s) => s.scripts);
   const catalog = useGameStore((s) => s.catalog);
   const draftModules = useGameStore((s) => s.draftModules);
@@ -219,12 +219,6 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
           <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
             耗时 {cpuMs.toFixed(2)} / 5.00 ms
           </span>
-          <button
-            onClick={() => openTemp('memory', {})}
-            className="pill-btn py-0 text-[10px] whitespace-nowrap"
-          >
-            打开 Memory 窗
-          </button>
           <button onClick={() => void handleSave()} className="cta-green text-[10px] py-0.5 whitespace-nowrap">
             {dirty ? '保存并热重载 *' : saveNote || '保存热重载'}
           </button>

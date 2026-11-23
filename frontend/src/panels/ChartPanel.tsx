@@ -3,19 +3,33 @@ import {
   createChart,
   ColorType,
   CrosshairMode,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 import { STATION_NAMES, type CandleRow } from '../types/meridian';
 
+const BASE_TS = 1_700_000_000;
+const toTime = (t: number): UTCTimestamp => (BASE_TS + t * 60) as UTCTimestamp;
+const fromTime = (ts: Time): string => {
+  if (typeof ts === 'number') {
+    return `T${Math.max(0, Math.round((ts - BASE_TS) / 60))}`;
+  }
+  return String(ts);
+};
+
 function aggregateCandles(candles: CandleRow[], period: number): CandleRow[] {
-  if (period <= 1 || candles.length === 0) return candles;
+  if (candles.length === 0) return [];
+  const step = Math.max(1, period);
+  const sorted = [...candles].sort((a, b) => a.bucket_tick - b.bucket_tick);
   const buckets = new Map<number, CandleRow>();
-  for (const c of candles) {
-    const b = Math.floor(c.bucket_tick / period) * period;
+  for (const c of sorted) {
+    const b = Math.floor(c.bucket_tick / step) * step;
     const prev = buckets.get(b);
     if (!prev) {
       buckets.set(b, { ...c, bucket_tick: b });
@@ -35,18 +49,26 @@ export const ChartPanel: React.FC<PaneProps> = ({
   openTemp,
 }) => {
   const catalog = useGameStore((s) => s.catalog);
+  const state = useGameStore((s) => s.state);
   const watchBook = useGameStore((s) => s.watchBook);
   const books = useGameStore((s) => s.books);
+  const quoteHistory = useGameStore((s) => s.quoteHistory);
 
   const [stationId, setStationId] = useState<string>(params.stationId || 'ST:HUB');
   const [itemId, setItemId] = useState<string>(params.itemId || 'steel');
   const [period, setPeriod] = useState<number>(1);
+
+  useEffect(() => {
+    if (params.stationId) setStationId(params.stationId);
+    if (params.itemId) setItemId(params.itemId);
+  }, [params.stationId, params.itemId]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const smaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const volSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   useEffect(() => {
     const unwatch = watchBook(stationId, itemId);
@@ -66,19 +88,32 @@ export const ChartPanel: React.FC<PaneProps> = ({
     if (!el) return;
 
     const chart = createChart(el, {
+      width: Math.max(el.clientWidth, 240),
+      height: Math.max(el.clientHeight, 160),
       layout: {
         background: { type: ColorType.Solid, color: '#191f27' },
         textColor: '#94a3b8',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: 11,
       },
+      localization: {
+        timeFormatter: (time: Time) => fromTime(time),
+      },
       grid: {
         vertLines: { color: 'rgba(56, 189, 248, 0.08)' },
         horzLines: { color: 'rgba(56, 189, 248, 0.08)' },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: 'rgba(56, 189, 248, 0.16)' },
-      timeScale: { borderColor: 'rgba(56, 189, 248, 0.16)', timeVisible: false },
+      rightPriceScale: {
+        borderColor: 'rgba(56, 189, 248, 0.16)',
+        autoScale: true,
+        scaleMargins: { top: 0.12, bottom: 0.24 },
+      },
+      timeScale: {
+        borderColor: 'rgba(56, 189, 248, 0.16)',
+        timeVisible: false,
+        tickMarkFormatter: (time: Time) => fromTime(time),
+      },
     });
 
     const candleSeries = chart.addCandlestickSeries({
@@ -88,6 +123,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
       borderDownColor: '#f43f5e',
       wickUpColor: '#10b981',
       wickDownColor: '#f43f5e',
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     });
 
     const smaSeries = chart.addLineSeries({
@@ -95,6 +131,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
       lineWidth: 2,
       priceLineVisible: false,
       lastValueVisible: true,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     });
 
     const volSeries = chart.addHistogramSeries({
@@ -113,59 +150,141 @@ export const ChartPanel: React.FC<PaneProps> = ({
     const ro = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (rect && rect.width > 0 && rect.height > 0) {
-        chart.applyOptions({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
+        chart.applyOptions({
+          width: Math.floor(rect.width),
+          height: Math.floor(rect.height),
+        });
       }
     });
     ro.observe(el);
 
     return () => {
       ro.disconnect();
+      priceLinesRef.current = [];
       chart.remove();
       chartRef.current = null;
     };
   }, []);
 
-  const book = books[`${stationId}::${itemId}`];
+  const bookKey = `${stationId}::${itemId}`;
+  const book = books[bookKey];
+  const samples = quoteHistory[bookKey];
+  const tickerRow = (state?.market_tickers ?? []).find(
+    (t) => t.station_id === stationId && t.item_id === itemId,
+  );
+  const currentTick = state?.tick ?? 0;
+
   const agg = useMemo(
     () => aggregateCandles(book?.candles ?? [], period),
     [book?.candles, period],
   );
 
+  const refPrice = book?.last_price ?? tickerRow?.last_price;
+  const bestBid = book?.best_bid ?? tickerRow?.best_bid ?? null;
+  const bestAsk = book?.best_ask ?? tickerRow?.best_ask ?? null;
+
   useEffect(() => {
-    if (!candleSeriesRef.current || !smaSeriesRef.current || !volSeriesRef.current) return;
-    if (agg.length === 0) {
-      candleSeriesRef.current.setData([]);
-      smaSeriesRef.current.setData([]);
-      volSeriesRef.current.setData([]);
-      return;
+    const candleSeries = candleSeriesRef.current;
+    const smaSeries = smaSeriesRef.current;
+    const volSeries = volSeriesRef.current;
+    if (!candleSeries || !smaSeries || !volSeries) return;
+
+    // Clear previous horizontal price lines before re-rendering
+    for (const pl of priceLinesRef.current) {
+      try {
+        smaSeries.removePriceLine(pl);
+      } catch {
+        // ignore if already detached
+      }
+    }
+    priceLinesRef.current = [];
+
+    if (agg.length > 0) {
+      candleSeries.setData(
+        agg.map((c) => ({
+          time: toTime(c.bucket_tick),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        })),
+      );
+      volSeries.setData(
+        agg.map((c) => ({
+          time: toTime(c.bucket_tick),
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(244, 63, 94, 0.25)',
+        })),
+      );
+      smaSeries.setData(
+        agg.map((c, idx) => {
+          const win = agg.slice(Math.max(0, idx - 9), idx + 1);
+          const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
+          return { time: toTime(c.bucket_tick), value: avg };
+        }),
+      );
+    } else {
+      candleSeries.setData([]);
+      volSeries.setData([]);
+
+      // Render a live reference baseline + bid/ask levels when no OHLC fills exist yet,
+      // so the chart grid, price scale, and tick axis still render visibly.
+      if (samples && samples.length >= 2) {
+        const sortedSamples = [...samples].sort((a, b) => a.tick - b.tick);
+        smaSeries.setData(
+          sortedSamples.map((s) => ({
+            time: toTime(s.tick),
+            value: s.price,
+          })),
+        );
+      } else if (refPrice !== undefined && refPrice > 0) {
+        const endT = Math.max(1, currentTick);
+        const startT = Math.max(0, endT - 20);
+        const pts: Array<{ time: UTCTimestamp; value: number }> = [];
+        for (let t = startT; t <= endT; t += Math.max(1, Math.floor((endT - startT) / 10))) {
+          pts.push({ time: toTime(t), value: refPrice });
+        }
+        if (pts[pts.length - 1].time !== toTime(endT)) {
+          pts.push({ time: toTime(endT), value: refPrice });
+        }
+        smaSeries.setData(pts);
+      } else {
+        smaSeries.setData([]);
+      }
     }
 
-    const toTime = (t: number) => (1_700_000_000 + t * 60) as UTCTimestamp;
-    candleSeriesRef.current.setData(
-      agg.map((c) => ({
-        time: toTime(c.bucket_tick),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      })),
-    );
-    volSeriesRef.current.setData(
-      agg.map((c) => ({
-        time: toTime(c.bucket_tick),
-        value: c.volume,
-        color: c.close >= c.open ? 'rgba(16, 185, 129, 0.25)' : 'rgba(244, 63, 94, 0.25)',
-      })),
-    );
-    smaSeriesRef.current.setData(
-      agg.map((c, idx) => {
-        const win = agg.slice(Math.max(0, idx - 9), idx + 1);
-        const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
-        return { time: toTime(c.bucket_tick), value: avg };
-      }),
-    );
+    // Add live bid / ask / ref price lines on smaSeries so they are visible in both modes
+    if (bestBid !== null) {
+      priceLinesRef.current.push(
+        smaSeries.createPriceLine({
+          price: bestBid,
+          color: 'rgba(16, 185, 129, 0.75)',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: '买一',
+        }),
+      );
+    }
+    if (bestAsk !== null) {
+      priceLinesRef.current.push(
+        smaSeries.createPriceLine({
+          price: bestAsk,
+          color: 'rgba(244, 63, 94, 0.75)',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: '卖一',
+        }),
+      );
+    }
+
+    chartRef.current?.timeScale().applyOptions({
+      barSpacing: agg.length > 0 && agg.length < 12 ? 14 : 6,
+      rightOffset: 3,
+    });
     chartRef.current?.timeScale().fitContent();
-  }, [agg]);
+  }, [agg, samples, refPrice, bestBid, bestAsk, currentTick]);
 
   const latest = agg[agg.length - 1];
 
@@ -231,8 +350,11 @@ export const ChartPanel: React.FC<PaneProps> = ({
             <span className="text-sky-400">{latest.close.toFixed(2)}</span> · 量 {latest.volume}
           </span>
         ) : (
-          <span className="text-slate-500">
-            最新参考价 {book ? book.last_price.toFixed(2) : '--'} · 暂无 K 线成交
+          <span className="text-slate-400">
+            参考价 {refPrice !== undefined ? refPrice.toFixed(2) : '--'}
+            {bestBid !== null ? ` · 买一 ${bestBid.toFixed(2)}` : ''}
+            {bestAsk !== null ? ` · 卖一 ${bestAsk.toFixed(2)}` : ''}
+            {' · '}暂无撮合 K 线
           </span>
         )}
         <span className="text-sky-400">
@@ -243,8 +365,8 @@ export const ChartPanel: React.FC<PaneProps> = ({
       <div className="flex-1 min-h-0 relative">
         <div ref={containerRef} className="w-full h-full" />
         {agg.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-500 text-[11px]">
-            等待市场撮合产生该物品 K 线数据...
+          <div className="absolute top-2 left-2.5 z-10 pointer-events-none px-2 py-0.5 rounded bg-[#1f2630]/85 border border-slate-700/70 text-slate-400 text-[10px]">
+            暂无撮合成交 K 线 · 显示实时参考价与盘口报价线
           </div>
         )}
       </div>

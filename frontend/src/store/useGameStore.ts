@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../api/client';
+import type { ConsoleValue } from '../utils/consoleFormat';
 import type {
   IntentPayload,
   MarketBookResp,
@@ -12,6 +13,29 @@ export interface LogHistoryLine {
   tick: number;
   level: 'log' | 'warn' | 'error' | 'system' | 'input' | 'result';
   message: string;
+  values?: ConsoleValue[];
+}
+
+export interface QuoteSample {
+  tick: number;
+  price: number;
+}
+
+function mergeQuoteHistory(
+  prev: Record<string, QuoteSample[]>,
+  state: StateResponse,
+): Record<string, QuoteSample[]> {
+  const next = { ...prev };
+  const t = state.tick;
+  for (const row of state.market_tickers ?? []) {
+    const key = `${row.station_id}::${row.item_id}`;
+    const arr = next[key] ?? [];
+    const last = arr[arr.length - 1];
+    if (!last || last.tick < t) {
+      next[key] = [...arr, { tick: t, price: row.last_price }].slice(-120);
+    }
+  }
+  return next;
 }
 
 const FOLDERS_STORAGE_KEY = 'meridian.script_folders.v1';
@@ -46,6 +70,7 @@ interface GameStore {
   scriptDirty: boolean;
   scriptFolders: string[];
   books: Record<string, MarketBookResp>;
+  quoteHistory: Record<string, QuoteSample[]>;
   watchedBooks: Record<string, { stationId: string; itemId: string; refs: number }>;
   companyId: string;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
@@ -88,6 +113,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   scriptDirty: false,
   scriptFolders: loadFolders(),
   books: {},
+  quoteHistory: {},
   watchedBooks: {},
   companyId: 'player1',
   wsStatus: 'connecting',
@@ -106,6 +132,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         catalog,
         state,
         scripts,
+        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state),
         draftModules: prev.scriptDirty ? prev.draftModules : mods,
         activeScriptModule: mods[prev.activeScriptModule] !== undefined ? prev.activeScriptModule : (mods.main !== undefined ? 'main' : Object.keys(mods)[0] ?? 'main'),
         lastError: null,
@@ -186,6 +213,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const state = await api.getState(get().companyId);
       set((prev) => ({
         state,
+        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state),
         scripts:
           prev.scripts && state.last_player_output
             ? {
