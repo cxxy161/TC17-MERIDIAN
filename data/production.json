@@ -1,0 +1,616 @@
+{
+  "schema_version": "1.0.0",
+  "meta": {
+    "name": "Meridian 3×5 起步产线包",
+    "author": "Meridian",
+    "ticks_per_day": 24,
+    "tick_seconds": 60,
+    "updated_at": "2026-11-23T06:00:00Z"
+  },
+  "demand_categories": [
+    {
+      "id": "env_support",
+      "name": "维生与环保",
+      "wealth_tier": 1,
+      "description": "电力、净水、氧气与城市垃圾消纳处理"
+    },
+    {
+      "id": "daily_life",
+      "name": "饮食与穿着",
+      "wealth_tier": 1,
+      "description": "基础口粮、营养饮料与基础衣物消费"
+    },
+    {
+      "id": "infra_tools",
+      "name": "基建与日用",
+      "wealth_tier": 1,
+      "description": "结构建材扩建与居民日用工具五金"
+    }
+  ],
+  "professions": [
+    {
+      "id": "env_recycle",
+      "name": "环境能源与回收",
+      "demand_category": "env_support",
+      "color": "#38bdf8",
+      "description": "提供水/电/氧/推进燃料，并回收城市废料赚处理凭证与再生原料。",
+      "starter_buildings": ["power_water_station", "recycling_plant"],
+      "efficiency_bonus": {
+        "recycling_plant": 1.15
+      }
+    },
+    {
+      "id": "agri_bio",
+      "name": "生态农食与轻纺",
+      "demand_category": "daily_life",
+      "color": "#3fb950",
+      "description": "培育作物、裂解生物纤维(碳)喂给重工与服装线，加工口粮和饮料。",
+      "starter_buildings": ["bio_greenhouse", "consumer_workshop"],
+      "efficiency_bonus": {
+        "bio_greenhouse": 1.15
+      }
+    },
+    {
+      "id": "mining_ind",
+      "name": "矿业与重工基建",
+      "demand_category": "infra_tools",
+      "color": "#f0883e",
+      "description": "开采矿石、双工艺炼钢、生产建材、日用维修件并建造货船。",
+      "starter_buildings": ["mine_smelter", "infra_factory"],
+      "efficiency_bonus": {
+        "mine_smelter": 1.15
+      }
+    }
+  ],
+  "items": [
+    {
+      "id": "power",
+      "name": "电力",
+      "role": "factory_consume",
+      "profession": "env_recycle",
+      "demand_category": "env_support",
+      "wealth_tier": 1,
+      "step_depth": 0,
+      "volume": 0.1,
+      "mass": 0.0,
+      "ref_price": 2.0,
+      "base_demand_per_1k": 1.2,
+      "tags": ["power"]
+    },
+    {
+      "id": "water",
+      "name": "净水",
+      "role": "planet_supply",
+      "profession": "env_recycle",
+      "demand_category": "env_support",
+      "wealth_tier": 1,
+      "step_depth": 0,
+      "volume": 1.0,
+      "mass": 1.0,
+      "ref_price": 2.5,
+      "base_demand_per_1k": 2.0,
+      "tags": ["basic_survival"]
+    },
+    {
+      "id": "oxygen",
+      "name": "氧气",
+      "role": "planet_supply",
+      "profession": "env_recycle",
+      "demand_category": "env_support",
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 0.8,
+      "mass": 0.6,
+      "ref_price": 3.0,
+      "base_demand_per_1k": 1.8,
+      "tags": ["basic_survival"]
+    },
+    {
+      "id": "fuel",
+      "name": "燃料",
+      "role": "factory_consume",
+      "profession": "env_recycle",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 1.0,
+      "mass": 0.8,
+      "ref_price": 8.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["fuel"]
+    },
+    {
+      "id": "disposal_cert",
+      "name": "垃圾消纳",
+      "role": "planet_supply",
+      "profession": "env_recycle",
+      "demand_category": "env_support",
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 0.1,
+      "mass": 0.1,
+      "ref_price": 6.0,
+      "base_demand_per_1k": 1.5,
+      "tags": ["waste_service"]
+    },
+    {
+      "id": "waste",
+      "name": "城市废料",
+      "role": "byproduct",
+      "profession": "system",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 0,
+      "volume": 1.2,
+      "mass": 1.0,
+      "ref_price": 0.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["waste"]
+    },
+    {
+      "id": "bio_crop",
+      "name": "生物作物",
+      "role": "foundation",
+      "profession": "agri_bio",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 1.0,
+      "mass": 0.9,
+      "ref_price": 4.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["agri_raw"]
+    },
+    {
+      "id": "bio_fiber",
+      "name": "生物纤维",
+      "role": "foundation",
+      "profession": "agri_bio",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 2,
+      "volume": 0.9,
+      "mass": 0.6,
+      "ref_price": 7.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["carbon", "textile_raw"]
+    },
+    {
+      "id": "rations",
+      "name": "基础口粮",
+      "role": "planet_supply",
+      "profession": "agri_bio",
+      "demand_category": "daily_life",
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 1.0,
+      "mass": 0.9,
+      "ref_price": 4.5,
+      "base_demand_per_1k": 2.2,
+      "tags": ["basic_survival"]
+    },
+    {
+      "id": "beverage",
+      "name": "营养饮料",
+      "role": "planet_supply",
+      "profession": "agri_bio",
+      "demand_category": "daily_life",
+      "wealth_tier": 1,
+      "step_depth": 2,
+      "volume": 1.1,
+      "mass": 1.1,
+      "ref_price": 14.0,
+      "base_demand_per_1k": 0.9,
+      "tags": ["tier1_plus"]
+    },
+    {
+      "id": "clothing",
+      "name": "基础衣物",
+      "role": "planet_supply",
+      "profession": "agri_bio",
+      "demand_category": "daily_life",
+      "wealth_tier": 1,
+      "step_depth": 3,
+      "volume": 1.2,
+      "mass": 0.7,
+      "ref_price": 22.0,
+      "base_demand_per_1k": 0.6,
+      "tags": ["tier1_plus"]
+    },
+    {
+      "id": "ore",
+      "name": "基础矿石",
+      "role": "foundation",
+      "profession": "mining_ind",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 0,
+      "volume": 1.5,
+      "mass": 2.0,
+      "ref_price": 3.5,
+      "base_demand_per_1k": 0.0,
+      "tags": ["ore"]
+    },
+    {
+      "id": "steel",
+      "name": "金属钢材",
+      "role": "foundation",
+      "profession": "mining_ind",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 1,
+      "volume": 1.8,
+      "mass": 2.6,
+      "ref_price": 15.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["metal"]
+    },
+    {
+      "id": "building_mat",
+      "name": "结构建材",
+      "role": "factory_consume",
+      "profession": "mining_ind",
+      "demand_category": "infra_tools",
+      "wealth_tier": 1,
+      "step_depth": 2,
+      "volume": 2.2,
+      "mass": 2.4,
+      "ref_price": 14.0,
+      "base_demand_per_1k": 0.8,
+      "tags": ["build"]
+    },
+    {
+      "id": "daily_goods",
+      "name": "日用品(兼维修)",
+      "role": "planet_supply",
+      "profession": "mining_ind",
+      "demand_category": "infra_tools",
+      "wealth_tier": 1,
+      "step_depth": 3,
+      "volume": 1.2,
+      "mass": 1.0,
+      "ref_price": 22.0,
+      "base_demand_per_1k": 0.5,
+      "tags": ["tier1_plus", "repair"]
+    },
+    {
+      "id": "ship_small",
+      "name": "小货船",
+      "role": "capital",
+      "profession": "mining_ind",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 3,
+      "volume": 25.0,
+      "mass": 30.0,
+      "ref_price": 580.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["ship"]
+    }
+  ],
+  "buildings": [
+    {
+      "id": "power_water_station",
+      "name": "能源水站",
+      "profession": "env_recycle",
+      "slots_used": 1,
+      "build_ticks": 6,
+      "standby_power": 0,
+      "build_cost": [{ "item": "building_mat", "qty": 6 }],
+      "description": "集成光伏发电、燃料发电、采水、电解制氧与合成燃料。"
+    },
+    {
+      "id": "recycling_plant",
+      "name": "生态回收中心",
+      "profession": "env_recycle",
+      "slots_used": 1,
+      "build_ticks": 8,
+      "standby_power": 1,
+      "build_cost": [{ "item": "building_mat", "qty": 8 }],
+      "description": "处理城市废料赚清运凭证，并副产净水、生物纤维与矿石。"
+    },
+    {
+      "id": "bio_greenhouse",
+      "name": "生态温室",
+      "profession": "agri_bio",
+      "slots_used": 1,
+      "build_ticks": 6,
+      "standby_power": 1,
+      "build_cost": [{ "item": "building_mat", "qty": 6 }],
+      "description": "培育生物作物并裂解高碳生物纤维。"
+    },
+    {
+      "id": "consumer_workshop",
+      "name": "生活消费工坊",
+      "profession": "agri_bio",
+      "slots_used": 1,
+      "build_ticks": 8,
+      "standby_power": 1,
+      "build_cost": [{ "item": "building_mat", "qty": 8 }],
+      "description": "生产基础口粮、营养饮料与基础衣物。"
+    },
+    {
+      "id": "mine_smelter",
+      "name": "矿业冶炼厂",
+      "profession": "mining_ind",
+      "slots_used": 1,
+      "build_ticks": 8,
+      "standby_power": 1,
+      "build_cost": [{ "item": "building_mat", "qty": 8 }],
+      "description": "开采基础矿石并支持碳还原/纯电弧双工艺炼钢。"
+    },
+    {
+      "id": "infra_factory",
+      "name": "结构与日用厂",
+      "profession": "mining_ind",
+      "slots_used": 1,
+      "build_ticks": 8,
+      "standby_power": 1,
+      "build_cost": [{ "item": "building_mat", "qty": 8 }],
+      "description": "生产结构建材与日用工具(兼维修件)。"
+    },
+    {
+      "id": "shipyard",
+      "name": "轨道船坞",
+      "profession": "mining_ind",
+      "slots_used": 1,
+      "build_ticks": 12,
+      "standby_power": 2,
+      "build_cost": [{ "item": "building_mat", "qty": 14 }],
+      "description": "建造星际运输货船。"
+    }
+  ],
+  "recipes": [
+    {
+      "id": "solar_power",
+      "name": "光伏直发电力",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 2,
+      "power_cost": 0,
+      "labor_cost": 4.0,
+      "inputs": [],
+      "outputs": [{ "item": "power", "qty": 12 }],
+      "enabled": true,
+      "notes": "零原料基础供电"
+    },
+    {
+      "id": "fuel_power",
+      "name": "燃料高功率发电",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 2,
+      "power_cost": 0,
+      "labor_cost": 4.0,
+      "inputs": [{ "item": "fuel", "qty": 1 }],
+      "outputs": [{ "item": "power", "qty": 28 }],
+      "enabled": true,
+      "notes": "远暗星高功率发电路线"
+    },
+    {
+      "id": "extract_water",
+      "name": "冰水冷凝提取",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 2,
+      "power_cost": 2,
+      "labor_cost": 4.0,
+      "inputs": [],
+      "outputs": [{ "item": "water", "qty": 10 }],
+      "enabled": true,
+      "notes": "大宗基础水源"
+    },
+    {
+      "id": "split_oxygen",
+      "name": "电解制氧",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 2,
+      "power_cost": 4,
+      "labor_cost": 4.0,
+      "inputs": [{ "item": "water", "qty": 4 }],
+      "outputs": [{ "item": "oxygen", "qty": 10 }],
+      "enabled": true,
+      "notes": "简单高吞吐星球维生氧"
+    },
+    {
+      "id": "synth_fuel",
+      "name": "碳氢推进燃料",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 4,
+      "labor_cost": 6.0,
+      "inputs": [{ "item": "water", "qty": 4 }, { "item": "bio_fiber", "qty": 1 }],
+      "outputs": [{ "item": "fuel", "qty": 6 }],
+      "enabled": true,
+      "notes": "吃农业生物纤维省电合成燃料"
+    },
+    {
+      "id": "synth_fuel_elec",
+      "name": "纯电解制燃料",
+      "building_id": "power_water_station",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 8,
+      "labor_cost": 6.0,
+      "inputs": [{ "item": "water", "qty": 5 }],
+      "outputs": [{ "item": "fuel", "qty": 6 }],
+      "enabled": true,
+      "notes": "不依赖纤维的抗断供燃料备选"
+    },
+    {
+      "id": "recycle_waste",
+      "name": "城市垃圾再生处理",
+      "building_id": "recycling_plant",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 3,
+      "labor_cost": 6.0,
+      "inputs": [{ "item": "waste", "qty": 8 }],
+      "outputs": [
+        { "item": "disposal_cert", "qty": 6 },
+        { "item": "water", "qty": 3 },
+        { "item": "bio_fiber", "qty": 1 },
+        { "item": "ore", "qty": 1 }
+      ],
+      "enabled": true,
+      "notes": "消耗城市垃圾赚消纳凭证，并副产水、纤维与再生矿石"
+    },
+    {
+      "id": "grow_crop",
+      "name": "水培作物培育",
+      "building_id": "bio_greenhouse",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 2,
+      "labor_cost": 6.0,
+      "inputs": [{ "item": "water", "qty": 4 }],
+      "outputs": [{ "item": "bio_crop", "qty": 8 }],
+      "enabled": true,
+      "notes": "农业上游原料"
+    },
+    {
+      "id": "crack_bio_fiber",
+      "name": "高碳作物裂解纤维",
+      "building_id": "bio_greenhouse",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 2,
+      "labor_cost": 4.0,
+      "inputs": [{ "item": "bio_crop", "qty": 5 }],
+      "outputs": [{ "item": "bio_fiber", "qty": 6 }],
+      "enabled": true,
+      "notes": "打通农业轻纺与冶金炼钢的跨界中间品"
+    },
+    {
+      "id": "make_rations",
+      "name": "基础口粮压制",
+      "building_id": "consumer_workshop",
+      "tier": 1,
+      "cycle_ticks": 3,
+      "power_cost": 2,
+      "labor_cost": 5.0,
+      "inputs": [{ "item": "bio_crop", "qty": 4 }, { "item": "water", "qty": 3 }],
+      "outputs": [{ "item": "rations", "qty": 10 }],
+      "enabled": true,
+      "notes": "星球大宗刚需口粮"
+    },
+    {
+      "id": "brew_beverage",
+      "name": "营养饮料罐装",
+      "building_id": "consumer_workshop",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 3,
+      "labor_cost": 8.0,
+      "inputs": [
+        { "item": "bio_crop", "qty": 4 },
+        { "item": "water", "qty": 6 },
+        { "item": "steel", "qty": 1 }
+      ],
+      "outputs": [{ "item": "beverage", "qty": 8 }],
+      "enabled": true,
+      "notes": "跨职业吃重工金属罐装的进阶饮品"
+    },
+    {
+      "id": "sew_clothing",
+      "name": "基础衣物缝制",
+      "building_id": "consumer_workshop",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 3,
+      "labor_cost": 10.0,
+      "inputs": [
+        { "item": "bio_fiber", "qty": 5 },
+        { "item": "water", "qty": 2 },
+        { "item": "daily_goods", "qty": 1 }
+      ],
+      "outputs": [{ "item": "clothing", "qty": 6 }],
+      "enabled": true,
+      "notes": "跨职业吃重工日用五金配件的进阶服装"
+    },
+    {
+      "id": "mine_ore",
+      "name": "深井矿石开采",
+      "building_id": "mine_smelter",
+      "tier": 1,
+      "cycle_ticks": 2,
+      "power_cost": 3,
+      "labor_cost": 6.0,
+      "inputs": [],
+      "outputs": [{ "item": "ore", "qty": 10 }],
+      "enabled": true,
+      "notes": "重工上游矿源"
+    },
+    {
+      "id": "steel_carbon",
+      "name": "碳还原炼钢",
+      "building_id": "mine_smelter",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 3,
+      "labor_cost": 8.0,
+      "inputs": [{ "item": "ore", "qty": 6 }, { "item": "bio_fiber", "qty": 3 }],
+      "outputs": [{ "item": "steel", "qty": 6 }],
+      "enabled": true,
+      "notes": "跨职业向农业买生物纤维的高效省电炼钢"
+    },
+    {
+      "id": "steel_electric",
+      "name": "纯电弧炉炼钢",
+      "building_id": "mine_smelter",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 16,
+      "labor_cost": 8.0,
+      "inputs": [{ "item": "ore", "qty": 6 }],
+      "outputs": [{ "item": "steel", "qty": 6 }],
+      "enabled": true,
+      "notes": "不依赖纤维的抗断供替代炼钢"
+    },
+    {
+      "id": "cast_building_mat",
+      "name": "结构建材浇筑",
+      "building_id": "infra_factory",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 3,
+      "labor_cost": 8.0,
+      "inputs": [{ "item": "ore", "qty": 5 }, { "item": "steel", "qty": 3 }],
+      "outputs": [{ "item": "building_mat", "qty": 8 }],
+      "enabled": true,
+      "notes": "建厂耗材与星球扩建刚需"
+    },
+    {
+      "id": "craft_daily_goods",
+      "name": "日用五金制造",
+      "building_id": "infra_factory",
+      "tier": 1,
+      "cycle_ticks": 4,
+      "power_cost": 3,
+      "labor_cost": 10.0,
+      "inputs": [{ "item": "steel", "qty": 3 }, { "item": "bio_fiber", "qty": 2 }],
+      "outputs": [{ "item": "daily_goods", "qty": 6 }],
+      "enabled": true,
+      "notes": "卖给城市，同时作制衣五金与修船耗材"
+    },
+    {
+      "id": "build_ship_small",
+      "name": "小货船建造",
+      "building_id": "shipyard",
+      "tier": 1,
+      "cycle_ticks": 10,
+      "power_cost": 12,
+      "labor_cost": 30.0,
+      "inputs": [
+        { "item": "steel", "qty": 12 },
+        { "item": "building_mat", "qty": 8 },
+        { "item": "daily_goods", "qty": 6 }
+      ],
+      "outputs": [{ "item": "ship_small", "qty": 1 }],
+      "enabled": true,
+      "notes": "前期即可自产的星际货运飞船"
+    }
+  ]
+}
