@@ -25,6 +25,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/catalog", get(catalog_handler))
         .route("/api/state", get(state_handler))
         .route("/api/market/book", get(market_book_handler))
+        .route("/api/market/candles", get(market_candles_handler))
         .route("/api/scripts/{company_id}", get(get_scripts_handler))
         .route("/api/scripts/{company_id}", put(put_scripts_handler))
         .route("/api/memory/{company_id}", put(put_memory_handler))
@@ -175,6 +176,88 @@ async fn market_book_handler(
         asks,
         candles,
         recent_trades,
+    }))
+}
+
+#[derive(Deserialize)]
+struct CandlesQuery {
+    station_id: Option<String>,
+    item_id: Option<String>,
+    period: Option<u64>,
+    from_tick: Option<u64>,
+    to_tick: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct MarketCandlesResp {
+    station_id: String,
+    item_id: String,
+    period: u64,
+    current_tick: u64,
+    from_bucket: u64,
+    to_bucket: u64,
+    ref_price: f64,
+    last_price: f64,
+    ema_fast: f64,
+    ema_slow: f64,
+    best_bid: Option<f64>,
+    best_ask: Option<f64>,
+    prev_close: Option<f64>,
+    earliest_trade_tick: Option<u64>,
+    latest_trade_tick: Option<u64>,
+    total_trade_ticks: u64,
+    candles: Vec<CandleRow>,
+}
+
+async fn market_candles_handler(
+    State(engine): State<SharedEngine>,
+    Query(q): Query<CandlesQuery>,
+) -> Result<Json<MarketCandlesResp>, (StatusCode, String)> {
+    let eng = engine.lock().await;
+    let sid = q.station_id.as_deref().unwrap_or("ST:HUB");
+    let item_id = q.item_id.as_deref().unwrap_or("steel");
+    let period = q.period.unwrap_or(1).clamp(1, 1000);
+
+    let Some(st) = eng.world.stations.get(sid) else {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown station '{sid}'")));
+    };
+    let Some(item_def) = eng.world.catalog.items.get(item_id) else {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown item '{item_id}'")));
+    };
+
+    let current_tick = eng.world.tick;
+    let to_tick = q.to_tick.unwrap_or(current_tick).min(current_tick);
+    let to_bucket = (to_tick / period) * period;
+    let default_from = to_bucket.saturating_sub(500 * period);
+    let from_tick = q.from_tick.unwrap_or(default_from).min(to_bucket);
+    let from_bucket = (from_tick / period) * period;
+
+    let fallback = (item_def.ref_price * MONEY_SCALE as f64).round() as i64;
+    let quote = st.quote(item_id, fallback);
+
+    let range = eng
+        .store
+        .query_candles_range(sid, item_id, period, from_bucket, to_bucket)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(MarketCandlesResp {
+        station_id: sid.to_string(),
+        item_id: item_id.to_string(),
+        period,
+        current_tick,
+        from_bucket,
+        to_bucket,
+        ref_price: item_def.ref_price,
+        last_price: from_money(quote.last_price),
+        ema_fast: from_money(quote.ema_fast),
+        ema_slow: from_money(quote.ema_slow),
+        best_bid: quote.best_bid.map(from_money),
+        best_ask: quote.best_ask.map(from_money),
+        prev_close: range.prev_close,
+        earliest_trade_tick: range.earliest_trade_tick,
+        latest_trade_tick: range.latest_trade_tick,
+        total_trade_ticks: range.total_trade_ticks,
+        candles: range.candles,
     }))
 }
 

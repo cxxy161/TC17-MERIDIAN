@@ -25,14 +25,18 @@ function mergeQuoteHistory(
   prev: Record<string, QuoteSample[]>,
   state: StateResponse,
 ): Record<string, QuoteSample[]> {
-  const next = { ...prev };
+  const next: Record<string, QuoteSample[]> = { ...prev };
   const t = state.tick;
   for (const row of state.market_tickers ?? []) {
     const key = `${row.station_id}::${row.item_id}`;
     const arr = next[key] ?? [];
     const last = arr[arr.length - 1];
-    if (!last || last.tick < t) {
-      next[key] = [...arr, { tick: t, price: row.last_price }].slice(-120);
+    if (!last || t < last.tick) {
+      next[key] = [{ tick: t, price: row.last_price }];
+    } else if (last.tick < t) {
+      next[key] = [...arr, { tick: t, price: row.last_price }].slice(-500);
+    } else if (last.price !== row.last_price) {
+      next[key] = [...arr.slice(0, -1), { tick: t, price: row.last_price }];
     }
   }
   return next;
@@ -103,6 +107,10 @@ interface GameStore {
 
 let wsInstance: WebSocket | null = null;
 let reconnectTimer: number | null = null;
+let tickSyncInFlight = false;
+let tickSyncPending = false;
+let bookSeqCounter = 0;
+const latestBookSeq: Record<string, number> = {};
 
 export const useGameStore = create<GameStore>((set, get) => ({
   catalog: null,
@@ -159,7 +167,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
         try {
           const msg = JSON.parse(ev.data as string);
           if (msg.kind === 'init' && msg.state) {
-            set({ state: msg.state as StateResponse });
+            const initState = msg.state as StateResponse;
+            set((prev) => {
+              const rolledBack = prev.state !== null && initState.tick < prev.state.tick;
+              return {
+                state: initState,
+                books: rolledBack ? {} : prev.books,
+                quoteHistory: mergeQuoteHistory(rolledBack ? {} : prev.quoteHistory, initState),
+              };
+            });
             return;
           }
           if (msg.kind === 'tick') {
@@ -195,9 +211,70 @@ export const useGameStore = create<GameStore>((set, get) => ({
               }));
             }
 
-            await get().refreshState();
-            const watched = Object.values(get().watchedBooks);
-            await Promise.all(watched.map((w) => get().fetchBook(w.stationId, w.itemId)));
+            if (tickSyncInFlight) {
+              tickSyncPending = true;
+              return;
+            }
+            tickSyncInFlight = true;
+            try {
+              do {
+                tickSyncPending = false;
+                const companyId = get().companyId;
+                const watched = Object.values(get().watchedBooks);
+                const bookSeqs = watched.map((w) => {
+                  const key = `${w.stationId}::${w.itemId}`;
+                  const seq = ++bookSeqCounter;
+                  latestBookSeq[key] = seq;
+                  return { ...w, key, seq };
+                });
+
+                const [nextState, bookResults] = await Promise.all([
+                  api.getState(companyId).catch(() => null),
+                  Promise.all(
+                    bookSeqs.map(async (entry) => {
+                      try {
+                        const book = await api.getMarketBook(entry.stationId, entry.itemId);
+                        return { key: entry.key, seq: entry.seq, book };
+                      } catch {
+                        return null;
+                      }
+                    }),
+                  ),
+                ]);
+
+                set((prev) => {
+                  const rolledBack =
+                    nextState !== null && prev.state !== null && nextState.tick < prev.state.tick;
+                  const nextBooks = rolledBack ? {} : { ...prev.books };
+                  for (const res of bookResults) {
+                    if (res && latestBookSeq[res.key] === res.seq) {
+                      nextBooks[res.key] = res.book;
+                    }
+                  }
+                  if (!nextState) {
+                    return { books: nextBooks };
+                  }
+                  return {
+                    state: nextState,
+                    books: nextBooks,
+                    quoteHistory: mergeQuoteHistory(
+                      rolledBack ? {} : prev.quoteHistory,
+                      nextState,
+                    ),
+                    scripts:
+                      prev.scripts && nextState.last_player_output
+                        ? {
+                            ...prev.scripts,
+                            memory_json: nextState.last_player_output.memory_json,
+                            last_output: nextState.last_player_output,
+                          }
+                        : prev.scripts,
+                  };
+                });
+              } while (tickSyncPending);
+            } finally {
+              tickSyncInFlight = false;
+            }
           }
         } catch {
           // ignore malformed frames
@@ -271,9 +348,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   fetchBook: async (stationId, itemId) => {
+    const key = `${stationId}::${itemId}`;
+    const seq = ++bookSeqCounter;
+    latestBookSeq[key] = seq;
     try {
       const book = await api.getMarketBook(stationId, itemId);
-      const key = `${stationId}::${itemId}`;
+      if (latestBookSeq[key] !== seq) return;
       set((prev) => ({
         books: { ...prev.books, [key]: book },
       }));
@@ -293,10 +373,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
   simControl: async (action, tickMs) => {
     try {
       await api.simControl(action, tickMs);
-      await get().refreshState();
       if (action === 'reset') {
-        set({ scriptDirty: false, consoleHistory: [], books: {} });
+        for (const k of Object.keys(latestBookSeq)) delete latestBookSeq[k];
+        set({ scriptDirty: false, consoleHistory: [], books: {}, quoteHistory: {} });
+        await get().refreshState();
         await get().refreshScripts();
+      } else {
+        await get().refreshState();
       }
       const watched = Object.values(get().watchedBooks);
       await Promise.all(watched.map((w) => get().fetchBook(w.stationId, w.itemId)));

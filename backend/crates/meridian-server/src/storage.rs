@@ -21,6 +21,15 @@ pub struct CandleRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandleRangeResult {
+    pub candles: Vec<CandleRow>,
+    pub prev_close: Option<f64>,
+    pub earliest_trade_tick: Option<u64>,
+    pub latest_trade_tick: Option<u64>,
+    pub total_trade_ticks: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeRow {
     pub tick: u64,
     pub station_id: String,
@@ -405,6 +414,172 @@ impl SqliteStore {
         Ok(vec)
     }
 
+    pub fn query_candles_range(
+        &self,
+        station_id: &str,
+        item_id: &str,
+        period: u64,
+        from_bucket: u64,
+        to_bucket: u64,
+    ) -> Result<CandleRangeResult, String> {
+        let step = period.max(1);
+        let aligned_from = (from_bucket / step) * step;
+        let aligned_to = (to_bucket.max(aligned_from) / step) * step;
+        let raw_to_end = aligned_to.saturating_add(step - 1);
+
+        let (earliest_trade_tick, latest_trade_tick, total_trade_ticks): (
+            Option<i64>,
+            Option<i64>,
+            i64,
+        ) = self
+            .conn
+            .query_row(
+                r#"
+                SELECT MIN(bucket_tick), MAX(bucket_tick), COUNT(*)
+                FROM candles
+                WHERE station_id = ?1 AND item_id = ?2
+                "#,
+                params![station_id, item_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|e| e.to_string())?;
+
+        let prev_close: Option<f64> = self
+            .conn
+            .query_row(
+                r#"
+                SELECT close
+                FROM candles
+                WHERE station_id = ?1 AND item_id = ?2 AND bucket_tick < ?3
+                ORDER BY bucket_tick DESC
+                LIMIT 1
+                "#,
+                params![station_id, item_id, aligned_from as i64],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        let mut candles = Vec::new();
+        if step == 1 {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    r#"
+                    SELECT bucket_tick, open, high, low, close, volume
+                    FROM candles
+                    WHERE station_id = ?1
+                      AND item_id = ?2
+                      AND bucket_tick >= ?3
+                      AND bucket_tick <= ?4
+                    ORDER BY bucket_tick ASC
+                    LIMIT 10000
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(
+                    params![station_id, item_id, aligned_from as i64, raw_to_end as i64],
+                    |r| {
+                        Ok(CandleRow {
+                            bucket_tick: r.get::<_, i64>(0)? as u64,
+                            open: r.get(1)?,
+                            high: r.get(2)?,
+                            low: r.get(3)?,
+                            close: r.get(4)?,
+                            volume: r.get::<_, i64>(5)? as u64,
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                candles.push(row.map_err(|e| e.to_string())?);
+            }
+        } else {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    r#"
+                    WITH ranged AS (
+                        SELECT
+                            (bucket_tick / ?3) * ?3 AS agg_bucket,
+                            bucket_tick,
+                            high,
+                            low,
+                            volume
+                        FROM candles
+                        WHERE station_id = ?1
+                          AND item_id = ?2
+                          AND bucket_tick >= ?4
+                          AND bucket_tick <= ?5
+                    ),
+                    bounds AS (
+                        SELECT
+                            agg_bucket,
+                            MIN(bucket_tick) AS first_tick,
+                            MAX(bucket_tick) AS last_tick,
+                            MAX(high) AS high,
+                            MIN(low) AS low,
+                            SUM(volume) AS volume
+                        FROM ranged
+                        GROUP BY agg_bucket
+                    )
+                    SELECT
+                        b.agg_bucket,
+                        c_first.open,
+                        b.high,
+                        b.low,
+                        c_last.close,
+                        b.volume
+                    FROM bounds b
+                    JOIN candles c_first
+                      ON c_first.station_id = ?1
+                     AND c_first.item_id = ?2
+                     AND c_first.bucket_tick = b.first_tick
+                    JOIN candles c_last
+                      ON c_last.station_id = ?1
+                     AND c_last.item_id = ?2
+                     AND c_last.bucket_tick = b.last_tick
+                    ORDER BY b.agg_bucket ASC
+                    LIMIT 10000
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(
+                    params![
+                        station_id,
+                        item_id,
+                        step as i64,
+                        aligned_from as i64,
+                        raw_to_end as i64
+                    ],
+                    |r| {
+                        Ok(CandleRow {
+                            bucket_tick: r.get::<_, i64>(0)? as u64,
+                            open: r.get(1)?,
+                            high: r.get(2)?,
+                            low: r.get(3)?,
+                            close: r.get(4)?,
+                            volume: r.get::<_, i64>(5)? as u64,
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                candles.push(row.map_err(|e| e.to_string())?);
+            }
+        }
+
+        Ok(CandleRangeResult {
+            candles,
+            prev_close,
+            earliest_trade_tick: earliest_trade_tick.map(|t| t as u64),
+            latest_trade_tick: latest_trade_tick.map(|t| t as u64),
+            total_trade_ticks: total_trade_ticks.max(0) as u64,
+        })
+    }
+
     pub fn query_recent_trades(
         &self,
         station_id: &str,
@@ -442,5 +617,74 @@ impl SqliteStore {
             vec.push(row.map_err(|e| e.to_string())?);
         }
         Ok(vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meridian_core::to_money;
+
+    fn mk_fill(tick: u64, price: f64, qty: u32) -> TradeFill {
+        let p = to_money(price);
+        let notional = p * qty as i64;
+        TradeFill {
+            tick,
+            station_id: "ST:P2".to_string(),
+            item_id: "power".to_string(),
+            qty,
+            price: p,
+            notional,
+            fee: 0,
+            seller_proceeds: notional,
+            buyer_refund: 0,
+            buyer_id: "b1".to_string(),
+            seller_id: "s1".to_string(),
+        }
+    }
+
+    #[test]
+    fn query_candles_range_handles_sparse_and_aggregated_periods() {
+        let mut store = SqliteStore::open_in_memory().unwrap();
+        store
+            .record_tick_fills(
+                &[
+                    mk_fill(4, 1.5, 2),
+                    mk_fill(4, 2.0, 4),
+                    mk_fill(10, 2.2, 3),
+                    mk_fill(12, 2.8, 5),
+                    mk_fill(14, 2.4, 2),
+                    mk_fill(17, 3.0, 1),
+                ],
+                1,
+            )
+            .unwrap();
+
+        // Far after last trade: candles empty, prev_close carries last trade close
+        let late = store
+            .query_candles_range("ST:P2", "power", 1, 4500, 5000)
+            .unwrap();
+        assert!(late.candles.is_empty());
+        assert!((late.prev_close.unwrap() - 3.0).abs() < 1e-6);
+        assert_eq!(late.earliest_trade_tick, Some(4));
+        assert_eq!(late.latest_trade_tick, Some(17));
+        assert_eq!(late.total_trade_ticks, 5);
+
+        // 5-tick aggregation across [10..19] should produce buckets 10 and 15 with prev_close from tick 4
+        let agg = store
+            .query_candles_range("ST:P2", "power", 5, 10, 19)
+            .unwrap();
+        assert!((agg.prev_close.unwrap() - 2.0).abs() < 1e-6);
+        assert_eq!(agg.candles.len(), 2);
+        assert_eq!(agg.candles[0].bucket_tick, 10);
+        assert!((agg.candles[0].open - 2.2).abs() < 1e-6);
+        assert!((agg.candles[0].high - 2.8).abs() < 1e-6);
+        assert!((agg.candles[0].low - 2.2).abs() < 1e-6);
+        assert!((agg.candles[0].close - 2.4).abs() < 1e-6);
+        assert_eq!(agg.candles[0].volume, 10);
+
+        assert_eq!(agg.candles[1].bucket_tick, 15);
+        assert!((agg.candles[1].open - 3.0).abs() < 1e-6);
+        assert_eq!(agg.candles[1].volume, 1);
     }
 }

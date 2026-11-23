@@ -1,6 +1,7 @@
 import type {
   IntentPayload,
   MarketBookResp,
+  MarketCandlesResp,
   ProductionPack,
   ScriptsResp,
   StateResponse,
@@ -26,8 +27,27 @@ export const api = {
 
   getMarketBook(stationId: string, itemId: string): Promise<MarketBookResp> {
     return jsonFetch(
-      `/api/market/book?station_id=${encodeURIComponent(stationId)}&item_id=${encodeURIComponent(itemId)}&limit=20&candle_limit=240`,
+      `/api/market/book?station_id=${encodeURIComponent(stationId)}&item_id=${encodeURIComponent(itemId)}&limit=20&candle_limit=500`,
     );
+  },
+
+  getMarketCandles(
+    stationId: string,
+    itemId: string,
+    opts?: { period?: number; fromTick?: number; toTick?: number },
+  ): Promise<MarketCandlesResp> {
+    const qs = new URLSearchParams({
+      station_id: stationId,
+      item_id: itemId,
+      period: String(Math.max(1, Math.floor(opts?.period ?? 1))),
+    });
+    if (opts?.fromTick !== undefined) {
+      qs.set('from_tick', String(Math.max(0, Math.floor(opts.fromTick))));
+    }
+    if (opts?.toTick !== undefined) {
+      qs.set('to_tick', String(Math.max(0, Math.floor(opts.toTick))));
+    }
+    return jsonFetch(`/api/market/candles?${qs.toString()}`);
   },
 
   getScripts(companyId = 'player1'): Promise<ScriptsResp> {

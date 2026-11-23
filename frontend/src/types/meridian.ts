@@ -273,6 +273,26 @@ export interface MarketBookResp {
   recent_trades: TradeRow[];
 }
 
+export interface MarketCandlesResp {
+  station_id: string;
+  item_id: string;
+  period: number;
+  current_tick: number;
+  from_bucket: number;
+  to_bucket: number;
+  ref_price: number;
+  last_price: number;
+  ema_fast: number;
+  ema_slow: number;
+  best_bid: number | null;
+  best_ask: number | null;
+  prev_close: number | null;
+  earliest_trade_tick: number | null;
+  latest_trade_tick: number | null;
+  total_trade_ticks: number;
+  candles: CandleRow[];
+}
+
 export interface ScriptsResp {
   company_id: string;
   enabled: boolean;
