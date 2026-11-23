@@ -10,11 +10,13 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import { useGameStore } from '../store/useGameStore';
+import { useGameStore, type QuoteSample } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 import { STATION_NAMES, type CandleRow } from '../types/meridian';
 
 const BASE_TS = 1_700_000_000;
+const WINDOW_BARS = 50;
+
 const toTime = (t: number): UTCTimestamp => (BASE_TS + t * 60) as UTCTimestamp;
 const fromTime = (ts: Time): string => {
   if (typeof ts === 'number') {
@@ -23,16 +25,25 @@ const fromTime = (ts: Time): string => {
   return String(ts);
 };
 
-function aggregateCandles(candles: CandleRow[], period: number): CandleRow[] {
-  if (candles.length === 0) return [];
+interface DisplayBar extends CandleRow {
+  isReal: boolean;
+}
+
+function buildDisplayCandles(
+  rawCandles: CandleRow[],
+  samples: QuoteSample[] | undefined,
+  refPrice: number | undefined,
+  currentTick: number,
+  period: number,
+): { bars: DisplayBar[]; realCount: number } {
   const step = Math.max(1, period);
-  const sorted = [...candles].sort((a, b) => a.bucket_tick - b.bucket_tick);
-  const buckets = new Map<number, CandleRow>();
-  for (const c of sorted) {
+  const sortedRaw = [...rawCandles].sort((a, b) => a.bucket_tick - b.bucket_tick);
+  const realBuckets = new Map<number, DisplayBar>();
+  for (const c of sortedRaw) {
     const b = Math.floor(c.bucket_tick / step) * step;
-    const prev = buckets.get(b);
+    const prev = realBuckets.get(b);
     if (!prev) {
-      buckets.set(b, { ...c, bucket_tick: b });
+      realBuckets.set(b, { ...c, bucket_tick: b, isReal: true });
     } else {
       prev.high = Math.max(prev.high, c.high);
       prev.low = Math.min(prev.low, c.low);
@@ -40,7 +51,82 @@ function aggregateCandles(candles: CandleRow[], period: number): CandleRow[] {
       prev.volume += c.volume;
     }
   }
-  return Array.from(buckets.values()).sort((a, b) => a.bucket_tick - b.bucket_tick);
+
+  const realList = Array.from(realBuckets.values()).sort((a, b) => a.bucket_tick - b.bucket_tick);
+  const lastReal = realList[realList.length - 1];
+  const effectiveTick = Math.max(currentTick, lastReal?.bucket_tick ?? 0);
+  const curBucket = Math.floor(effectiveTick / step) * step;
+
+  // Need a fallback price when no real trade happened in a bucket
+  const basePrice = refPrice ?? lastReal?.close;
+  if (realList.length === 0 && (basePrice === undefined || basePrice <= 0)) {
+    return { bars: [], realCount: 0 };
+  }
+
+  // Index quote samples by bucket so any reference price drift in no-trade ticks shows up
+  const sampleBuckets = new Map<number, QuoteSample[]>();
+  for (const s of samples ?? []) {
+    const b = Math.floor(s.tick / step) * step;
+    const list = sampleBuckets.get(b);
+    if (list) list.push(s);
+    else sampleBuckets.set(b, [s]);
+  }
+
+  const windowStart = Math.max(0, curBucket - (WINDOW_BARS - 1) * step);
+  const out: DisplayBar[] = [];
+
+  // Keep any earlier real trade candles before the trailing live window
+  for (const rc of realList) {
+    if (rc.bucket_tick < windowStart) {
+      out.push(rc);
+    }
+  }
+
+  // Carry forward into trailing window up to live curBucket so chart always tracks currentTick
+  let carryPrice =
+    out.length > 0 ? out[out.length - 1].close : (basePrice ?? 0);
+
+  for (let b = windowStart; b <= curBucket; b += step) {
+    const realBar = realBuckets.get(b);
+    if (realBar) {
+      out.push(realBar);
+      carryPrice = realBar.close;
+      continue;
+    }
+    const bucketSamples = sampleBuckets.get(b);
+    if (bucketSamples && bucketSamples.length > 0) {
+      const open = bucketSamples[0].price;
+      let high = open;
+      let low = open;
+      for (const s of bucketSamples) {
+        if (s.price > high) high = s.price;
+        if (s.price < low) low = s.price;
+      }
+      const close = bucketSamples[bucketSamples.length - 1].price;
+      carryPrice = close;
+      out.push({
+        bucket_tick: b,
+        open,
+        high,
+        low,
+        close,
+        volume: 0,
+        isReal: false,
+      });
+    } else if (carryPrice > 0) {
+      out.push({
+        bucket_tick: b,
+        open: carryPrice,
+        high: carryPrice,
+        low: carryPrice,
+        close: carryPrice,
+        volume: 0,
+        isReal: false,
+      });
+    }
+  }
+
+  return { bars: out, realCount: realList.length };
 }
 
 export const ChartPanel: React.FC<PaneProps> = ({
@@ -78,8 +164,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
   const volSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const loadedKeyRef = useRef<string>('');
-  const lastCandleTickRef = useRef<number>(-1);
-  const lastSampleTickRef = useRef<number>(-1);
+  const lastBarTickRef = useRef<number>(-1);
   const volByTimeRef = useRef<Map<number, number>>(new Map());
 
   useEffect(() => {
@@ -124,9 +209,9 @@ export const ChartPanel: React.FC<PaneProps> = ({
       },
       timeScale: {
         borderColor: 'rgba(148, 163, 184, 0.18)',
-        barSpacing: 12,
+        barSpacing: 9,
         minBarSpacing: 2,
-        rightOffset: 6,
+        rightOffset: 4,
         timeVisible: false,
         tickMarkFormatter: (time: Time) => fromTime(time),
       },
@@ -215,16 +300,16 @@ export const ChartPanel: React.FC<PaneProps> = ({
   );
   const currentTick = state?.tick ?? 0;
 
-  const agg = useMemo(
-    () => aggregateCandles(book?.candles ?? [], period),
-    [book?.candles, period],
-  );
-
   const refPrice = book?.last_price ?? tickerRow?.last_price;
   const bestBid = book?.best_bid ?? tickerRow?.best_bid ?? null;
   const bestAsk = book?.best_ask ?? tickerRow?.best_ask ?? null;
 
-  // Separate effect for updating series data WITHOUT stealing user pan/zoom state!
+  const { bars, realCount } = useMemo(
+    () => buildDisplayCandles(book?.candles ?? [], samples, refPrice, currentTick, period),
+    [book?.candles, samples, refPrice, currentTick, period],
+  );
+
+  // Push initial setData on switch, then incremental .update() on every live tick without locking pan/zoom
   useEffect(() => {
     const candleSeries = candleSeriesRef.current;
     const smaSeries = smaSeriesRef.current;
@@ -232,141 +317,84 @@ export const ChartPanel: React.FC<PaneProps> = ({
     const chart = chartRef.current;
     if (!candleSeries || !smaSeries || !volSeries || !chart) return;
 
-    const mode = agg.length > 0 ? 'candle' : 'ref';
-    const key = `${stationId}::${itemId}::${period}::${mode}`;
-    const isInitialOrSwitch = loadedKeyRef.current !== key;
-
     const precision = (refPrice ?? 10) < 10 ? 4 : 2;
     const minMove = precision === 4 ? 0.0001 : 0.01;
     candleSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
-    smaSeries.applyOptions({
-      lastValueVisible: agg.length === 0,
-      priceFormat: { type: 'price', precision, minMove },
-    });
+    smaSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove } });
 
-    if (agg.length > 0) {
-      const nextVolMap = new Map<number, number>();
-      for (const c of agg) {
-        nextVolMap.set(toTime(c.bucket_tick), c.volume);
-      }
-      volByTimeRef.current = nextVolMap;
-
-      const latestTick = agg[agg.length - 1].bucket_tick;
-      const tickWentBackwards = latestTick < lastCandleTickRef.current;
-
-      if (isInitialOrSwitch || tickWentBackwards) {
-        candleSeries.setData(
-          agg.map((c) => ({
-            time: toTime(c.bucket_tick),
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-          })),
-        );
-        volSeries.setData(
-          agg.map((c) => ({
-            time: toTime(c.bucket_tick),
-            value: c.volume,
-            color: c.close >= c.open ? 'rgba(63, 185, 80, 0.35)' : 'rgba(248, 81, 73, 0.35)',
-          })),
-        );
-        smaSeries.setData(
-          agg.map((c, idx) => {
-            const win = agg.slice(Math.max(0, idx - 9), idx + 1);
-            const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
-            return { time: toTime(c.bucket_tick), value: avg };
-          }),
-        );
-
-        loadedKeyRef.current = key;
-        if (agg.length > 20) {
-          chart.timeScale().fitContent();
-        } else {
-          chart.timeScale().applyOptions({ barSpacing: 14, rightOffset: 6 });
-          chart.timeScale().scrollToRealTime();
-        }
-      } else {
-        for (let i = 0; i < agg.length; i++) {
-          const c = agg[i];
-          if (c.bucket_tick < lastCandleTickRef.current) continue;
-          const time = toTime(c.bucket_tick);
-          candleSeries.update({
-            time,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-          });
-          volSeries.update({
-            time,
-            value: c.volume,
-            color: c.close >= c.open ? 'rgba(63, 185, 80, 0.35)' : 'rgba(248, 81, 73, 0.35)',
-          });
-          const win = agg.slice(Math.max(0, i - 9), i + 1);
-          const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
-          smaSeries.update({ time, value: avg });
-        }
-      }
-      lastCandleTickRef.current = latestTick;
-      lastSampleTickRef.current = -1;
-    } else {
+    if (bars.length === 0) {
+      candleSeries.setData([]);
+      volSeries.setData([]);
+      smaSeries.setData([]);
       volByTimeRef.current.clear();
-      const sortedSamples =
-        samples && samples.length >= 2 ? [...samples].sort((a, b) => a.tick - b.tick) : null;
-
-      if (isInitialOrSwitch) {
-        candleSeries.setData([]);
-        volSeries.setData([]);
-        if (sortedSamples) {
-          smaSeries.setData(
-            sortedSamples.map((s) => ({ time: toTime(s.tick), value: s.price })),
-          );
-          lastSampleTickRef.current = sortedSamples[sortedSamples.length - 1].tick;
-        } else if (refPrice !== undefined && refPrice > 0) {
-          const endT = Math.max(1, currentTick);
-          const startT = Math.max(0, endT - 20);
-          const pts: Array<{ time: UTCTimestamp; value: number }> = [];
-          const stepT = Math.max(1, Math.floor((endT - startT) / 10));
-          for (let t = startT; t <= endT; t += stepT) {
-            pts.push({ time: toTime(t), value: refPrice });
-          }
-          if (pts[pts.length - 1].time !== toTime(endT)) {
-            pts.push({ time: toTime(endT), value: refPrice });
-          }
-          smaSeries.setData(pts);
-          lastSampleTickRef.current = endT;
-        } else {
-          smaSeries.setData([]);
-          lastSampleTickRef.current = -1;
-        }
-        loadedKeyRef.current = key;
-        chart.timeScale().applyOptions({ barSpacing: 14, rightOffset: 6 });
-        chart.timeScale().scrollToRealTime();
-      } else if (sortedSamples) {
-        const latest = sortedSamples[sortedSamples.length - 1];
-        if (latest.tick < lastSampleTickRef.current) {
-          smaSeries.setData(
-            sortedSamples.map((s) => ({ time: toTime(s.tick), value: s.price })),
-          );
-          lastSampleTickRef.current = latest.tick;
-        } else {
-          for (const s of sortedSamples) {
-            if (s.tick >= lastSampleTickRef.current) {
-              smaSeries.update({ time: toTime(s.tick), value: s.price });
-              lastSampleTickRef.current = s.tick;
-            }
-          }
-        }
-      } else if (refPrice !== undefined && refPrice > 0 && currentTick > lastSampleTickRef.current) {
-        smaSeries.update({ time: toTime(currentTick), value: refPrice });
-        lastSampleTickRef.current = currentTick;
-      }
-      lastCandleTickRef.current = -1;
+      lastBarTickRef.current = -1;
+      return;
     }
-  }, [agg, samples, refPrice, currentTick, stationId, itemId, period]);
 
-  // Separate effect for bid/ask horizontal lines so they never trigger chart zoom reset
+    const nextVolMap = new Map<number, number>();
+    for (const c of bars) {
+      nextVolMap.set(toTime(c.bucket_tick), c.volume);
+    }
+    volByTimeRef.current = nextVolMap;
+
+    const key = `${stationId}::${itemId}::${period}::${book && book.candles.length > 0 ? 'hasCandles' : 'flat'}`;
+    const latestTick = bars[bars.length - 1].bucket_tick;
+    const isSwitch = loadedKeyRef.current !== key;
+    const tickReset = latestTick < lastBarTickRef.current;
+
+    if (isSwitch || tickReset) {
+      candleSeries.setData(
+        bars.map((c) => ({
+          time: toTime(c.bucket_tick),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        })),
+      );
+      volSeries.setData(
+        bars.map((c) => ({
+          time: toTime(c.bucket_tick),
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(63, 185, 80, 0.35)' : 'rgba(248, 81, 73, 0.35)',
+        })),
+      );
+      smaSeries.setData(
+        bars.map((c, idx) => {
+          const win = bars.slice(Math.max(0, idx - 9), idx + 1);
+          const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
+          return { time: toTime(c.bucket_tick), value: avg };
+        }),
+      );
+      loadedKeyRef.current = key;
+      chart.timeScale().applyOptions({ barSpacing: 9, rightOffset: 4 });
+      chart.timeScale().fitContent();
+    } else {
+      for (let i = 0; i < bars.length; i++) {
+        const c = bars[i];
+        if (c.bucket_tick < lastBarTickRef.current) continue;
+        const time = toTime(c.bucket_tick);
+        candleSeries.update({
+          time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        });
+        volSeries.update({
+          time,
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(63, 185, 80, 0.35)' : 'rgba(248, 81, 73, 0.35)',
+        });
+        const win = bars.slice(Math.max(0, i - 9), i + 1);
+        const avg = win.reduce((s, x) => s + x.close, 0) / win.length;
+        smaSeries.update({ time, value: avg });
+      }
+    }
+    lastBarTickRef.current = latestTick;
+  }, [bars, book, refPrice, stationId, itemId, period]);
+
+  // Bid / Ask horizontal lines kept independent from pan/zoom state
   useEffect(() => {
     const smaSeries = smaSeriesRef.current;
     if (!smaSeries) return;
@@ -374,7 +402,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
       try {
         smaSeries.removePriceLine(pl);
       } catch {
-        // ignore if already detached
+        // ignore if detached
       }
     }
     priceLinesRef.current = [];
@@ -405,7 +433,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
     }
   }, [bestBid, bestAsk]);
 
-  const latest = agg[agg.length - 1];
+  const latest = bars[bars.length - 1];
   const shownBar = hoverCandle ?? (latest ? { ...latest, tick: `T${latest.bucket_tick}` } : null);
   const priceDigits = (refPrice ?? 10) < 10 ? 4 : 2;
 
@@ -483,12 +511,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
             {shownBar.volume !== undefined ? ` · 量 ${shownBar.volume}` : ''}
           </span>
         ) : (
-          <span className="text-slate-400">
-            参考价 {refPrice !== undefined ? refPrice.toFixed(priceDigits) : '--'}
-            {bestBid !== null ? ` · 买一 ${bestBid.toFixed(priceDigits)}` : ''}
-            {bestAsk !== null ? ` · 卖一 ${bestAsk.toFixed(priceDigits)}` : ''}
-            {' · '}暂无撮合 K 线
-          </span>
+          <span className="text-slate-400">加载市场行情中...</span>
         )}
         <span className="text-[#58a6ff]">
           均线 {book ? book.ema_fast.toFixed(priceDigits) : '--'}
@@ -497,9 +520,9 @@ export const ChartPanel: React.FC<PaneProps> = ({
 
       <div className="flex-1 min-h-0 relative">
         <div ref={containerRef} className="w-full h-full" />
-        {agg.length === 0 && (
+        {realCount === 0 && (
           <div className="absolute top-2 left-2.5 z-10 pointer-events-none px-2 py-0.5 rounded bg-[#1f2630]/85 border border-slate-700/70 text-slate-400 text-[10px]">
-            暂无撮合成交 K 线 · 显示实时参考价与盘口报价线
+            暂无新成交 · 当前按参考价随回合推进
           </div>
         )}
       </div>
