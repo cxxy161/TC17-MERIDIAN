@@ -6,6 +6,7 @@ backend/**/*.rs.bk
 /frontend/node_modules/
 /frontend/dist/
 /frontend/.vite/
+*.tsbuildinfo
 
 # Python prototype & caches
 **/__pycache__/

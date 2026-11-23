@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #06090e;
+    color: #e2e8f0;
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-size: 12px;
+  }
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom Dockview theme matching Meridian Blue/Green Telemetry */
+.meridian-dockview.dockview-theme-dark {
+  --dv-background-color: #06090e;
+  --dv-paneview-header-border-color: rgba(56, 189, 248, 0.14);
+  --dv-tabs-and-actions-container-background-color: #0b121b;
+  --dv-tabs-and-actions-container-height: 29px;
+  --dv-activegroup-visiblepanel-tab-background-color: #0e1825;
+  --dv-activegroup-hiddenpanel-tab-background-color: #090f17;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #0b121b;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #080d14;
+  --dv-activegroup-visiblepanel-tab-color: #e2e8f0;
+  --dv-activegroup-hiddenpanel-tab-color: #64748b;
+  --dv-inactivegroup-visiblepanel-tab-color: #94a3b8;
+  --dv-inactivegroup-hiddenpanel-tab-color: #475569;
+  --dv-tab-divider-color: rgba(56, 189, 248, 0.1);
+  --dv-separator-border: rgba(56, 189, 248, 0.16);
+  --dv-group-view-background-color: #0b1119;
+  --dv-drag-over-background-color: rgba(56, 189, 248, 0.12);
+  --dv-drag-over-border-color: rgba(56, 189, 248, 0.7);
+  --dv-floating-box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+}
+
+.meridian-dockview .dv-tab.dv-active-tab {
+  border-top: 2px solid #38bdf8 !important;
+}
+
+.meridian-dockview .dv-groupview {
+  border: 1px solid rgba(56, 189, 248, 0.12);
+}
+
+.meridian-dockview .dv-tab {
+  font-size: 11px;
+  padding: 0 10px;
+}
+
+.pill-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 2px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 25, 38, 0.7);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.pill-btn:hover {
+  color: #f8fafc;
+  border-color: rgba(56, 189, 248, 0.55);
+}
+.pill-btn.active {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.cta-blue {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 2px;
+  border: 1px solid rgba(56, 189, 248, 0.65);
+  background: rgba(37, 99, 235, 0.24);
+  color: #bae6fd;
+  cursor: pointer;
+}
+.cta-blue:hover {
+  background: rgba(37, 99, 235, 0.42);
+  color: #fff;
+}
+
+.cta-green {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 2px;
+  border: 1px solid rgba(16, 185, 129, 0.65);
+  background: rgba(16, 185, 129, 0.18);
+  color: #6ee7b7;
+  cursor: pointer;
+}
+.cta-green:hover {
+  background: rgba(16, 185, 129, 0.34);
+  color: #fff;
+}
+
+.metric-card {
+  background: rgba(14, 22, 34, 0.75);
+  border: 1px solid rgba(56, 189, 248, 0.12);
+  border-radius: 2px;
+  padding: 6px 8px;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.22);
+  border-radius: 2px;
+}
