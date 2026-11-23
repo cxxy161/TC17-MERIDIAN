@@ -183,12 +183,7 @@ pub fn decide_npc_intents(
                 val = val.max(bb_f.min(last_p * 5.0));
             }
         }
-        if !catalog
-            .items
-            .get(item_id)
-            .map(|i| i.has_tag("instant"))
-            .unwrap_or(false)
-        {
+        if !catalog.is_instant_item(item_id) {
             if let Some(hq) = snap.quotes.get("ST:HUB").and_then(|m| m.get(item_id)) {
                 if let Some(hbb) = hq.best_bid {
                     let h_last = from_money(hq.last_price).max(0.01);
@@ -200,6 +195,24 @@ pub fn decide_npc_intents(
     };
 
     // 1. Production Head: pick highest-scoring recipe & active state per building
+    let company_fuel: u32 = catalog
+        .fuel_item
+        .as_deref()
+        .map(|fit| {
+            let g: u32 = snap
+                .planets
+                .values()
+                .filter_map(|p| p.ground_store.get(fit))
+                .sum();
+            let s: u32 = snap
+                .company
+                .station_stores
+                .values()
+                .filter_map(|m| m.get(fit))
+                .sum();
+            g + s
+        })
+        .unwrap_or(24);
     let mut avg_margin_sum = 0.0;
     let mut avg_margin_cnt = 0usize;
     let mut needed_items: HashMap<String, u32> = HashMap::new();
@@ -221,25 +234,45 @@ pub fn decide_npc_intents(
             let Some(r) = catalog.recipes.get(rid) else {
                 continue;
             };
+            let hub_st = snap.company.station_stores.get("ST:HUB");
             let mut in_cost = r.labor_cost * snap.cpi;
             if r.power_cost > 0 {
                 in_cost += r.power_cost as f64 * est_input_cost(&b_sid, "power");
             }
             let mut min_cov = 1.0f64;
+            let mut missing_inputs = 0usize;
             for inp in &r.inputs {
                 in_cost += inp.qty as f64 * est_input_cost(&b_sid, &inp.item);
+                let is_inp_instant = catalog.is_instant_item(&inp.item);
                 let have_g = p_ground.and_then(|g| g.get(&inp.item)).copied().unwrap_or(0);
-                let have_s = p_st.and_then(|s| s.get(&inp.item)).copied().unwrap_or(0);
-                let market_ok = snap
+                let have_s = if is_inp_instant {
+                    0
+                } else {
+                    p_st.and_then(|s| s.get(&inp.item)).copied().unwrap_or(0)
+                        + hub_st.and_then(|s| s.get(&inp.item)).copied().unwrap_or(0)
+                };
+                let local_ask = snap
                     .quotes
                     .get(&b_sid)
                     .and_then(|m| m.get(&inp.item))
                     .and_then(|q| q.best_ask)
                     .is_some();
+                let hub_ask = !is_inp_instant
+                    && snap
+                        .quotes
+                        .get("ST:HUB")
+                        .and_then(|m| m.get(&inp.item))
+                        .and_then(|q| q.best_ask)
+                        .is_some();
+                let market_ok = local_ask || hub_ask;
+                let have_tot = have_g + have_s;
                 let cov = if market_ok {
-                    ((have_g + have_s) as f64 / inp.qty.max(1) as f64).max(0.6)
+                    (have_tot as f64 / inp.qty.max(1) as f64).max(0.6)
                 } else {
-                    (have_g + have_s) as f64 / inp.qty.max(1) as f64
+                    if have_tot < inp.qty {
+                        missing_inputs += 1;
+                    }
+                    have_tot as f64 / inp.qty.max(1) as f64
                 };
                 min_cov = min_cov.min(cov.clamp(0.0, 2.0));
             }
@@ -254,6 +287,9 @@ pub fn decide_npc_intents(
                 let pwr_cov = if pwr_ask {
                     (pwr_have as f64 / r.power_cost.max(1) as f64).max(0.6)
                 } else {
+                    if pwr_have < r.power_cost {
+                        missing_inputs += 1;
+                    }
                     pwr_have as f64 / r.power_cost.max(1) as f64
                 };
                 min_cov = min_cov.min(pwr_cov.clamp(0.0, 2.0));
@@ -262,15 +298,40 @@ pub fn decide_npc_intents(
             let mut out_val = 0.0;
             let mut out_stock_ratio = 0.0;
             for out in &r.outputs {
-                let p = est_output_value(&b_sid, &out.item);
-                out_val += out.qty as f64 * bld.efficiency * p;
+                let mut p = est_output_value(&b_sid, &out.item);
                 let have = p_ground.and_then(|g| g.get(&out.item)).copied().unwrap_or(0)
                     + p_st.and_then(|s| s.get(&out.item)).copied().unwrap_or(0);
-                out_stock_ratio += (have as f64 / (out.qty.max(1) as f64 * 25.0)).clamp(0.0, 2.0);
+                let sat_thresh = out.qty.max(1) as f64 * 25.0;
+                if Some(out.item.as_str()) == catalog.fuel_item.as_deref() {
+                    if company_fuel < 16 {
+                        p *= 4.0 + (16 - company_fuel) as f64 * 0.25;
+                    } else if company_fuel < 28 {
+                        p *= 1.0 + (28 - company_fuel) as f64 * 0.08;
+                    }
+                } else if !catalog.is_instant_item(&out.item)
+                    && company_fuel < 8
+                    && have >= out.qty.max(1) * 8
+                {
+                    // Non-instant ground output cannot leave the planet without fuel
+                    p *= 0.15;
+                } else if (have as f64) > sat_thresh {
+                    p *= (sat_thresh / have as f64).clamp(0.15, 1.0);
+                }
+                out_val += out.qty as f64 * bld.efficiency * p;
+                let stock_contrib =
+                    if Some(out.item.as_str()) == catalog.fuel_item.as_deref() && company_fuel < 18 {
+                        0.0
+                    } else {
+                        (have as f64 / sat_thresh).clamp(0.0, 4.0)
+                    };
+                out_stock_ratio += stock_contrib;
             }
             let margin = ((out_val - in_cost) / in_cost.max(1.0)).clamp(-1.0, 3.0);
             let out_stock = out_stock_ratio / r.outputs.len().max(1) as f64;
-            let score = dot(&genome.prod_w, &[margin, min_cov, out_stock, scale_cash, 1.0]);
+            let mut score = dot(&genome.prod_w, &[margin, min_cov, out_stock, scale_cash, 1.0]);
+            if missing_inputs > 0 {
+                score -= 4.0 * (missing_inputs as f64);
+            }
             if score > best_score {
                 best_score = score;
                 best_rid = Some(rid.as_str());
@@ -336,17 +397,22 @@ pub fn decide_npc_intents(
 
     let mut active_orders_left =
         MAX_ACTIVE_ORDERS_PER_COMPANY.saturating_sub(snap.company.open_orders.len());
+    // Reserve intents for Logistics, Expansion, and Bank heads so shipping never starves.
+    let market_intent_cap = MAX_INTENTS_PER_TICK.saturating_sub(6);
 
-    // Cancel stale orders or unneeded Buy orders so escrowed cash is never deadlocked
+    // Cancel stale orders or unneeded Buy orders so escrowed cash & slots are never deadlocked
     for o in &snap.company.open_orders {
-        if intents.len() >= MAX_INTENTS_PER_TICK {
+        if intents.len() >= market_intent_cap {
             break;
         }
         let age = snap.tick.saturating_sub(o.created_tick);
         let is_unneeded_buy = o.side == OrderSide::Buy
             && !needed_items.contains_key(&o.item_id)
             && age >= 12;
-        if (o.side == OrderSide::Buy && age >= 24) || is_unneeded_buy {
+        if (o.side == OrderSide::Buy && age >= 24)
+            || (o.side == OrderSide::Sell && age >= 36)
+            || is_unneeded_buy
+        {
             intents.push(Intent::CancelOrder {
                 order_id: o.order_id,
             });
@@ -358,7 +424,7 @@ pub fn decide_npc_intents(
     let mut item_ids: Vec<&String> = catalog.items.keys().collect();
     item_ids.sort();
 
-    // Total company stock per item (for buy deficit check)
+    // Total usable company stock per item (instant inputs must sit on ground)
     let total_owned_item = |item_id: &str| -> u32 {
         let g = snap
             .planets
@@ -366,6 +432,9 @@ pub fn decide_npc_intents(
             .and_then(|p| p.ground_store.get(item_id))
             .copied()
             .unwrap_or(0);
+        if catalog.is_instant_item(item_id) {
+            return g;
+        }
         let st_h = snap
             .company
             .station_stores
@@ -383,6 +452,7 @@ pub fn decide_npc_intents(
         g + st_h + st_hub
     };
 
+    let mut desired_orders: Vec<(&str, &String, OrderSide, u32, f64)> = Vec::new();
     for sid in watched_stations {
         let Some(station_quotes) = snap.quotes.get(sid) else {
             continue;
@@ -394,18 +464,12 @@ pub fn decide_npc_intents(
             .map(|p| &p.ground_store);
 
         for item_id in &item_ids {
-            if intents.len() >= MAX_INTENTS_PER_TICK || active_orders_left == 0 {
-                break;
-            }
             let Some(q) = station_quotes.get(*item_id) else {
                 continue;
             };
-            let is_instant = catalog
-                .items
-                .get(*item_id)
-                .map(|i| i.has_tag("instant"))
-                .unwrap_or(false);
+            let is_instant = catalog.is_instant_item(*item_id);
             let last_p = from_money(q.last_price).max(0.01);
+            let ref_p = ref_item_price(item_id);
             let fast_dev = ((last_p - from_money(q.ema_fast)) / last_p).clamp(-0.5, 0.5);
             let slow_dev = ((last_p - from_money(q.ema_slow)) / last_p).clamp(-0.5, 0.5);
             let spread = match (q.best_bid, q.best_ask) {
@@ -421,11 +485,20 @@ pub fn decide_npc_intents(
             };
             let total_avail = raw_st_qty + raw_g_qty;
             let self_keep = if sid == home_sid {
-                needed_items.get(*item_id).copied().unwrap_or(0)
+                let k = needed_items.get(*item_id).copied().unwrap_or(0);
+                if Some((*item_id).as_str()) == fuel_item {
+                    k.max(12)
+                } else {
+                    k
+                }
             } else {
                 0
             };
-            let sellable_qty = total_avail.saturating_sub(self_keep / 2);
+            let sellable_qty = total_avail.saturating_sub(if Some((*item_id).as_str()) == fuel_item {
+                self_keep.max(6)
+            } else {
+                self_keep / 2
+            });
             let inv_ratio = (sellable_qty as f64 / 20.0).clamp(0.0, 2.0);
 
             let feats = [spread, fast_dev, slow_dev, inv_ratio, scale_cash, 1.0];
@@ -435,7 +508,45 @@ pub fn decide_npc_intents(
                 (dot(&genome.price_off_w, &[fast_dev, spread, inv_ratio, 1.0]).tanh()) * 0.25;
 
             let need_target = needed_items.get(*item_id).copied().unwrap_or(0);
-            let deficit = need_target.saturating_sub(total_owned_item(item_id));
+            let owned_for_buy = if Some((*item_id).as_str()) == fuel_item {
+                let g_fuel = snap
+                    .planets
+                    .get(home_pid)
+                    .and_then(|p| p.ground_store.get(*item_id))
+                    .copied()
+                    .unwrap_or(0);
+                let ship_stranded_at_home_st = sid == home_sid
+                    && snap
+                        .company
+                        .ships
+                        .iter()
+                        .any(|s| !s.is_busy && s.location == home_sid)
+                    && raw_st_qty < 4;
+                if ship_stranded_at_home_st {
+                    raw_st_qty
+                } else if g_fuel < 12 && sid == home_sid {
+                    // Don't let orbital fuel prevent buying fuel when ground is running low
+                    g_fuel
+                } else {
+                    total_owned_item(item_id)
+                }
+            } else {
+                total_owned_item(item_id)
+            };
+            let need_target = if Some((*item_id).as_str()) == fuel_item
+                && sid == home_sid
+                && snap
+                    .company
+                    .ships
+                    .iter()
+                    .any(|s| !s.is_busy && s.location == home_sid)
+                && raw_st_qty < 4
+            {
+                need_target.max(6)
+            } else {
+                need_target
+            };
+            let deficit = need_target.saturating_sub(owned_for_buy);
             let want_local_buy = sid == home_sid && deficit > 0;
             let want_hub_buy = sid == "ST:HUB"
                 && deficit > 0
@@ -452,12 +563,13 @@ pub fn decide_npc_intents(
             let (want_side, qty, target_price_f) = if sellable_qty > 0
                 && (s_score > 0.15 || produced_items.contains(*item_id) || raw_st_qty >= 8)
             {
-                let base_ask = (last_p * (1.0 + off)).max(0.02);
+                let anchor_p = last_p.min(ref_p * 6.0).max(ref_p * 0.5);
+                let base_ask = (anchor_p * (1.0 + off)).max(0.02);
                 let ask_p = if let Some(bb) = q.best_bid {
                     let bb_f = from_money(bb);
-                    if bb_f >= last_p * 0.65 {
-                        // Cross resting Buy orders (including PLANET:* consumption bids!)
-                        bb_f.min(base_ask.max(bb_f))
+                    if bb_f >= last_p * 0.65 || bb_f >= ref_p * 0.65 {
+                        // Cross resting Buy orders (including PLANET:* consumption bids)
+                        bb_f
                     } else {
                         base_ask
                     }
@@ -469,14 +581,14 @@ pub fn decide_npc_intents(
                 (Some(OrderSide::Sell), q_sell, ask_p.max(0.02))
             } else if (want_local_buy || want_hub_buy)
                 && b_score > -0.60
-                && cash_f > last_p * 1.5
+                && cash_f > ref_p.min(last_p) * 1.5
             {
                 let bid_p = if let Some(ba) = q.best_ask {
                     let ba_f = from_money(ba);
-                    if ba_f <= last_p * 3.0 {
+                    if ba_f <= last_p.max(ref_p) * 3.0 {
                         (ba_f * 1.01).max(0.02)
                     } else {
-                        (last_p * 1.15).max(0.02)
+                        (last_p.min(ref_p * 2.0) * 1.15).max(0.02)
                     }
                 } else {
                     let comp_bid = q.best_bid.map(from_money).unwrap_or(last_p);
@@ -496,36 +608,50 @@ pub fn decide_npc_intents(
             };
 
             if let Some(side) = want_side {
-                let target_price = to_money(target_price_f);
-                let existing = own_orders_by_key.get(&(sid.to_string(), (*item_id).clone()));
-                let mut skip_create = false;
-                if let Some(olist) = existing {
-                    for o in olist {
-                        let price_diff = ((from_money(o.price) - target_price_f).abs()
-                            / target_price_f.max(0.01))
-                            > 0.08;
-                        if o.side != side || price_diff {
-                            if intents.len() < MAX_INTENTS_PER_TICK {
-                                intents.push(Intent::CancelOrder {
-                                    order_id: o.order_id,
-                                });
-                            }
-                        } else {
-                            skip_create = true;
-                        }
+                desired_orders.push((sid, *item_id, side, qty, target_price_f));
+            }
+        }
+    }
+
+    // Prioritize Sell orders before Buy orders so inventory liquidation is never starved.
+    desired_orders.sort_by_key(|d| match d.2 {
+        OrderSide::Sell => 0u8,
+        OrderSide::Buy => 1u8,
+    });
+
+    for (sid, item_id, side, qty, target_price_f) in desired_orders {
+        if intents.len() >= market_intent_cap {
+            break;
+        }
+        let target_price = to_money(target_price_f);
+        let existing = own_orders_by_key.get(&(sid.to_string(), item_id.clone()));
+        let mut skip_create = false;
+        if let Some(olist) = existing {
+            for o in olist {
+                let price_diff = ((from_money(o.price) - target_price_f).abs()
+                    / target_price_f.max(0.01))
+                    > 0.08;
+                if o.side != side || price_diff {
+                    if intents.len() < market_intent_cap {
+                        intents.push(Intent::CancelOrder {
+                            order_id: o.order_id,
+                        });
+                        active_orders_left += 1;
                     }
-                }
-                if !skip_create && intents.len() < MAX_INTENTS_PER_TICK && active_orders_left > 0 {
-                    intents.push(Intent::CreateOrder {
-                        station_id: sid.to_string(),
-                        side,
-                        item_id: (*item_id).clone(),
-                        qty,
-                        price: target_price,
-                    });
-                    active_orders_left -= 1;
+                } else {
+                    skip_create = true;
                 }
             }
+        }
+        if !skip_create && intents.len() < market_intent_cap && active_orders_left > 0 {
+            intents.push(Intent::CreateOrder {
+                station_id: sid.to_string(),
+                side,
+                item_id: item_id.clone(),
+                qty,
+                price: target_price,
+            });
+            active_orders_left -= 1;
         }
     }
 
@@ -603,11 +729,11 @@ pub fn decide_npc_intents(
             let mut pack: Vec<(String, u32)> = Vec::new();
             let mut total_score = 0.0;
 
-            // Reserve return fuel in cargo when flying from planet ground up to an orbital station
-            // so the ship is never permanently marooned in orbit.
+            // Reserve return fuel in cargo when flying up to orbit, to ST:HUB, OR down to fuel-poor ground
+            // so ships never get marooned at any node.
             let mut reserved_return_fuel = 0u32;
-            if !loc_is_st && dst_is_st {
-                if let Some(fit) = fuel_item {
+            if let Some(fit) = fuel_item {
+                if !loc_is_st && dst_is_st {
                     let dst_fuel = snap
                         .company
                         .station_stores
@@ -615,11 +741,57 @@ pub fn decide_npc_intents(
                         .and_then(|m| m.get(fit))
                         .copied()
                         .unwrap_or(0);
-                    let target_ret = (fuel_req * 2).min(6);
+                    let target_ret = (fuel_req * 3).max(4).min(8);
                     if dst_fuel < target_ret && fuel_have > fuel_req {
                         let spare = (target_ret - dst_fuel)
                             .min(fuel_have - fuel_req)
-                            .min(rem_cap / 4);
+                            .min(rem_cap / 2);
+                        if spare > 0 {
+                            reserved_return_fuel = spare;
+                            rem_cap -= spare;
+                            pack.push((fit.to_string(), spare));
+                        }
+                    }
+                } else if loc_is_st && dest == "ST:HUB" {
+                    let ret_fuel = snap
+                        .route_cost("ST:HUB", &home_sid)
+                        .map(|r| r.1)
+                        .unwrap_or(fuel_req);
+                    let hub_fuel = snap
+                        .company
+                        .station_stores
+                        .get("ST:HUB")
+                        .and_then(|m| m.get(fit))
+                        .copied()
+                        .unwrap_or(0);
+                    if hub_fuel < ret_fuel {
+                        let need_ret = ret_fuel - hub_fuel;
+                        if fuel_have < fuel_req + need_ret {
+                            // Do not strand ship at ST:HUB without fuel to return home
+                            continue;
+                        }
+                        let spare = need_ret.min(rem_cap / 2);
+                        if spare > 0 {
+                            reserved_return_fuel = spare;
+                            rem_cap -= spare;
+                            pack.push((fit.to_string(), spare));
+                        }
+                    }
+                } else if loc_is_st && dest == home_pid {
+                    let home_g_fuel = snap
+                        .planets
+                        .get(home_pid)
+                        .and_then(|p| p.ground_store.get(fit))
+                        .copied()
+                        .unwrap_or(0);
+                    if home_g_fuel < 2 && fuel_have < fuel_req + 3 {
+                        // Stay at orbital station to receive purchased fuel rather than stranding on empty ground
+                        continue;
+                    }
+                    if home_g_fuel < 10 && fuel_have > fuel_req {
+                        let spare = (10 - home_g_fuel)
+                            .min(fuel_have - fuel_req)
+                            .min(rem_cap / 2);
                         if spare > 0 {
                             reserved_return_fuel = spare;
                             rem_cap -= spare;
@@ -633,12 +805,7 @@ pub fn decide_npc_intents(
                 if have == 0 {
                     continue;
                 }
-                if catalog
-                    .items
-                    .get(item_id)
-                    .map(|i| i.has_tag("instant"))
-                    .unwrap_or(false)
-                {
+                if catalog.is_instant_item(item_id) {
                     continue;
                 }
                 let avail_take = if Some(item_id.as_str()) == fuel_item {
@@ -659,17 +826,17 @@ pub fn decide_npc_intents(
                 if dest == home_pid && is_needed_home {
                     price_diff = price_diff.max(1.2);
                 } else if !loc_is_st && dest == &home_sid {
-                    // Push surplus produced outputs (not needed as inputs) up to home station for sale
+                    // Push all surplus ground inventory (not needed as inputs) up to home station for sale
                     let keep_here = needed_items.get(item_id).copied().unwrap_or(0);
-                    if avail_take > keep_here && produced_items.contains(item_id) {
-                        price_diff = price_diff.max(0.85);
+                    if avail_take > keep_here {
+                        price_diff = price_diff.max(0.95);
                     }
                 } else if dest == "ST:HUB" && loc_is_st {
                     if is_needed_home {
                         // Don't export critical local factory inputs to Hub
                         continue;
                     }
-                    // Export unsold local surplus from home station to central Hub exchange
+                    // Export unsold local surplus or profitable arbitrage from home station to Hub
                     let local_bid_ok = snap
                         .quotes
                         .get(&home_sid)
@@ -677,8 +844,15 @@ pub fn decide_npc_intents(
                         .and_then(|q| q.best_bid)
                         .map(|bb| from_money(bb) >= p_src * 0.90)
                         .unwrap_or(false);
-                    if !local_bid_ok && avail_take >= 6 && produced_items.contains(item_id) {
-                        price_diff = price_diff.max(0.60);
+                    let hub_arb_ok = snap
+                        .quotes
+                        .get("ST:HUB")
+                        .and_then(|m| m.get(item_id))
+                        .and_then(|q| q.best_bid)
+                        .map(|hbb| from_money(hbb) >= p_src * 1.15)
+                        .unwrap_or(false);
+                    if (!local_bid_ok || hub_arb_ok) && avail_take >= 6 {
+                        price_diff = price_diff.max(0.65);
                     }
                 }
 
@@ -734,33 +908,61 @@ pub fn decide_npc_intents(
                     .unwrap_or(true)
             {
                 best_route = Some((dest.as_str(), total_score, pack));
-            } else if loc_is_st && dest == home_pid && pack.is_empty() {
-                // Return shuttle: if stranded idle in orbit with no import cargo while ground has exportable output,
-                // bring back 1 surplus fuel (above route_fuel) so the ship returns to home ground for the next load.
-                let ground_backlog: u32 = snap
-                    .planets
-                    .get(home_pid)
-                    .map(|p| {
-                        p.ground_store
-                            .iter()
-                            .filter(|&(ref it, &q)| {
-                                q > 0
-                                    && produced_items.contains(it.as_str())
-                                    && !catalog
-                                        .items
-                                        .get(it.as_str())
-                                        .map(|d| d.has_tag("instant"))
-                                        .unwrap_or(false)
+            } else if best_route.is_none() {
+                if let Some(fit) = fuel_item {
+                    let has_needed_at = |sid_key: &str| -> bool {
+                        snap.company
+                            .station_stores
+                            .get(sid_key)
+                            .map(|m| {
+                                m.iter().any(|(it, &q)| {
+                                    q > 0 && !catalog.is_instant_item(it) && needed_items.contains_key(it)
+                                })
                             })
-                            .map(|(_, &q)| q)
-                            .sum()
-                    })
-                    .unwrap_or(0);
-                if ground_backlog >= 4 {
-                    if let Some(fit) = fuel_item {
-                        if fuel_have >= fuel_req + 1 && best_route.is_none() {
-                            best_route = Some((dest.as_str(), 0.35, vec![(fit.to_string(), 1)]));
+                            .unwrap_or(false)
+                    };
+                    if loc_is_st && dest == home_pid {
+                        let ground_backlog: u32 = snap
+                            .planets
+                            .get(home_pid)
+                            .map(|p| {
+                                p.ground_store
+                                    .iter()
+                                    .filter(|&(ref it, &q)| {
+                                        let keep = needed_items.get(it.as_str()).copied().unwrap_or(0);
+                                        q > keep
+                                            && Some(it.as_str()) != fuel_item
+                                            && !catalog.is_instant_item(it.as_str())
+                                    })
+                                    .map(|(it, &q)| {
+                                        q - needed_items.get(it.as_str()).copied().unwrap_or(0)
+                                    })
+                                    .sum()
+                            })
+                            .unwrap_or(0);
+                        let home_g_fuel = snap
+                            .planets
+                            .get(home_pid)
+                            .and_then(|p| p.ground_store.get(fit))
+                            .copied()
+                            .unwrap_or(0);
+                        if (ground_backlog >= 2 || home_g_fuel < 8) && fuel_have >= fuel_req + 1 {
+                            let spare_fuel = if home_g_fuel < 8 && fuel_have >= fuel_req + 2 {
+                                (fuel_have - fuel_req - 1).min(8).min(ship.capacity)
+                            } else {
+                                1
+                            };
+                            best_route =
+                                Some((dest.as_str(), 0.35, vec![(fit.to_string(), spare_fuel)]));
                         }
+                    } else if (!loc_is_st && dest == &home_sid && (has_needed_at(&home_sid) || has_needed_at("ST:HUB")))
+                        || (ship.location == home_sid && dest == "ST:HUB" && has_needed_at("ST:HUB"))
+                    {
+                        if fuel_have >= fuel_req * 2 + 1 {
+                            best_route = Some((dest.as_str(), 0.30, vec![(fit.to_string(), 1)]));
+                        }
+                    } else if ship.location == "ST:HUB" && dest == &home_sid && fuel_have >= fuel_req + 1 {
+                        best_route = Some((dest.as_str(), 0.25, vec![(fit.to_string(), 1)]));
                     }
                 }
             }
@@ -796,32 +998,90 @@ pub fn decide_npc_intents(
             0.0
         };
         let exp_score = dot(&genome.expand_w, &[scale_cash, free_ratio, avg_margin, 1.0]);
-        if exp_score > 0.65 {
+        let bld_cnt = snap.company.buildings.len();
+        let min_exp_cash = (bld_cnt as f64 + 1.0) * 350.0 * snap.cpi;
+        if exp_score > 0.65 && avg_margin > 0.05 && cash_f > min_exp_cash && bld_cnt < 6 {
             if let Some(target_plot) = snap.company.plots.iter().find(|p| p.used_slots < p.capacity)
             {
                 let p_ground = snap
                     .planets
                     .get(&target_plot.planet_id)
                     .map(|p| &p.ground_store);
-                let owned_types: HashSet<&str> = snap
-                    .company
-                    .buildings
-                    .iter()
-                    .map(|b| b.building_type.as_str())
-                    .collect();
+                let mut type_counts: HashMap<&str, usize> = HashMap::new();
+                for b in &snap.company.buildings {
+                    *type_counts.entry(b.building_type.as_str()).or_insert(0) += 1;
+                }
+                let p_sid = format!("ST:{}", target_plot.planet_id);
+                let prof_bonuses = catalog
+                    .professions
+                    .get(&snap.company.profession)
+                    .map(|pr| &pr.efficiency_bonus);
                 let mut build_ids: Vec<&String> = catalog.buildings.keys().collect();
                 build_ids.sort();
-                if let Some(btype) = build_ids.into_iter().find(|bt| {
-                    let bdef = &catalog.buildings[*bt];
-                    let has_mats = bdef.build_cost.iter().all(|req| {
-                        p_ground
-                            .and_then(|g| g.get(&req.item))
-                            .copied()
-                            .unwrap_or(0)
-                            >= req.qty
-                    });
-                    has_mats && (!owned_types.contains(bt.as_str()) || cash_f > 400.0 * snap.cpi)
-                }) {
+                let best_btype = build_ids
+                    .into_iter()
+                    .filter(|bt| {
+                        let bdef = &catalog.buildings[*bt];
+                        let has_mats = bdef.build_cost.iter().all(|req| {
+                            p_ground
+                                .and_then(|g| g.get(&req.item))
+                                .copied()
+                                .unwrap_or(0)
+                                >= req.qty
+                        });
+                        let mod_val = target_plot.building_mods.get(*bt).copied().unwrap_or(1.0);
+                        let same_cnt = type_counts.get(bt.as_str()).copied().unwrap_or(0);
+                        mod_val > 0.0
+                            && has_mats
+                            && same_cnt < 2
+                            && (same_cnt == 0 || cash_f > 1200.0 * snap.cpi)
+                    })
+                    .filter_map(|bt| {
+                        let mod_val = target_plot.building_mods.get(bt).copied().unwrap_or(1.0);
+                        let prof_b = prof_bonuses.and_then(|m| m.get(bt)).copied().unwrap_or(1.0);
+                        let eff = mod_val * prof_b;
+                        let best_rec_score = catalog
+                            .recipes_by_building
+                            .get(bt)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|rid| catalog.recipes.get(rid))
+                            .map(|r| {
+                                let runnable = r.inputs.iter().all(|inp| {
+                                    p_ground.and_then(|g| g.get(&inp.item)).copied().unwrap_or(0)
+                                        >= inp.qty
+                                        || snap
+                                            .quotes
+                                            .get(&p_sid)
+                                            .and_then(|m| m.get(&inp.item))
+                                            .and_then(|q| q.best_ask)
+                                            .is_some()
+                                });
+                                let out_v: f64 = r
+                                    .outputs
+                                    .iter()
+                                    .map(|o| o.qty as f64 * eff * est_output_value(&p_sid, &o.item))
+                                    .sum();
+                                let in_v: f64 = r.labor_cost * snap.cpi
+                                    + r.power_cost as f64 * est_input_cost(&p_sid, "power")
+                                    + r.inputs
+                                        .iter()
+                                        .map(|i| i.qty as f64 * est_input_cost(&p_sid, &i.item))
+                                        .sum::<f64>();
+                                let m = (out_v - in_v) / in_v.max(1.0);
+                                if runnable { m } else { m - 5.0 }
+                            })
+                            .fold(f64::NEG_INFINITY, f64::max);
+                        if best_rec_score > -0.5 {
+                            Some((bt, best_rec_score + (prof_b - 1.0) * 2.0))
+                        } else {
+                            None
+                        }
+                    })
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(bt, _)| bt);
+
+                if let Some(btype) = best_btype {
                     intents.push(Intent::BuildFacility {
                         plot_id: target_plot.id,
                         building_type: btype.clone(),

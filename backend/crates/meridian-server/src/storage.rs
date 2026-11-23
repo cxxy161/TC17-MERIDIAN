@@ -41,6 +41,50 @@ pub struct TradeRow {
     pub seller_id: String,
 }
 
+/// 账号行（不含口令哈希，后者单独查询，避免顺手泄露）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRow {
+    pub id: i64,
+    pub email: String,
+    pub nickname: String,
+    pub role: String,
+    pub status: String,
+    pub company_id: String,
+    pub created_at: i64,
+    pub nickname_changed_at: Option<i64>,
+    pub last_login_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRow {
+    pub id: i64,
+    pub user_id: i64,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub last_seen_at: i64,
+    pub user_agent: String,
+}
+
+fn map_user(row: &rusqlite::Row<'_>) -> rusqlite::Result<UserRow> {
+    map_user_at(row, 0)
+}
+
+fn map_user_at(row: &rusqlite::Row<'_>, base: usize) -> rusqlite::Result<UserRow> {
+    Ok(UserRow {
+        id: row.get(base)?,
+        email: row.get(base + 1)?,
+        nickname: row.get(base + 2)?,
+        role: row.get(base + 3)?,
+        status: row.get(base + 4)?,
+        company_id: row.get(base + 5)?,
+        created_at: row.get(base + 6)?,
+        nickname_changed_at: row.get(base + 7)?,
+        last_login_at: row.get(base + 8)?,
+    })
+}
+
+const USER_COLUMNS: &str = "id, email, nickname, role, status, company_id, created_at, nickname_changed_at, last_login_at";
+
 pub struct SqliteStore {
     conn: Connection,
 }
@@ -127,6 +171,33 @@ impl SqliteStore {
             );
             CREATE INDEX IF NOT EXISTS idx_trade_history_lookup
                 ON trade_history (station_id, item_id, id DESC);
+
+            -- 账号与会话（见 docs/MULTIPLAYER_AUDIT.md 的鉴权缺口）
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                nickname TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                pwd_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'player',
+                status TEXT NOT NULL DEFAULT 'active',
+                company_id TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_login_at INTEGER,
+                nickname_changed_at INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL,
+                user_agent TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
             "#,
         )?;
         Ok(Self { conn })
@@ -618,6 +689,254 @@ impl SqliteStore {
         }
         Ok(vec)
     }
+    /* ---------------------------------------------------------- 账号 / 会话 */
+
+    pub fn count_users(&self) -> i64 {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+            .unwrap_or(0)
+    }
+
+    pub fn email_taken(&self, email: &str) -> bool {
+        self.conn
+            .query_row("SELECT 1 FROM users WHERE email = ?1", params![email], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    pub fn nickname_taken(&self, nickname: &str, except_user_id: Option<i64>) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM users WHERE nickname = ?1 AND id != ?2",
+                params![nickname, except_user_id.unwrap_or(-1)],
+                |_| Ok(()),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    pub fn create_user(
+        &self,
+        email: &str,
+        nickname: &str,
+        pwd_hash: &str,
+        salt: &str,
+        role: &str,
+        company_id: &str,
+        now: i64,
+    ) -> Result<i64, String> {
+        self.conn
+            .execute(
+                "INSERT INTO users (email, nickname, pwd_hash, salt, role, status, company_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?7)",
+                params![email, nickname, pwd_hash, salt, role, company_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 返回 (用户, salt, pwd_hash)
+    pub fn user_by_email(&self, email: &str) -> Option<(UserRow, String, String)> {
+        self.conn
+            .query_row(
+                &format!("SELECT {USER_COLUMNS}, salt, pwd_hash FROM users WHERE email = ?1"),
+                params![email],
+                |row| {
+                    let user = map_user(row)?;
+                    let salt: String = row.get(9)?;
+                    let hash: String = row.get(10)?;
+                    Ok((user, salt, hash))
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn user_by_id(&self, id: i64) -> Option<UserRow> {
+        self.conn
+            .query_row(
+                &format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1"),
+                params![id],
+                |row| map_user(row),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn user_by_company(&self, company_id: &str) -> Option<UserRow> {
+        self.conn
+            .query_row(
+                &format!("SELECT {USER_COLUMNS} FROM users WHERE company_id = ?1"),
+                params![company_id],
+                |row| map_user(row),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn set_user_company(&self, user_id: i64, company_id: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET company_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![company_id, unix_secs(), user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn update_nickname(&self, user_id: i64, nickname: &str, now: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET nickname = ?1, nickname_changed_at = ?2, updated_at = ?2 WHERE id = ?3",
+                params![nickname, now, user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn update_password(&self, user_id: i64, pwd_hash: &str, salt: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET pwd_hash = ?1, salt = ?2, updated_at = ?3 WHERE id = ?4",
+                params![pwd_hash, salt, unix_secs(), user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_last_login(&self, user_id: i64, now: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET last_login_at = ?1 WHERE id = ?2",
+                params![now, user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn create_session(
+        &self,
+        user_id: i64,
+        token_hash: &str,
+        created_at: i64,
+        expires_at: i64,
+        user_agent: &str,
+    ) -> Result<i64, String> {
+        self.conn
+            .execute(
+                "INSERT INTO sessions (user_id, token_hash, created_at, expires_at, last_seen_at, user_agent)
+                 VALUES (?1, ?2, ?3, ?4, ?3, ?5)",
+                params![user_id, token_hash, created_at, expires_at, user_agent],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn session_by_token_hash(&self, token_hash: &str) -> Option<(SessionRow, UserRow)> {
+        self.conn
+            .query_row(
+                "SELECT s.id, s.user_id, s.created_at, s.expires_at, s.last_seen_at, s.user_agent,
+                        u.id, u.email, u.nickname, u.role, u.status, u.company_id,
+                        u.created_at, u.nickname_changed_at, u.last_login_at
+                 FROM sessions s JOIN users u ON u.id = s.user_id
+                 WHERE s.token_hash = ?1",
+                params![token_hash],
+                |row| {
+                    let session = SessionRow {
+                        id: row.get(0)?,
+                        user_id: row.get(1)?,
+                        created_at: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        last_seen_at: row.get(4)?,
+                        user_agent: row.get(5)?,
+                    };
+                    Ok((session, map_user_at(row, 6)?))
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn touch_session(&self, session_id: i64, now: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE sessions SET last_seen_at = ?1 WHERE id = ?2",
+                params![now, session_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_session(&self, session_id: i64) -> Result<(), String> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_session_by_token_hash(&self, token_hash: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE token_hash = ?1",
+                params![token_hash],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn delete_other_sessions(&self, user_id: i64, keep_session_id: i64) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "DELETE FROM sessions WHERE user_id = ?1 AND id != ?2",
+                params![user_id, keep_session_id],
+            )
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn delete_all_sessions(&self, user_id: i64) -> Result<usize, String> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn list_sessions(&self, user_id: i64) -> Vec<SessionRow> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT id, user_id, created_at, expires_at, last_seen_at, user_agent
+             FROM sessions WHERE user_id = ?1 ORDER BY last_seen_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![user_id], |row| {
+            Ok(SessionRow {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                created_at: row.get(2)?,
+                expires_at: row.get(3)?,
+                last_seen_at: row.get(4)?,
+                user_agent: row.get(5)?,
+            })
+        });
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn purge_expired_sessions(&self, now: i64) -> Result<usize, String> {
+        self.conn
+            .execute("DELETE FROM sessions WHERE expires_at <= ?1", params![now])
+            .map_err(|e| e.to_string())
+    }
+
 }
 
 #[cfg(test)]

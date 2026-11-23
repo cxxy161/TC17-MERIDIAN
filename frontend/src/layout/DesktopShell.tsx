@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
+import { useSessionStore } from '../store/useSessionStore';
 import { moneyToCredits } from '../types/meridian';
 import {
   focusDefaults,
@@ -127,6 +128,10 @@ export const DesktopShell: React.FC = () => {
   const touchFocus = useGameStore((s) => s.touchFocus);
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
+  // 玩家 chip 的数据源是会话 store：设置页改昵称后这里立即跟着变
+  const sessionUser = useSessionStore((s) => s.user);
+  const playerName = sessionUser?.nickname ?? '本地预览';
+  const playerInitial = Array.from(playerName)[0] ?? '?';
 
   const initialWs = useRef(loadSavedWorkspaces());
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialWs.current.list);
@@ -208,8 +213,15 @@ export const DesktopShell: React.FC = () => {
         worldRef.current,
         catalogRef.current,
       );
-      const width = kind === 'script' ? 680 : kind === 'chart' || kind === 'orbit' ? 520 : 460;
-      const height = kind === 'script' ? 460 : 380;
+      const width =
+        kind === 'script'
+          ? 680
+          : kind === 'settings'
+            ? 600
+            : kind === 'chart' || kind === 'orbit'
+              ? 520
+              : 460;
+      const height = kind === 'script' || kind === 'settings' ? 460 : 380;
 
       setFloatingWindows((prev) => {
         const next = [
@@ -424,6 +436,24 @@ export const DesktopShell: React.FC = () => {
             </button>
             <button onClick={() => setPaletteOpen(true)} className="cta-blue whitespace-nowrap">
               ⌘K 搜索
+            </button>
+
+            {/* 玩家 chip：点击打开个人设置面板（不做下拉菜单） */}
+            <button
+              onClick={() => openTemp('settings')}
+              title="个人设置"
+              className="ml-1 flex items-center gap-1.5 border-l border-slate-800 pl-2 pr-0.5 text-[11px] text-slate-300 transition-colors hover:text-sky-200"
+            >
+              <span className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sky-400/45 bg-sky-500/15 font-mono text-[10px] uppercase leading-none text-sky-200">
+                {playerInitial}
+                <span
+                  className={`absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[#1f2630] ${
+                    wsStatus === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
+                  }`}
+                  title={wsStatus === 'connected' ? '在线' : '同步中'}
+                />
+              </span>
+              <span className="max-w-[84px] truncate">{playerName}</span>
             </button>
           </div>
         </div>

@@ -18,7 +18,8 @@ export type PaneKind =
   | 'files'
   | 'script'
   | 'memory'
-  | 'console';
+  | 'console'
+  | 'settings';
 
 export interface PaneParams {
   planetId?: string;
@@ -66,7 +67,7 @@ export interface PaneMeta {
   label: string;
   description: string;
   /** Grouping for the command palette / empty-tile picker. */
-  group: '观察' | '生产' | '贸易' | '财务' | '开发';
+  group: '观察' | '生产' | '贸易' | '财务' | '开发' | '系统';
   keywords?: string;
 }
 
@@ -88,6 +89,7 @@ export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'script', label: '脚本编辑器', description: 'Screeps 风格多模块 JS 策略 IDE 与热重载', group: '开发' },
   { kind: 'memory', label: 'Memory 内存', description: '查看、搜索与编辑 128KB 持久化 JSON', group: '开发' },
   { kind: 'console', label: '控制台', description: 'F12 交互式 JS 命令行与沙盒实时日志流', group: '开发' },
+  { kind: 'settings', label: '个人设置', description: '账号信息、昵称密码与登录会话管理', group: '系统', keywords: '设置 账号 昵称 密码 会话 登出 关于' },
 ];
 
 export const PANE_META_BY_KIND: Record<PaneKind, PaneMeta> = PANE_CATALOG.reduce(
@@ -154,6 +156,8 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
       return 'Memory 内存';
     case 'console':
       return '控制台';
+    case 'settings':
+      return '设置';
     default:
       return kind;
   }

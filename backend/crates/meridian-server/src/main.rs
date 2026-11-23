@@ -65,10 +65,16 @@ async fn main() {
                         if let Err(e) = eng.step_once() {
                             error!("tick loop error: {e}");
                         }
+                        eng.tick_ms
+                    } else {
+                        eng.tick_ms.max(50)
                     }
-                    eng.tick_ms.max(50)
                 };
-                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                if wait_ms == 0 {
+                    tokio::task::yield_now().await;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                }
             }
         });
     }

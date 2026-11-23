@@ -8,7 +8,8 @@ import type {
 } from '../types/meridian';
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  // 会话是 HttpOnly Cookie，所有请求都要带上，否则后端只能看到匿名请求
+  const res = await fetch(url, { credentials: 'same-origin', ...init });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${text || res.statusText}`);
@@ -16,12 +17,176 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** 带状态码与响应体上抛的错误，供登录/注册表单做字段级提示 */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly payload: unknown;
+
+  constructor(status: number, payload: unknown, message?: string) {
+    super(message ?? `HTTP ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    credentials: 'same-origin',
+    ...init,
+  });
+  const text = await res.text();
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as unknown;
+    } catch {
+      payload = text;
+    }
+  }
+  if (!res.ok) throw new ApiError(res.status, payload);
+  return payload as T;
+}
+
+export interface SessionUser {
+  company_id: string;
+  nickname: string;
+  email: string;
+  role: string;
+}
+
+export interface AccountSession {
+  /** 后端为 i64，跨语言保持宽松：调用方不要假设它是字符串 */
+  id: string | number;
+  created_at: string | number;
+  last_seen_at: string | number;
+  current: boolean;
+  user_agent: string;
+}
+
+export interface AccountInfo {
+  email: string;
+  nickname: string;
+  role: string;
+  company_id: string;
+  created_at: string | number;
+  nickname_changed_at: string | number | null;
+  sessions: AccountSession[];
+}
+
+/**
+ * 401 兜底：会话过期/被吊销时，任何走 accountApi 的请求都会在这里通知上层把全局会话
+ * 切回 anon，SessionGate 随之下线回到登录页。注册由 useSessionStore 完成 —— client 不反向
+ * import store（避免循环依赖）。
+ */
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
+}
+
+/** 已登录态下的账号请求：401 统一触发会话失效处理后再上抛，供调用方决定是否提示。 */
+async function accountRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  try {
+    return await jsonRequest<T>(url, init);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) unauthorizedHandler?.();
+    throw err;
+  }
+}
+
+/**
+ * 当前登录玩家。后端会话层落地后，所有玩家态请求都应以它为唯一身份来源，
+ * 不再接受前端传入的 company_id（那是历史硬编码，见 docs/MULTIPLAYER_AUDIT.md）。
+ */
+let currentCompanyId = 'player1';
+
+export function setCurrentCompany(id: string): void {
+  currentCompanyId = id;
+}
+
+export function getCurrentCompany(): string {
+  return currentCompanyId;
+}
+
+export const authApi = {
+  me(): Promise<SessionUser> {
+    return jsonRequest<SessionUser>('/api/auth/me');
+  },
+
+  login(body: { email: string; password: string; remember?: boolean }): Promise<SessionUser> {
+    return jsonRequest<SessionUser>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
+  register(body: {
+    email: string;
+    nickname: string;
+    password: string;
+    turnstile_token?: string;
+  }): Promise<SessionUser> {
+    return jsonRequest<SessionUser>('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
+  logout(): Promise<{ ok: boolean }> {
+    return jsonRequest<{ ok: boolean }>('/api/auth/logout', { method: 'POST' });
+  },
+};
+
+/**
+ * 个人设置页用的账号接口。除 me() 外都走 accountRequest：401 会先把会话置为失效，
+ * 否则设置页会停在一个已过期会话上继续报错。
+ */
+export const accountApi = {
+  /** me() 是会话探测，401 属于正常分支（未登录），不触发失效处理，避免与 bootstrap 重复登出。 */
+  me(): Promise<SessionUser> {
+    return jsonRequest<SessionUser>('/api/auth/me');
+  },
+
+  get(): Promise<AccountInfo> {
+    return accountRequest<AccountInfo>('/api/account');
+  },
+
+  updateNickname(nickname: string): Promise<{ ok: boolean; nickname: string }> {
+    return accountRequest<{ ok: boolean; nickname: string }>('/api/account', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname }),
+    });
+  },
+
+  changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean }> {
+    return accountRequest<{ ok: boolean }>('/api/account/password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  },
+
+  revokeSessions(
+    target: { session_id: string | number } | { all: true },
+  ): Promise<{ ok: boolean }> {
+    return accountRequest<{ ok: boolean }>('/api/account/sessions/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(target),
+    });
+  },
+};
+
 export const api = {
   getCatalog(): Promise<ProductionPack> {
     return jsonFetch('/api/catalog');
   },
 
-  getState(companyId = 'player1'): Promise<StateResponse> {
+  getState(companyId = currentCompanyId): Promise<StateResponse> {
     return jsonFetch(`/api/state?company_id=${encodeURIComponent(companyId)}`);
   },
 
@@ -50,7 +215,7 @@ export const api = {
     return jsonFetch(`/api/market/candles?${qs.toString()}`);
   },
 
-  getScripts(companyId = 'player1'): Promise<ScriptsResp> {
+  getScripts(companyId = currentCompanyId): Promise<ScriptsResp> {
     return jsonFetch(`/api/scripts/${encodeURIComponent(companyId)}`);
   },
 

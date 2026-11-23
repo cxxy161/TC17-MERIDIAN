@@ -156,6 +156,8 @@ pub struct GameEngine {
     pub tick_ms: u64,
     next_npc_seq: u64,
     pub events_tx: broadcast::Sender<TickBroadcast>,
+    /// 注册/登录限流器（内存态，进程内单例）
+    pub auth: crate::auth::AuthLimiter,
 }
 
 impl GameEngine {
@@ -196,8 +198,14 @@ impl GameEngine {
                 }
             }
 
-            let next_npc_seq = restored_world.companies.len() as u64 + 100;
-            return Ok(Self {
+            let max_existing_seq = restored_world
+                .companies
+                .keys()
+                .filter_map(|id| id.strip_prefix("npc_evo_")?.parse::<u64>().ok())
+                .max()
+                .unwrap_or(99);
+            let next_npc_seq = (max_existing_seq + 1).max(100);
+            let mut engine = Self {
                 world: restored_world,
                 runner,
                 store,
@@ -206,7 +214,17 @@ impl GameEngine {
                 tick_ms,
                 next_npc_seq,
                 events_tx,
-            });
+                auth: crate::auth::AuthLimiter::default(),
+            };
+            // Heal cohort back to 12 balanced NPCs if an older DB lost slots on restart
+            while engine.world.companies.values().filter(|c| !c.is_player).count() < 12 {
+                let before = engine.world.companies.len();
+                engine.respawn_evolved_npc();
+                if engine.world.companies.len() == before {
+                    break;
+                }
+            }
+            return Ok(engine);
         }
 
         let mut world = World::new_standard(catalog);
@@ -222,6 +240,7 @@ impl GameEngine {
             tick_ms,
             next_npc_seq: 100,
             events_tx,
+            auth: crate::auth::AuthLimiter::default(),
         })
     }
 
@@ -262,6 +281,35 @@ impl GameEngine {
             runner.register_npc(cid, genome);
         }
 
+        Ok(())
+    }
+
+    /// 公司是否还没有归属账号（用于「首个注册者接管 player1」）。
+    pub fn company_is_unclaimed(&self, company_id: &str) -> bool {
+        self.store.user_by_company(company_id).is_none()
+    }
+
+    /// 为新注册账号准备公司：已有公司（如 player1）只补齐 VM/存档，否则新建。
+    pub fn provision_player_company(
+        &mut self,
+        company_id: &str,
+        nickname: &str,
+    ) -> Result<(), String> {
+        if self.world.companies.contains_key(company_id) {
+            if !self.runner.players.contains_key(company_id) {
+                let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
+                self.store.save_player_bundle(company_id, &bundle)?;
+                self.store.save_player_memory(company_id, "{}", true)?;
+                self.runner.set_player_script(company_id, bundle);
+            }
+            return Ok(());
+        }
+        self.world
+            .spawn_company(company_id, nickname, true, "mining_ind", "P1", 10_000.0)?;
+        let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
+        self.store.save_player_bundle(company_id, &bundle)?;
+        self.store.save_player_memory(company_id, "{}", true)?;
+        self.runner.set_player_script(company_id, bundle);
         Ok(())
     }
 
@@ -311,21 +359,41 @@ impl GameEngine {
             .collect();
         ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let seq = self.next_npc_seq;
-        self.next_npc_seq += 1;
+        let mut seq = self.next_npc_seq;
+        while self.world.companies.contains_key(&format!("npc_evo_{seq}")) {
+            seq += 1;
+        }
+        self.next_npc_seq = seq + 1;
 
-        let profs = ["env_recycle", "agri_bio", "mining_ind"];
-        let prof = ranked
-            .get((seq as usize) % ranked.len().max(1))
-            .map(|r| r.2.as_str())
-            .unwrap_or(profs[(seq as usize) % profs.len()]);
-        let planet = if prof == "agri_bio" || prof == "env_recycle" {
-            "P2"
-        } else if seq % 2 == 0 {
-            "P1"
-        } else {
-            "P3"
-        };
+        // Preserve ecosystem profession & planet niche diversity while still evolving genomes
+        // from top surviving NPCs.
+        let target_niches: [(&str, &str, usize); 7] = [
+            ("env_recycle", "P2", 3),
+            ("env_recycle", "P3", 1),
+            ("agri_bio", "P2", 3),
+            ("agri_bio", "P3", 1),
+            ("mining_ind", "P1", 2),
+            ("mining_ind", "P3", 1),
+            ("mining_ind", "P2", 1),
+        ];
+        let mut best_idx = (seq as usize) % target_niches.len();
+        let mut best_deficit: i32 = i32::MIN;
+        for off in 0..target_niches.len() {
+            let i = ((seq as usize) + off) % target_niches.len();
+            let (p, pl, want) = target_niches[i];
+            let have = self
+                .world
+                .companies
+                .values()
+                .filter(|c| !c.is_player && c.profession == p && c.home_planet_id == pl)
+                .count() as i32;
+            let deficit = want as i32 - have;
+            if deficit > best_deficit {
+                best_deficit = deficit;
+                best_idx = i;
+            }
+        }
+        let (prof, planet, _) = target_niches[best_idx];
 
         let new_cid = format!("npc_evo_{seq}");
         if self

@@ -332,4 +332,12 @@ impl ProductionCatalog {
             waste_item,
         })
     }
+
+    /// Items delivered instantaneously from planetary ground inventory (power & waste disposal certs).
+    pub fn is_instant_item(&self, item_id: &str) -> bool {
+        self.items
+            .get(item_id)
+            .map(|it| it.has_tag("power") || it.has_tag("waste_service"))
+            .unwrap_or(false)
+    }
 }

@@ -20,6 +20,7 @@ import { ScriptIdePanel } from '../panels/ScriptIdePanel';
 import { ConsolePanel } from '../panels/ConsolePanel';
 import { FileExplorerPanel } from '../panels/FileExplorerPanel';
 import { MemoryPanel } from '../panels/MemoryPanel';
+import { SettingsPanel } from '../panels/SettingsPanel';
 
 const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   orbit: OrbitPanel,
@@ -39,6 +40,7 @@ const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   script: ScriptIdePanel,
   memory: MemoryPanel,
   console: ConsolePanel,
+  settings: SettingsPanel,
 };
 
 export const PaneRenderer: React.FC<{

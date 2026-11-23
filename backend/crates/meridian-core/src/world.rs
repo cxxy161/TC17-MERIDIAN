@@ -272,11 +272,7 @@ impl World {
     }
 
     pub fn is_instant_item(&self, item_id: &str) -> bool {
-        self.catalog
-            .items
-            .get(item_id)
-            .map(|it| it.has_tag("power") || it.has_tag("waste_service"))
-            .unwrap_or(false)
+        self.catalog.is_instant_item(item_id)
     }
 
     pub fn total_currency_in_system(&self) -> i128 {

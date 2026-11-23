@@ -1,4 +1,5 @@
 import React from 'react';
+import { SessionGate } from './auth/SessionGate';
 import { DesktopShell } from './layout/DesktopShell';
 
 interface BoundaryState {
@@ -41,7 +42,9 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Bound
 export const App: React.FC = () => {
   return (
     <ErrorBoundary>
-      <DesktopShell />
+      <SessionGate>
+        <DesktopShell />
+      </SessionGate>
     </ErrorBoundary>
   );
 };

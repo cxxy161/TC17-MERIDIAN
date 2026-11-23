@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::auth::{
+    self, clear_cookie, client_ip, ensure_owner, hash_password, new_token, now_secs, session_cookie,
+    token_hash, verify_password, verify_turnstile, AdminUser, AuthUser,
+    SESSION_TTL_DEFAULT, SESSION_TTL_REMEMBER,
+};
 use crate::engine::SharedEngine;
 use crate::storage::{CandleRow, TradeRow};
 
@@ -37,6 +42,13 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/intent", post(post_intent_handler))
         .route("/api/sim/control", post(sim_control_handler))
         .route("/api/companies", post(create_company_handler))
+        .route("/api/auth/register", post(register_handler))
+        .route("/api/auth/login", post(login_handler))
+        .route("/api/auth/logout", post(logout_handler))
+        .route("/api/auth/me", get(me_handler))
+        .route("/api/account", get(account_handler).patch(update_account_handler))
+        .route("/api/account/password", post(change_password_handler))
+        .route("/api/account/sessions/revoke", post(revoke_sessions_handler))
         .route("/ws", get(ws_handler))
         .with_state(engine)
         .layer(CorsLayer::permissive());
@@ -65,7 +77,10 @@ async fn admin_page_handler() -> Html<&'static str> {
     Html(ADMIN_HTML)
 }
 
-async fn admin_overview_handler(State(engine): State<SharedEngine>) -> impl IntoResponse {
+async fn admin_overview_handler(
+    _admin: AdminUser,
+    State(engine): State<SharedEngine>,
+) -> impl IntoResponse {
     let eng = engine.lock().await;
     Json(eng.admin_overview())
 }
@@ -95,11 +110,16 @@ struct StateQuery {
 
 async fn state_handler(
     State(engine): State<SharedEngine>,
+    user: AuthUser,
     Query(q): Query<StateQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<crate::engine::StateResponse>, (StatusCode, String)> {
+    let cid = q
+        .company_id
+        .clone()
+        .unwrap_or_else(|| user.user.company_id.clone());
+    ensure_owner(&user, &cid)?;
     let eng = engine.lock().await;
-    let cid = q.company_id.as_deref().unwrap_or("player1");
-    Json(eng.state_response(cid))
+    Ok(Json(eng.state_response(&cid)))
 }
 
 #[derive(Deserialize)]
@@ -286,8 +306,10 @@ struct ScriptsResp {
 
 async fn get_scripts_handler(
     State(engine): State<SharedEngine>,
+    user: AuthUser,
     Path(company_id): Path<String>,
 ) -> Result<Json<ScriptsResp>, (StatusCode, String)> {
+    ensure_owner(&user, &company_id)?;
     let eng = engine.lock().await;
     let Some(pvm) = eng.runner.players.get(&company_id) else {
         return Err((
@@ -312,9 +334,11 @@ struct PutScriptsReq {
 
 async fn put_scripts_handler(
     State(engine): State<SharedEngine>,
+    user: AuthUser,
     Path(company_id): Path<String>,
     Json(req): Json<PutScriptsReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_owner(&user, &company_id)?;
     let mut eng = engine.lock().await;
     if !eng.world.companies.contains_key(&company_id) {
         return Err((
@@ -363,9 +387,11 @@ struct PutMemoryReq {
 
 async fn put_memory_handler(
     State(engine): State<SharedEngine>,
+    user: AuthUser,
     Path(company_id): Path<String>,
     Json(req): Json<PutMemoryReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_owner(&user, &company_id)?;
     let max_bytes = PlayerRunConfig::default().max_memory_json_bytes;
     if req.memory_json.len() > max_bytes {
         return Err((
@@ -401,8 +427,10 @@ struct PostIntentReq {
 
 async fn post_intent_handler(
     State(engine): State<SharedEngine>,
+    user: AuthUser,
     Json(req): Json<PostIntentReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_owner(&user, &req.company_id)?;
     let mut eng = engine.lock().await;
     eng.queue_manual_intent(req.company_id, req.intent)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
@@ -416,6 +444,7 @@ struct SimControlReq {
 }
 
 async fn sim_control_handler(
+    _admin: AdminUser,
     State(engine): State<SharedEngine>,
     Json(req): Json<SimControlReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -430,7 +459,7 @@ async fn sim_control_handler(
             Ok(Json(serde_json::json!({ "ok": true, "paused": false })))
         }
         "speed" => {
-            let ms = req.tick_ms.unwrap_or(2000).clamp(50, 60_000);
+            let ms = req.tick_ms.unwrap_or(2000).clamp(0, 60_000);
             eng.tick_ms = ms;
             Ok(Json(serde_json::json!({ "ok": true, "tick_ms": ms })))
         }
@@ -464,6 +493,7 @@ struct CreateCompanyReq {
 }
 
 async fn create_company_handler(
+    _admin: AdminUser,
     State(engine): State<SharedEngine>,
     Json(req): Json<CreateCompanyReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
@@ -503,16 +533,18 @@ async fn create_company_handler(
 async fn ws_handler(
     ws: WebSocketUpgrade,
     State(engine): State<SharedEngine>,
+    user: AuthUser,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, engine))
+    let cid = user.user.company_id.clone();
+    ws.on_upgrade(move |socket| handle_ws(socket, engine, cid))
 }
 
-async fn handle_ws(mut socket: WebSocket, engine: SharedEngine) {
+async fn handle_ws(mut socket: WebSocket, engine: SharedEngine, cid: String) {
     let (init_json, mut rx) = {
         let eng = engine.lock().await;
         let init = serde_json::to_string(&serde_json::json!({
             "kind": "init",
-            "state": eng.state_response("player1"),
+            "state": eng.state_response(&cid),
         }))
         .unwrap_or_else(|_| "{}".to_string());
         (init, eng.events_tx.subscribe())
@@ -526,7 +558,9 @@ async fn handle_ws(mut socket: WebSocket, engine: SharedEngine) {
         tokio::select! {
             res = rx.recv() => {
                 match res {
-                    Ok(ev) => {
+                    Ok(mut ev) => {
+                        // 广播里只保留连接者自己的玩家输出，避免全员 Memory/日志泄漏
+                        ev.player_outputs.retain(|k, _| k == &cid);
                         if let Ok(txt) = serde_json::to_string(&ev) {
                             if socket.send(Message::Text(txt.into())).await.is_err() {
                                 break;
@@ -551,4 +585,469 @@ async fn handle_ws(mut socket: WebSocket, engine: SharedEngine) {
             }
         }
     }
+}
+
+
+/* ============================================================ 账号 / 会话 */
+
+/// 统一的 JSON 错误体：{message, field?, cooldown_until?}
+#[derive(Serialize)]
+struct ErrBody {
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cooldown_until: Option<i64>,
+}
+
+pub struct ApiError {
+    status: StatusCode,
+    body: ErrBody,
+}
+
+impl ApiError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: ErrBody {
+                message: message.into(),
+                field: None,
+                cooldown_until: None,
+            },
+        }
+    }
+
+    fn field(status: StatusCode, message: impl Into<String>, field: &str) -> Self {
+        Self {
+            status,
+            body: ErrBody {
+                message: message.into(),
+                field: Some(field.to_string()),
+                cooldown_until: None,
+            },
+        }
+    }
+
+    fn cooldown(message: impl Into<String>, until: i64) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: ErrBody {
+                message: message.into(),
+                field: None,
+                cooldown_until: Some(until),
+            },
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (self.status, Json(self.body)).into_response()
+    }
+}
+
+fn valid_email(email: &str) -> bool {
+    if email.len() > 254 || email.contains(char::is_whitespace) {
+        return false;
+    }
+    let mut parts = email.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    if local.is_empty() || domain.len() < 3 {
+        return false;
+    }
+    domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+}
+
+fn user_agent(headers: &HeaderMap) -> String {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+fn user_json(user: &crate::storage::UserRow) -> serde_json::Value {
+    serde_json::json!({
+        "company_id": user.company_id,
+        "nickname": user.nickname,
+        "email": user.email,
+        "role": user.role,
+    })
+}
+
+async fn hash_blocking(password: String) -> Result<(String, String), ApiError> {
+    let _permit = auth::HASH_GATE
+        .acquire()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+async fn verify_blocking(
+    password: String,
+    salt: String,
+    hash: String,
+) -> Result<bool, ApiError> {
+    let _permit = auth::HASH_GATE
+        .acquire()
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::task::spawn_blocking(move || verify_password(&password, &salt, &hash))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+#[derive(Deserialize)]
+struct RegisterReq {
+    email: String,
+    nickname: String,
+    password: String,
+    #[serde(default)]
+    turnstile_token: String,
+}
+
+async fn register_handler(
+    State(engine): State<SharedEngine>,
+    headers: HeaderMap,
+    Json(req): Json<RegisterReq>,
+) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    let email = req.email.trim().to_lowercase();
+    let nickname = req.nickname.trim().to_string();
+    if !valid_email(&email) {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "请输入有效邮箱地址", "email"));
+    }
+    let nick_len = nickname.chars().count();
+    if !(2..=16).contains(&nick_len) {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "昵称需 2–16 个字符", "nickname"));
+    }
+    let pwd_len = req.password.chars().count();
+    if pwd_len < 8 {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "密码至少 8 位", "password"));
+    }
+    if pwd_len > 128 {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "密码不能超过 128 位", "password"));
+    }
+
+    let ip = client_ip(&headers);
+    {
+        let eng = engine.lock().await;
+        if let Err(msg) = eng.auth.check_register(&ip) {
+            return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, msg));
+        }
+    }
+
+    let remote_ip = if ip == "local" { None } else { Some(ip.as_str()) };
+    verify_turnstile(&req.turnstile_token, remote_ip)
+        .await
+        .map_err(|m| ApiError::new(StatusCode::FORBIDDEN, m))?;
+
+    let (salt, hash) = hash_blocking(req.password.clone()).await?;
+
+    let mut eng = engine.lock().await;
+    if eng.store.email_taken(&email) {
+        return Err(ApiError::field(StatusCode::CONFLICT, "该邮箱已注册", "email"));
+    }
+    if eng.store.nickname_taken(&nickname, None) {
+        return Err(ApiError::field(StatusCode::CONFLICT, "该昵称已被占用", "nickname"));
+    }
+
+    let now = now_secs();
+    // 首个注册者成为管理员（开服引导）；之后通过 MERIDIAN_ADMIN_EMAIL 指定
+    let role = if eng.store.count_users() == 0 {
+        "admin"
+    } else {
+        "player"
+    };
+    let user_id = eng
+        .store
+        .create_user(&email, &nickname, &hash, &salt, role, "", now)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let company_id = if eng.company_is_unclaimed("player1") {
+        "player1".to_string()
+    } else {
+        format!("u{user_id}")
+    };
+    eng.store
+        .set_user_company(user_id, &company_id)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    eng.provision_player_company(&company_id, &nickname)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let ttl = SESSION_TTL_DEFAULT;
+    let token = new_token();
+    eng.store
+        .create_session(user_id, &token_hash(&token), now, now + ttl, &user_agent(&headers))
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = eng.store.set_last_login(user_id, now);
+    let user = eng
+        .store
+        .user_by_id(user_id)
+        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "用户创建失败"))?;
+    let body = user_json(&user);
+    drop(eng);
+
+    Ok(([(header::SET_COOKIE, session_cookie(&token, ttl))], Json(body)))
+}
+
+#[derive(Deserialize)]
+struct LoginReq {
+    email: String,
+    password: String,
+    #[serde(default)]
+    remember: bool,
+}
+
+async fn login_handler(
+    State(engine): State<SharedEngine>,
+    headers: HeaderMap,
+    Json(req): Json<LoginReq>,
+) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    let email = req.email.trim().to_lowercase();
+    let ip = client_ip(&headers);
+    {
+        let eng = engine.lock().await;
+        if let Err(msg) = eng.auth.check_login(&ip) {
+            return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, msg));
+        }
+    }
+
+    let found = {
+        let eng = engine.lock().await;
+        eng.store.user_by_email(&email)
+    };
+    let Some((user, salt, hash)) = found else {
+        // 用户不存在也跑一次哈希，避免通过响应时间探测账号是否注册
+        let _ = hash_blocking(req.password.clone()).await;
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
+    };
+    let ok = verify_blocking(req.password.clone(), salt, hash).await?;
+    if !ok {
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
+    }
+    if user.status != "active" {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "账号已被禁用"));
+    }
+
+    let now = now_secs();
+    let ttl = if req.remember {
+        SESSION_TTL_REMEMBER
+    } else {
+        SESSION_TTL_DEFAULT
+    };
+    let token = new_token();
+    {
+        let eng = engine.lock().await;
+        eng.store
+            .create_session(
+                user.id,
+                &token_hash(&token),
+                now,
+                now + ttl,
+                &user_agent(&headers),
+            )
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        let _ = eng.store.set_last_login(user.id, now);
+        let _ = eng.store.purge_expired_sessions(now);
+    }
+    let body = user_json(&user);
+
+    Ok(([(header::SET_COOKIE, session_cookie(&token, ttl))], Json(body)))
+}
+
+async fn logout_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    let eng = engine.lock().await;
+    eng.store
+        .delete_session(user.session_id)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    drop(eng);
+    Ok(([(header::SET_COOKIE, clear_cookie())], Json(serde_json::json!({ "ok": true }))))
+}
+
+async fn me_handler(user: AuthUser) -> Json<serde_json::Value> {
+    Json(user_json(&user.user))
+}
+
+async fn account_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+) -> Json<serde_json::Value> {
+    let eng = engine.lock().await;
+    let sessions: Vec<serde_json::Value> = eng
+        .store
+        .list_sessions(user.user.id)
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "created_at": s.created_at,
+                "last_seen_at": s.last_seen_at,
+                "expires_at": s.expires_at,
+                "current": s.id == user.session_id,
+                "user_agent": s.user_agent,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "email": user.user.email,
+        "nickname": user.user.nickname,
+        "role": user.user.role,
+        "company_id": user.user.company_id,
+        "created_at": user.user.created_at,
+        "nickname_changed_at": user.user.nickname_changed_at,
+        "sessions": sessions,
+    }))
+}
+
+#[derive(Deserialize)]
+struct UpdateAccountReq {
+    nickname: String,
+}
+
+const NICKNAME_COOLDOWN_SECS: i64 = 30 * 24 * 3600;
+
+async fn update_account_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<UpdateAccountReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let nickname = req.nickname.trim().to_string();
+    let nick_len = nickname.chars().count();
+    if !(2..=16).contains(&nick_len) {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "昵称需 2–16 个字符", "nickname"));
+    }
+    if nickname == user.user.nickname {
+        return Ok(Json(serde_json::json!({ "ok": true, "nickname": nickname })));
+    }
+    let now = now_secs();
+    if let Some(changed_at) = user.user.nickname_changed_at {
+        let until = changed_at + NICKNAME_COOLDOWN_SECS;
+        if now < until {
+            return Err(ApiError::cooldown(
+                format!("昵称 30 天内只能修改一次，解锁时间戳 {until}"),
+                until,
+            ));
+        }
+    }
+    let eng = engine.lock().await;
+    if eng.store.nickname_taken(&nickname, Some(user.user.id)) {
+        return Err(ApiError::field(StatusCode::CONFLICT, "该昵称已被占用", "nickname"));
+    }
+    eng.store
+        .update_nickname(user.user.id, &nickname, now)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "ok": true, "nickname": nickname })))
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordReq {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<ChangePasswordReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let new_len = req.new_password.chars().count();
+    if new_len < 8 {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "新密码至少 8 位",
+            "new_password",
+        ));
+    }
+    if new_len > 128 {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "新密码不能超过 128 位",
+            "new_password",
+        ));
+    }
+
+    let found = {
+        let eng = engine.lock().await;
+        eng.store.user_by_email(&user.user.email)
+    };
+    let Some((_u, salt, hash)) = found else {
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "账号不存在"));
+    };
+    let ok = verify_blocking(req.current_password.clone(), salt, hash).await?;
+    if !ok {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "当前密码不正确",
+            "current_password",
+        ));
+    }
+
+    let (new_salt, new_hash) = hash_blocking(req.new_password.clone()).await?;
+    let eng = engine.lock().await;
+    eng.store
+        .update_password(user.user.id, &new_hash, &new_salt)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    // 改密后踢掉其它设备，只保留当前会话
+    let _ = eng.store.delete_other_sessions(user.user.id, user.session_id);
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct RevokeSessionsReq {
+    /// 同时接受数字和字符串：前端会话 id 类型历史上是 string
+    #[serde(default)]
+    session_id: Option<serde_json::Value>,
+    #[serde(default)]
+    all: bool,
+}
+
+async fn revoke_sessions_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<RevokeSessionsReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let eng = engine.lock().await;
+    if req.all {
+        let removed = eng
+            .store
+            .delete_other_sessions(user.user.id, user.session_id)
+            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        return Ok(Json(serde_json::json!({ "ok": true, "revoked": removed })));
+    }
+    let session_id = match req.session_id {
+        Some(serde_json::Value::Number(n)) => n.as_i64(),
+        Some(serde_json::Value::String(s)) => s.parse::<i64>().ok(),
+        _ => None,
+    };
+    let Some(session_id) = session_id else {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "缺少 session_id"));
+    };
+    if session_id == user.session_id {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "不能吊销当前设备，请使用登出",
+        ));
+    }
+    let owns = eng
+        .store
+        .list_sessions(user.user.id)
+        .iter()
+        .any(|s| s.id == session_id);
+    if !owns {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "会话不存在"));
+    }
+    eng.store
+        .delete_session(session_id)
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "ok": true, "revoked": 1 })))
 }

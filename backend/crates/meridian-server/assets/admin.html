@@ -142,13 +142,14 @@
       <button id="btnPauseResume" class="primary">暂停</button>
       <button id="btnStep">步进 +1T</button>
       <div class="tabs" id="speedBtns">
+        <button data-ms="0" title="无人工延迟全速运行 (0ms)">最快</button>
         <button data-ms="200">0.2s</button>
         <button data-ms="500">0.5s</button>
         <button data-ms="1000">1.0s</button>
         <button data-ms="2000">2.0s</button>
         <button data-ms="5000">5.0s</button>
       </div>
-      <input id="customMs" class="ms-in mono" type="number" min="50" max="60000" value="2000" title="自定义 tick_ms" />
+      <input id="customMs" class="ms-in mono" type="number" min="0" max="60000" value="2000" title="自定义 tick_ms (0 为最快)" />
       <button id="btnSetMs">设毫秒</button>
       <span id="resetBox">
         <button id="btnAskReset" class="danger">重置星系</button>
@@ -298,13 +299,35 @@
       } catch (_) {}
     }
 
+    let refreshInFlight = false;
+    let lastRefreshAt = 0;
+    let refreshTimer = null;
+
     async function refreshAll() {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
       try {
         const res = await fetch('/api/admin/overview');
         if (!res.ok) return;
         overview = await res.json();
+        lastRefreshAt = performance.now();
         renderAll();
-      } catch (_) {}
+      } catch (_) {
+      } finally {
+        refreshInFlight = false;
+      }
+    }
+
+    function scheduleRefresh() {
+      const elapsed = performance.now() - lastRefreshAt;
+      if (elapsed >= 200 && !refreshInFlight) {
+        refreshAll();
+      } else if (!refreshTimer) {
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          refreshAll();
+        }, Math.max(20, 200 - elapsed));
+      }
     }
 
     function renderResetBox() {
@@ -349,7 +372,11 @@
       document.getElementById('kFlightCount').textContent = (overview.in_flight || []).length;
 
       const stEl = document.getElementById('kStatus');
-      stEl.textContent = overview.paused ? '已暂停' : `运行 (${overview.tick_ms}ms)`;
+      stEl.textContent = overview.paused
+        ? '已暂停'
+        : overview.tick_ms === 0
+          ? '全速运行 (0ms)'
+          : `运行 (${overview.tick_ms}ms)`;
       stEl.className = overview.paused ? 'amber' : 'green';
 
       const btnPR = document.getElementById('btnPauseResume');
@@ -561,7 +588,7 @@
     });
     document.getElementById('btnSetMs').onclick = () => {
       const v = Number(document.getElementById('customMs').value);
-      if (v >= 50) simCtrl('speed', v);
+      if (Number.isFinite(v) && v >= 0) simCtrl('speed', v);
     };
     document.querySelectorAll('#compFilters button').forEach((b) => {
       b.onclick = () => {
@@ -585,7 +612,7 @@
         badge.className = 'red';
         setTimeout(connectWs, 2000);
       };
-      ws.onmessage = () => { refreshAll(); };
+      ws.onmessage = () => { scheduleRefresh(); };
     }
 
     renderResetBox();
