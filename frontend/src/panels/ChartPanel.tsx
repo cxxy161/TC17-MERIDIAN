@@ -67,7 +67,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
 
     const chart = createChart(el, {
       layout: {
-        background: { type: ColorType.Solid, color: '#070b11' },
+        background: { type: ColorType.Solid, color: '#191f27' },
         textColor: '#94a3b8',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         fontSize: 11,
@@ -170,8 +170,8 @@ export const ChartPanel: React.FC<PaneProps> = ({
   const latest = agg[agg.length - 1];
 
   return (
-    <div className="h-full flex flex-col bg-[#070b11] text-slate-200 overflow-hidden">
-      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
+      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
           <select
             value={stationId}
@@ -179,7 +179,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
               setStationId(e.target.value);
               updateTitle(e.target.value, itemId);
             }}
-            className="bg-[#0e1724] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
+            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
           >
             {Object.entries(STATION_NAMES).map(([id, name]) => (
               <option key={id} value={id}>
@@ -193,7 +193,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
               setItemId(e.target.value);
               updateTitle(stationId, e.target.value);
             }}
-            className="bg-[#0e1724] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm text-sky-300"
+            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm text-sky-300"
           >
             {(catalog?.items ?? []).map((it) => (
               <option key={it.id} value={it.id}>
@@ -223,7 +223,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
       </div>
 
       {/* OHLCV Readout */}
-      <div className="px-3 py-1 bg-[#090e15] border-b border-slate-800/70 flex items-center justify-between text-[11px] mono shrink-0">
+      <div className="px-3 py-1 bg-[#1f2630] border-b border-slate-800/70 flex items-center justify-between text-[11px] mono shrink-0">
         {latest ? (
           <span className="text-slate-300">
             开 {latest.open.toFixed(2)} · 高 <span className="text-emerald-400">{latest.high.toFixed(2)}</span> · 低{' '}

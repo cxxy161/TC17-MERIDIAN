@@ -46,14 +46,15 @@ const TileFrame: React.FC<{
   return (
     <div
       data-tile-id={tileId}
-      className={`relative w-full h-full flex flex-col bg-[#0b1119] border rounded-[2px] overflow-hidden min-w-0 min-h-0 ${
+      data-empty-tile={content === null ? 'true' : 'false'}
+      className={`relative w-full h-full flex flex-col bg-[#1e242d] border rounded-[2px] overflow-hidden min-w-0 min-h-0 ${
         isDropTarget
           ? 'border-sky-400 ring-1 ring-sky-400/60'
           : 'border-sky-500/15'
       }`}
     >
       {/* Single-Pane Header (NO tabs inside tile!) */}
-      <div className="h-7 bg-[#0e1724] border-b border-sky-500/15 px-2.5 flex items-center justify-between gap-2 shrink-0 select-none">
+      <div className="h-7 bg-[#27303e] border-b border-sky-500/15 px-2.5 flex items-center justify-between gap-2 shrink-0 select-none">
         <span className={`text-[11px] font-medium truncate ${content ? 'text-slate-100' : 'text-slate-400'}`}>
           {title}
         </span>
@@ -65,7 +66,7 @@ const TileFrame: React.FC<{
           onMouseLeave={() => setActionsHover(false)}
         >
           {actionsHover ? (
-            <div className="flex items-center gap-0.5 bg-[#09111a] border border-sky-500/25 rounded-[2px] p-0.5">
+            <div className="flex items-center gap-0.5 bg-[#1e2530] border border-sky-500/25 rounded-[2px] p-0.5">
               <button
                 onClick={() => {
                   setActionsHover(false);
@@ -133,8 +134,8 @@ const TileFrame: React.FC<{
 
         {isDropTarget && (
           <div className="absolute inset-0 bg-sky-500/15 border-2 border-dashed border-sky-400 flex items-center justify-center pointer-events-none z-20">
-            <span className="px-3 py-1 bg-[#08101a]/95 border border-sky-400 text-sky-200 text-[11px] font-medium">
-              松手嵌入并覆盖此窗口
+            <span className="px-3 py-1 bg-[#1b222c]/95 border border-sky-400 text-sky-200 text-[11px] font-medium">
+              松手嵌入此空窗口
             </span>
           </div>
         )}

@@ -63,8 +63,8 @@ export const FleetPanel: React.FC<PaneProps> = () => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between text-[11px] shrink-0">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between text-[11px] shrink-0">
         <span className="font-medium">旗下舰队（共 {ships.length} 艘）</span>
         <span className="text-[10px] text-slate-400">支持一船多货物混装发运</span>
       </div>
@@ -117,7 +117,7 @@ export const FleetPanel: React.FC<PaneProps> = () => {
 
         {/* Dispatch Builder */}
         {activeShip && (
-          <div className="border border-sky-500/20 bg-[#080d14] p-3 rounded-sm space-y-2.5">
+          <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2.5">
             <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800">
               <span className="font-semibold text-slate-100">
                 装货启航 · {SHIP_SIZE_NAMES[activeShip.size]}-{activeShip.id}
@@ -140,7 +140,7 @@ export const FleetPanel: React.FC<PaneProps> = () => {
                   <select
                     value={effectiveDest}
                     onChange={(e) => setDest(e.target.value)}
-                    className="bg-[#0e1724] border border-slate-700 px-2 py-0.5 rounded-sm text-[11px]"
+                    className="bg-[#27303e] border border-slate-700 px-2 py-0.5 rounded-sm text-[11px]"
                   >
                     {validDests.map((d) => (
                       <option key={d} value={d}>
@@ -179,7 +179,7 @@ export const FleetPanel: React.FC<PaneProps> = () => {
                                 [itemId]: Math.max(0, Math.min(have, Number(e.target.value) || 0)),
                               }))
                             }
-                            className="w-14 bg-[#070b11] border border-slate-700 px-1 py-0.5 text-right mono rounded-sm"
+                            className="w-14 bg-[#191f27] border border-slate-700 px-1 py-0.5 text-right mono rounded-sm"
                           />
                         </div>
                       );

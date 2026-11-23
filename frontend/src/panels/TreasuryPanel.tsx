@@ -24,8 +24,8 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between text-[11px]">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between text-[11px]">
         <span className="font-medium">公司财务与行星央行</span>
         <span className="text-[10px] text-emerald-400">玩家永不强制破产保护生效中</span>
       </div>
@@ -50,13 +50,13 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
           </div>
         </div>
 
-        <div className="border border-sky-500/20 bg-[#080d14] p-3 rounded-sm space-y-2.5">
+        <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2.5">
           <div className="flex items-center justify-between text-[11px]">
             <span className="text-slate-300">母星央行柜台（仅可在母星办理存贷）</span>
             <select
               value={planetId}
               onChange={(e) => setPlanetId(e.target.value)}
-              className="bg-[#0e1724] border border-slate-700 px-2 py-0.5 rounded-sm"
+              className="bg-[#27303e] border border-slate-700 px-2 py-0.5 rounded-sm"
             >
               {planets.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -72,7 +72,7 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
               min="1"
               value={amountStr}
               onChange={(e) => setAmountStr(e.target.value)}
-              className="w-32 bg-[#070b11] border border-slate-700 px-2 py-1 mono text-right rounded-sm"
+              className="w-32 bg-[#191f27] border border-slate-700 px-2 py-1 mono text-right rounded-sm"
             />
             <button onClick={() => execBank('deposit')} className="cta-blue">存入</button>
             <button onClick={() => execBank('withdraw')} className="pill-btn">取出</button>

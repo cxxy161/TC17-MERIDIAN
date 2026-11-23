@@ -24,8 +24,8 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-1">
           {planets.map((p) => (
             <button
@@ -41,7 +41,7 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
           <select
             value={buildType}
             onChange={(e) => setBuildType(e.target.value)}
-            className="bg-[#0e1724] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
+            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
           >
             {(catalog?.buildings ?? []).map((b) => (
               <option key={b.id} value={b.id}>
@@ -73,7 +73,7 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
           plots.map((pl) => {
             const plotBuildings = buildings.filter((b) => b.plot_id === pl.id);
             return (
-              <div key={pl.id} className="space-y-2 border border-slate-800/80 bg-[#080d14] p-2.5 rounded-sm">
+              <div key={pl.id} className="space-y-2 border border-slate-800/80 bg-[#1b212b] p-2.5 rounded-sm">
                 <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800/70">
                   <span className="font-semibold text-sky-300">
                     地块 #{pl.id} · {pl.terrain_name}
@@ -113,7 +113,7 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
                                     SetRecipe: { building_id: b.id, recipe_id: e.target.value },
                                   })
                                 }
-                                className="bg-[#091019] border border-sky-500/30 text-sky-300 text-[10px] px-1.5 py-0.5 rounded-sm"
+                                className="bg-[#222935] border border-sky-500/30 text-sky-300 text-[10px] px-1.5 py-0.5 rounded-sm"
                               >
                                 {validRecipes.map((vr) => (
                                   <option key={vr.id} value={vr.id}>

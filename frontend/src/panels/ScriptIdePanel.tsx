@@ -112,8 +112,8 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
           }
         }),
         EditorView.theme({
-          '&': { height: '100%', backgroundColor: '#070b11', fontSize: '12px' },
-          '.cm-gutters': { backgroundColor: '#090e15', borderRight: '1px solid rgba(56,189,248,0.12)' },
+          '&': { height: '100%', backgroundColor: '#191f27', fontSize: '12px' },
+          '.cm-gutters': { backgroundColor: '#1f2630', borderRight: '1px solid rgba(56,189,248,0.12)' },
         }),
       ],
     });
@@ -165,8 +165,8 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
   const cpuMs = scripts?.last_output?.cpu_used_ms ?? 0;
 
   return (
-    <div className="h-full flex flex-col bg-[#070b11] text-slate-200 overflow-hidden">
-      <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
+      <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1 flex-wrap">
           {moduleNames.map((m) => (
             <button
@@ -215,7 +215,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
           <textarea
             value={memoryDraft}
             onChange={(e) => setMemoryDraft(e.target.value)}
-            className="flex-1 bg-[#080d14] border border-slate-800 p-3 mono text-[12px] text-emerald-300 outline-none resize-none"
+            className="flex-1 bg-[#1b212b] border border-slate-800 p-3 mono text-[12px] text-emerald-300 outline-none resize-none"
           />
         </div>
       ) : (

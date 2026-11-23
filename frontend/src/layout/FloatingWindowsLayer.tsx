@@ -20,16 +20,16 @@ interface FloatingWindowsLayerProps {
   openTemp: (kind: PaneKind, params?: PaneParams) => void;
 }
 
-function findTileUnderPoint(clientX: number, clientY: number): string | null {
+function findEmptyTileUnderPoint(clientX: number, clientY: number): string | null {
   const els = document.elementsFromPoint(clientX, clientY);
   for (const el of els) {
     // Skip elements inside floating window layer
     if (el instanceof HTMLElement && el.closest('[data-floating-win="true"]')) {
       continue;
     }
-    const tile = el instanceof HTMLElement ? el.closest('[data-tile-id]') : null;
-    if (tile) {
-      return tile.getAttribute('data-tile-id');
+    const emptyTile = el instanceof HTMLElement ? el.closest('[data-empty-tile="true"]') : null;
+    if (emptyTile) {
+      return emptyTile.getAttribute('data-tile-id');
     }
   }
   return null;
@@ -70,7 +70,7 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
             }
             onMove(win.id, Math.max(48, origX + dx), Math.max(38, origY + dy));
             if (moved) {
-              onHoverTile(findTileUnderPoint(ev.clientX, ev.clientY));
+              onHoverTile(findEmptyTileUnderPoint(ev.clientX, ev.clientY));
             }
           };
 
@@ -79,7 +79,7 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
             window.removeEventListener('pointerup', onPointerUp);
             onHoverTile(null);
             if (moved) {
-              const targetTile = findTileUnderPoint(ev.clientX, ev.clientY);
+              const targetTile = findEmptyTileUnderPoint(ev.clientX, ev.clientY);
               if (targetTile) {
                 onDropOnTile(win.id, targetTile);
               }
@@ -127,18 +127,18 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
               height: win.h,
               zIndex: win.z,
             }}
-            className="fixed flex flex-col bg-[#0b121b] border border-sky-400/60 rounded-[3px] shadow-[0_14px_40px_rgba(0,0,0,0.75)] overflow-hidden"
+            className="fixed flex flex-col bg-[#212834] border border-sky-400/60 rounded-[3px] shadow-[0_14px_40px_rgba(0,0,0,0.75)] overflow-hidden"
           >
             {/* Draggable Header */}
             <div
               onPointerDown={handleDragStart}
-              className="h-7 bg-[#101c2b] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 cursor-move select-none shrink-0"
+              className="h-7 bg-[#2a3545] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 cursor-move select-none shrink-0"
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <GripHorizontal className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                 <span className="text-[11px] font-medium text-sky-100 truncate">{title}</span>
                 <span className="text-[9px] px-1 py-0 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
-                  临时悬浮 · 可拖入网格
+                  临时悬浮 · 拖入空窗口嵌入
                 </span>
               </div>
               <button

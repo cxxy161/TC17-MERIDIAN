@@ -39,8 +39,8 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#070a10] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between text-[11px] shrink-0">
+    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between text-[11px] shrink-0">
         <span className="font-medium">遥测终端输出</span>
         <div className="flex items-center gap-3">
           <span className="mono text-[10px] text-emerald-400">

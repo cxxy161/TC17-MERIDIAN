@@ -120,12 +120,12 @@ export const EmptyTilePane: React.FC<EmptyTilePaneProps> = ({ onSelect }) => {
   }, [options, query]);
 
   return (
-    <div className="h-full flex flex-col bg-[#080d14] p-3 gap-2.5 overflow-hidden">
+    <div className="h-full flex flex-col bg-[#1b212b] p-3 gap-2.5 overflow-hidden">
       <div className="text-[11px] text-slate-400">
         空窗口 · 可在下方搜索选择要显示的内容，或将任意<strong className="text-sky-300 font-normal">临时悬浮窗</strong>直接拖入此格覆盖
       </div>
 
-      <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[#0b121b] border border-sky-500/30 rounded-sm">
+      <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[#212834] border border-sky-500/30 rounded-sm">
         <Search className="w-3.5 h-3.5 text-sky-400 shrink-0" />
         <input
           value={query}
@@ -145,7 +145,7 @@ export const EmptyTilePane: React.FC<EmptyTilePaneProps> = ({ onSelect }) => {
           <button
             key={item.id}
             onClick={() => onSelect(item.content)}
-            className="w-full text-left px-2.5 py-1.5 rounded-sm bg-[#0c141f] border border-slate-800/80 hover:border-sky-400/55 hover:bg-sky-500/10 flex items-center justify-between gap-2"
+            className="w-full text-left px-2.5 py-1.5 rounded-sm bg-[#242c38] border border-slate-800/80 hover:border-sky-400/55 hover:bg-sky-500/10 flex items-center justify-between gap-2"
           >
             <span className="text-sky-300 font-medium text-[11px] truncate">{item.label}</span>
             <span className="text-slate-500 text-[10px] shrink-0">{item.sub}</span>

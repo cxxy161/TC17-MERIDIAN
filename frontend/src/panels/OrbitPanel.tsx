@@ -20,8 +20,8 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#070b11] text-slate-200 select-none">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 flex items-center justify-between text-[11px] bg-[#0a111a]">
+    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 select-none">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 flex items-center justify-between text-[11px] bg-[#232a36]">
         <span className="text-slate-400">
           点击任意行星可打开或对比其遥测面板 · 在途飞船{' '}
           <strong className="text-emerald-400 mono">{ships.filter((s) => s.is_busy).length}</strong> 艘
@@ -40,7 +40,7 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
             <radialGradient id="orbitStarGlow" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#7dd3fc" stopOpacity="0.95" />
               <stop offset="45%" stopColor="#10b981" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#070b11" stopOpacity="0" />
+              <stop offset="100%" stopColor="#191f27" stopOpacity="0" />
             </radialGradient>
           </defs>
 
@@ -70,7 +70,7 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
                 <circle cx={cx} cy={cy} r={hr} fill="none" stroke="rgba(56,189,248,0.22)" strokeDasharray="4 4" />
                 <polygon
                   points={`${hx},${hy - 7} ${hx + 7},${hy} ${hx},${hy + 7} ${hx - 7},${hy}`}
-                  fill="#0b1119"
+                  fill="#202732"
                   stroke="#38bdf8"
                   strokeWidth="1.6"
                 />

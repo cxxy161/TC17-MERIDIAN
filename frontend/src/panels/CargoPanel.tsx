@@ -42,8 +42,8 @@ export const CargoPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) 
   const empty = items.filter((x) => x.qty === 0);
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1 flex-wrap">
           {allLocations.map((l) => (
             <button
@@ -70,7 +70,7 @@ export const CargoPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) 
                 <div
                   key={def.id}
                   onClick={() => openTemp('chart', { stationId: targetStation, itemId: def.id })}
-                  className="bg-[#0e1622] border border-slate-800 hover:border-emerald-400/50 rounded-sm px-2.5 py-2 flex items-center justify-between cursor-pointer"
+                  className="bg-[#252e3b] border border-slate-800 hover:border-emerald-400/50 rounded-sm px-2.5 py-2 flex items-center justify-between cursor-pointer"
                   style={{ borderLeft: `2px solid ${rm.color}` }}
                 >
                   <div className="min-w-0">
@@ -89,7 +89,7 @@ export const CargoPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) 
             <div className="text-[10px] text-slate-500 mb-1.5">零库存品类</div>
             <div className="flex flex-wrap gap-1.5">
               {empty.map(({ def }) => (
-                <span key={def.id} className="px-2 py-0.5 bg-[#090e15] border border-slate-800/80 text-[10px] text-slate-500">
+                <span key={def.id} className="px-2 py-0.5 bg-[#1f2630] border border-slate-800/80 text-[10px] text-slate-500">
                   {def.name}
                 </span>
               ))}

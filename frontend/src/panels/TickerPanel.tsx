@@ -19,8 +19,8 @@ export const TickerPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1 flex-wrap">
           {stations.map((sid) => (
             <button
@@ -37,7 +37,7 @@ export const TickerPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
 
       <div className="flex-1 overflow-y-auto">
         <table className="w-full text-[11px] mono text-left">
-          <thead className="bg-[#0e1622] text-slate-500 text-[10px] sticky top-0">
+          <thead className="bg-[#252e3b] text-slate-500 text-[10px] sticky top-0">
             <tr>
               <th className="px-3 py-1.5 font-normal">物资名称</th>
               <th className="px-2 py-1.5 text-right font-normal">买一</th>

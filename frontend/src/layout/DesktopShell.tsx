@@ -188,9 +188,9 @@ export const DesktopShell: React.FC = () => {
   const tickMs = state?.tick_ms ?? 2000;
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#06090e] text-slate-200 overflow-hidden">
+    <div className="h-screen w-screen flex flex-col bg-[#161b22] text-slate-200 overflow-hidden">
       {/* Top Telemetry Chrome */}
-      <header className="h-9 bg-[#090e15] border-b border-sky-500/15 px-3 flex items-center justify-between gap-3 shrink-0">
+      <header className="h-9 bg-[#1f2630] border-b border-sky-500/15 px-3 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2 pr-3 border-r border-slate-800 shrink-0">
             <svg viewBox="0 0 24 24" className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" strokeWidth="1.6">
@@ -260,7 +260,7 @@ export const DesktopShell: React.FC = () => {
             <select
               value={tickMs}
               onChange={(e) => void simControl('speed', Number(e.target.value))}
-              className="bg-[#0e1724] border border-slate-700 text-[10px] px-1.5 py-0.5 rounded-sm text-slate-300"
+              className="bg-[#27303e] border border-slate-700 text-[10px] px-1.5 py-0.5 rounded-sm text-slate-300"
               title="模拟节奏"
             >
               <option value={500}>极速 0.5s</option>
@@ -297,7 +297,7 @@ export const DesktopShell: React.FC = () => {
 
       {/* Body: Left Rail (all clicks open temporary floating windows!) + Split Tile Desktop */}
       <div className="flex-1 flex min-h-0 relative">
-        <aside className="w-12 bg-[#080c12] border-r border-sky-500/15 py-2 flex flex-col items-center justify-between shrink-0 overflow-y-auto">
+        <aside className="w-12 bg-[#1a2029] border-r border-sky-500/15 py-2 flex flex-col items-center justify-between shrink-0 overflow-y-auto">
           <div className="flex flex-col gap-1">
             {RAIL_BUTTONS.map((btn) => (
               <button
@@ -314,7 +314,7 @@ export const DesktopShell: React.FC = () => {
         </aside>
 
         {/* Tiled Split Layout Workspace (strictly 1 panel per tile, NO tabs!) */}
-        <div className="flex-1 min-w-0 min-h-0 p-1 bg-[#06090e]">
+        <div className="flex-1 min-w-0 min-h-0 p-1 bg-[#161b22]">
           {activeWorkspace && (
             <SplitLayout
               node={activeWorkspace.tree}

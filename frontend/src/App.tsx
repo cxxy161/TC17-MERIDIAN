@@ -25,7 +25,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Bound
   render() {
     if (this.state.error) {
       return (
-        <div className="p-6 bg-[#06090e] text-rose-300 font-mono text-xs h-screen overflow-auto">
+        <div className="p-6 bg-[#161b22] text-rose-300 font-mono text-xs h-screen overflow-auto">
           <div className="text-sm font-bold text-rose-400 mb-2">
             MERIDIAN UI 渲染异常：{this.state.error.message}
           </div>

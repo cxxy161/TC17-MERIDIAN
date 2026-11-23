@@ -51,8 +51,8 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
           <select
             value={stationId}
@@ -60,7 +60,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
               setStationId(e.target.value);
               updateTitle(e.target.value, itemId);
             }}
-            className="bg-[#0e1724] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
+            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
           >
             {Object.entries(STATION_NAMES).map(([id, name]) => (
               <option key={id} value={id}>
@@ -74,7 +74,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
               setItemId(e.target.value);
               updateTitle(stationId, e.target.value);
             }}
-            className="bg-[#0e1724] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm text-sky-300"
+            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm text-sky-300"
           >
             {(catalog?.items ?? []).map((it) => (
               <option key={it.id} value={it.id}>
@@ -135,11 +135,11 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
       </div>
 
       {/* Manual Order Form */}
-      <div className="p-2 border-b border-slate-800/80 bg-[#080c12] flex items-center gap-1.5 shrink-0">
+      <div className="p-2 border-b border-slate-800/80 bg-[#1a2029] flex items-center gap-1.5 shrink-0">
         <select
           value={side}
           onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-          className="bg-[#0e1724] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
+          className="bg-[#27303e] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
         >
           <option value="buy">买入</option>
           <option value="sell">卖出</option>
@@ -150,7 +150,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
           value={priceStr}
           onChange={(e) => setPriceStr(e.target.value)}
           placeholder="单价"
-          className="w-20 bg-[#070b11] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+          className="w-20 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
         />
         <input
           type="number"
@@ -158,7 +158,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
           value={qtyStr}
           onChange={(e) => setQtyStr(e.target.value)}
           placeholder="数量"
-          className="w-16 bg-[#070b11] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+          className="w-16 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
         />
         <button onClick={handleSubmit} className={side === 'buy' ? 'cta-green ml-auto' : 'cta-blue ml-auto'}>
           提交限价单

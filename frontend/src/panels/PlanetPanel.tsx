@@ -28,8 +28,8 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
   const demandEntries = Object.entries(pSum.demands ?? {});
 
   return (
-    <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5 flex-wrap">
           {planets.map((p) => (
             <button
