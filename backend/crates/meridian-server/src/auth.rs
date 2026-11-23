@@ -122,24 +122,40 @@ pub fn read_cookie(header_value: Option<&str>, name: &str) -> Option<String> {
     None
 }
 
-fn cookie_secure_suffix() -> &'static str {
+/// 是否给 Cookie 加 `Secure`。
+///
+/// 规则：`MERIDIAN_COOKIE_SECURE` 显式设置时优先（1/true 或 0/false）；
+/// 未设置时按请求判断 —— 反代带了 `X-Forwarded-Proto: https` 才加 Secure。
+/// 这样裸 HTTP（局域网 IP、内网调试）能正常存下 Cookie，上了 TLS 反代又自动收紧。
+pub fn cookie_secure(headers: &axum::http::HeaderMap) -> bool {
     match std::env::var("MERIDIAN_COOKIE_SECURE").as_deref() {
-        Ok("0") | Ok("false") => "",
-        _ => "; Secure",
+        Ok("0") | Ok("false") => return false,
+        Ok("1") | Ok("true") => return true,
+        _ => {}
     }
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim().eq_ignore_ascii_case("https"))
+        .unwrap_or(false)
 }
 
-pub fn session_cookie(token: &str, ttl_secs: i64) -> String {
-    format!(
-        "{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}{}",
-        cookie_secure_suffix()
-    )
+pub fn session_cookie(token: &str, ttl_secs: i64, persistent: bool, secure: bool) -> String {
+    let mut cookie = format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax");
+    if persistent {
+        // 勾选「保持登录」：持久化 Cookie，关掉浏览器也在
+        cookie.push_str(&format!("; Max-Age={ttl_secs}"));
+    }
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    cookie
 }
 
-pub fn clear_cookie() -> String {
+pub fn clear_cookie(secure: bool) -> String {
     format!(
         "{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
-        cookie_secure_suffix()
+        if secure { "; Secure" } else { "" }
     )
 }
 

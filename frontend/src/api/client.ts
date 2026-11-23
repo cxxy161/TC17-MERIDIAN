@@ -12,6 +12,8 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: 'same-origin', ...init });
   if (!res.ok) {
     const text = await res.text();
+    // 会话失效（过期/被吊销/后端重启）时统一回到登录页，而不是卡在报错的桌面上
+    if (res.status === 401) unauthorizedHandler?.();
     throw new Error(`${res.status} ${text || res.statusText}`);
   }
   return res.json() as Promise<T>;

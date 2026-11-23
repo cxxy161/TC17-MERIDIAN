@@ -17,8 +17,8 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::auth::{
-    self, clear_cookie, client_ip, ensure_owner, hash_password, new_token, now_secs, session_cookie,
-    token_hash, verify_password, verify_turnstile, AdminUser, AuthUser,
+    self, clear_cookie, client_ip, cookie_secure, ensure_owner, hash_password, new_token, now_secs,
+    session_cookie, token_hash, verify_password, verify_turnstile, AdminUser, AuthUser,
     SESSION_TTL_DEFAULT, SESSION_TTL_REMEMBER,
 };
 use crate::engine::SharedEngine;
@@ -794,7 +794,13 @@ async fn register_handler(
     let body = user_json(&user);
     drop(eng);
 
-    Ok(([(header::SET_COOKIE, session_cookie(&token, ttl))], Json(body)))
+    Ok((
+        [(
+            header::SET_COOKIE,
+            session_cookie(&token, ttl, false, cookie_secure(&headers)),
+        )],
+        Json(body),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -859,11 +865,18 @@ async fn login_handler(
     }
     let body = user_json(&user);
 
-    Ok(([(header::SET_COOKIE, session_cookie(&token, ttl))], Json(body)))
+    Ok((
+        [(
+            header::SET_COOKIE,
+            session_cookie(&token, ttl, req.remember, cookie_secure(&headers)),
+        )],
+        Json(body),
+    ))
 }
 
 async fn logout_handler(
     State(engine): State<SharedEngine>,
+    headers: HeaderMap,
     user: AuthUser,
 ) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
     let eng = engine.lock().await;
@@ -871,7 +884,10 @@ async fn logout_handler(
         .delete_session(user.session_id)
         .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     drop(eng);
-    Ok(([(header::SET_COOKIE, clear_cookie())], Json(serde_json::json!({ "ok": true }))))
+    Ok((
+        [(header::SET_COOKIE, clear_cookie(cookie_secure(&headers)))],
+        Json(serde_json::json!({ "ok": true })),
+    ))
 }
 
 async fn me_handler(user: AuthUser) -> Json<serde_json::Value> {
