@@ -104,17 +104,31 @@ export function setLeafContent(
   };
 }
 
-/** Update title of a specific leaf tile without resetting content. */
-export function setLeafTitle(node: SplitNode, targetId: string, title: string): SplitNode {
+/**
+ * Merge params into a tile's content. This is how a pane changes which entity it shows: the params
+ * are the identity, so no title is stored and nothing can drift out of sync.
+ */
+export function setLeafParams(
+  node: SplitNode,
+  targetId: string,
+  patch: Partial<import('./paneRegistry').PaneParams>,
+): SplitNode {
   if (node.type === 'leaf') {
     if (node.id !== targetId || !node.content) return node;
-    if (node.content.title === title) return node;
-    return { ...node, content: { ...node.content, title } };
+    const nextParams = { ...node.content.params, ...patch };
+    const same =
+      Object.keys(nextParams).length === Object.keys(node.content.params).length &&
+      (Object.keys(nextParams) as Array<keyof typeof nextParams>).every(
+        (k) => nextParams[k] === node.content?.params[k],
+      );
+    if (same) return node;
+    const nextContent: TileContent = { kind: node.content.kind, params: nextParams };
+    return { ...node, content: nextContent };
   }
   return {
     ...node,
-    first: setLeafTitle(node.first, targetId, title),
-    second: setLeafTitle(node.second, targetId, title),
+    first: setLeafParams(node.first, targetId, patch),
+    second: setLeafParams(node.second, targetId, patch),
   };
 }
 

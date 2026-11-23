@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
 import { MoreVertical, Settings, X } from 'lucide-react';
-import { formatPaneTitle, type PaneKind, type PaneParams, type TileContent } from './paneRegistry';
+import { paneTitle, type PaneKind, type PaneParams, type TileContent } from './paneRegistry';
 import { EmptyTilePane, PaneRenderer } from './paneComponents';
+import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import type { SplitDirection, SplitNode } from './splitTree';
 
 interface SplitLayoutProps {
@@ -11,7 +12,7 @@ interface SplitLayoutProps {
   onClose: (tileId: string) => void;
   onClear: (tileId: string) => void;
   onSelectContent: (tileId: string, content: TileContent) => void;
-  onSetTitle: (tileId: string, title: string) => void;
+  onSetParams: (tileId: string, patch: Partial<PaneParams>) => void;
   onResize: (splitId: string, ratio: number) => void;
   openTemp: (kind: PaneKind, params?: PaneParams) => void;
 }
@@ -24,7 +25,7 @@ const TileFrame: React.FC<{
   onClose: (tileId: string) => void;
   onClear: (tileId: string) => void;
   onSelectContent: (tileId: string, content: TileContent) => void;
-  onSetTitle: (tileId: string, title: string) => void;
+  onSetParams: (tileId: string, patch: Partial<PaneParams>) => void;
   openTemp: (kind: PaneKind, params?: PaneParams) => void;
 }> = ({
   tileId,
@@ -34,13 +35,17 @@ const TileFrame: React.FC<{
   onClose,
   onClear,
   onSelectContent,
-  onSetTitle,
+  onSetParams,
   openTemp,
 }) => {
   const [actionsHover, setActionsHover] = useState(false);
+  const catalog = useCatalogIndex();
+  const world = useWorldIndex();
 
+  // Always derived from params; never a stored copy (a stored title could keep naming a different
+  // entity than the pane was actually showing).
   const title = content
-    ? content.title ?? formatPaneTitle(content.kind, content.params)
+    ? paneTitle(content.kind, content.params, { catalog, world })
     : '空窗口';
 
   return (
@@ -125,7 +130,8 @@ const TileFrame: React.FC<{
           <PaneRenderer
             kind={content.kind}
             params={content.params}
-            setTitle={(t) => onSetTitle(tileId, t)}
+            setParams={(patch) => onSetParams(tileId, patch)}
+            openInPlace={(kind, params) => onSelectContent(tileId, { kind, params: params ?? {} })}
             openTemp={openTemp}
           />
         ) : (
@@ -151,7 +157,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   onClose,
   onClear,
   onSelectContent,
-  onSetTitle,
+  onSetParams,
   onResize,
   openTemp,
 }) => {
@@ -167,7 +173,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
         onClose={onClose}
         onClear={onClear}
         onSelectContent={onSelectContent}
-        onSetTitle={onSetTitle}
+        onSetParams={onSetParams}
         openTemp={openTemp}
       />
     );
@@ -210,7 +216,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
           onClose={onClose}
           onClear={onClear}
           onSelectContent={onSelectContent}
-          onSetTitle={onSetTitle}
+          onSetParams={onSetParams}
           onResize={onResize}
           openTemp={openTemp}
         />
@@ -233,7 +239,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
           onClose={onClose}
           onClear={onClear}
           onSelectContent={onSelectContent}
-          onSetTitle={onSetTitle}
+          onSetParams={onSetParams}
           onResize={onResize}
           openTemp={openTemp}
         />

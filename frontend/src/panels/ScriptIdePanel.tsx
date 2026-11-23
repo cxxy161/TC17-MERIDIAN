@@ -63,12 +63,22 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
   const viewRef = useRef<EditorView | null>(null);
 
   const dynamicResourceCompletions = useMemo(() => {
-    const items = (catalog?.items ?? []).map((it) => ({
+    const items = catalog?.items ?? [];
+    const valid = items.filter((it) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(`RESOURCE_${it.id.toUpperCase()}`));
+    const constants = valid.map((it) => ({
       label: `RESOURCE_${it.id.toUpperCase()}`,
-      type: 'constant',
-      detail: `${it.name} ("${it.id}")`,
+      type: 'constant' as const,
+      detail: `${it.name} (${JSON.stringify(it.id)})`,
     }));
-    return [...SCREEPS_COMPLETIONS, ...items];
+    // Chinese-name aliases: you know "金属钢材", but not whether the constant is RESOURCE_STEEL or
+    // RESOURCE_BUILDING_MAT. Typing the Chinese name now suggests (and inserts) the right constant.
+    const aliases = valid.map((it) => ({
+      label: it.name,
+      type: 'property' as const,
+      detail: `→ RESOURCE_${it.id.toUpperCase()}`,
+      apply: `RESOURCE_${it.id.toUpperCase()}`,
+    }));
+    return [...SCREEPS_COMPLETIONS, ...constants, ...aliases];
   }, [catalog]);
 
   useEffect(() => {
@@ -76,7 +86,8 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
     if (!host) return;
 
     const screepsSource = (context: CompletionContext) => {
-      const word = context.matchBefore(/[\w.]+/);
+      // CJK included so Chinese item names trigger the alias completions.
+      const word = context.matchBefore(/[\w.\u4e00-\u9fa5]+/);
       if (!word || (word.from === word.to && !context.explicit)) return null;
       return {
         from: word.from,

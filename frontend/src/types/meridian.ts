@@ -66,6 +66,13 @@ export interface ProfessionDef {
   efficiency_bonus: Record<string, number>;
 }
 
+export interface DemandCategoryDef {
+  id: string;
+  name: string;
+  wealth_tier: number;
+  description: string;
+}
+
 export interface ProductionPack {
   schema_version: string;
   meta: {
@@ -74,6 +81,8 @@ export interface ProductionPack {
     ticks_per_day: number;
     tick_seconds: number;
   };
+  /** Optional: newer packs declare the demand category dictionary here. */
+  demand_categories?: DemandCategoryDef[];
   items: ItemDef[];
   buildings: BuildingDef[];
   recipes: RecipeDef[];
@@ -314,16 +323,53 @@ export type IntentPayload =
   | { RepairShip: { ship_id: number } }
   | { BankOp: { planet_id: string; op: 'deposit' | 'withdraw' | 'borrow' | 'repay'; amount: number } };
 
-export const STATION_NAMES: Record<string, string> = {
-  'ST:P1': '灼热矿星轨道站',
-  'ST:P2': '新伊甸轨道站',
-  'ST:P3': '凛冬外星轨道站',
-  'ST:HUB': '中心贸易枢纽站',
-};
+/**
+ * The single hub station is the only entity in this game whose identity is not derived from a
+ * planet. Everything else is derived, so the UI never carries a hand-maintained entity table
+ * (which is what broke as soon as the world grew past three hand-authored planets).
+ */
+export const HUB_STATION_ID = 'ST:HUB';
+export const HUB_STATION_LABEL = '中心贸易枢纽站';
+export const HUB_ORBIT_RADIUS = 1.45;
 
+/** Backend convention: every planet has exactly one orbital station named `ST:<planetId>`. */
+export function stationIdForPlanet(planetId: string): string {
+  return `ST:${planetId}`;
+}
+
+export function planetIdForStation(stationId: string): string | null {
+  return stationId.startsWith('ST:') ? stationId.slice(3) : null;
+}
+
+export function isStationId(loc: string): boolean {
+  return loc.startsWith('ST:');
+}
+
+export function stationLabel(stationId: string, planets?: PlanetSummary[]): string {
+  if (stationId === HUB_STATION_ID) return HUB_STATION_LABEL;
+  const pid = planetIdForStation(stationId);
+  const planet = pid ? planets?.find((p) => p.id === pid) : undefined;
+  if (planet) return `${planet.name}轨道站`;
+  return stationId;
+}
+
+/**
+ * Human label for any trade/stock location. Unknown ids are returned verbatim so callers can
+ * detect them via {@link locationExists} and render an explicit "unknown" state instead of
+ * silently pretending the location is empty.
+ */
 export function locationLabel(loc: string, planets?: PlanetSummary[]): string {
-  if (STATION_NAMES[loc]) return STATION_NAMES[loc];
+  if (isStationId(loc)) return stationLabel(loc, planets);
   const p = planets?.find((x) => x.id === loc);
   if (p) return `${p.name}地表`;
   return loc;
+}
+
+export function locationExists(loc: string, planets?: PlanetSummary[]): boolean {
+  if (loc === HUB_STATION_ID) return true;
+  if (isStationId(loc)) {
+    const pid = planetIdForStation(loc);
+    return !!pid && !!planets?.some((p) => p.id === pid);
+  }
+  return !!planets?.some((p) => p.id === loc);
 }

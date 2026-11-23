@@ -31,7 +31,7 @@ const StatBarRow: React.FC<{
   </div>
 );
 
-export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
+export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
@@ -49,8 +49,7 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
 
   const switchPlanet = (pid: string) => {
     setPlanetId(pid);
-    const found = planets.find((x) => x.id === pid);
-    setTitle(`行星 · ${found?.name ?? pid}`);
+    setParams({ planetId: pid });
   };
 
   if (!pSum) {

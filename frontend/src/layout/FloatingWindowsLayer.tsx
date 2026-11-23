@@ -1,11 +1,12 @@
 import React from 'react';
 import { GripHorizontal, X } from 'lucide-react';
 import {
-  formatPaneTitle,
+  paneTitle,
   type FloatingWindowItem,
   type PaneKind,
   type PaneParams,
 } from './paneRegistry';
+import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { PaneRenderer } from './paneComponents';
 
 interface FloatingWindowsLayerProps {
@@ -14,7 +15,8 @@ interface FloatingWindowsLayerProps {
   onMove: (id: string, x: number, y: number) => void;
   onResize: (id: string, w: number, h: number) => void;
   onClose: (id: string) => void;
-  onSetTitle: (id: string, title: string) => void;
+  onSetParams: (id: string, patch: Partial<PaneParams>) => void;
+  onReplaceContent: (id: string, kind: PaneKind, params: PaneParams) => void;
   onHoverTile: (tileId: string | null) => void;
   onDropOnTile: (winId: string, tileId: string) => void;
   openTemp: (kind: PaneKind, params?: PaneParams) => void;
@@ -41,15 +43,19 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
   onMove,
   onResize,
   onClose,
-  onSetTitle,
+  onSetParams,
+  onReplaceContent,
   onHoverTile,
   onDropOnTile,
   openTemp,
 }) => {
+  const catalog = useCatalogIndex();
+  const world = useWorldIndex();
+
   return (
     <>
       {windows.map((win) => {
-        const title = win.title ?? formatPaneTitle(win.kind, win.params);
+        const title = paneTitle(win.kind, win.params, { catalog, world });
 
         const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
           if ((e.target as HTMLElement).closest('button')) return;
@@ -154,7 +160,8 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
               <PaneRenderer
                 kind={win.kind}
                 params={win.params}
-                setTitle={(t) => onSetTitle(win.id, t)}
+                setParams={(patch) => onSetParams(win.id, patch)}
+                openInPlace={(kind, params) => onReplaceContent(win.id, kind, params ?? {})}
                 openTemp={openTemp}
               />
             </div>

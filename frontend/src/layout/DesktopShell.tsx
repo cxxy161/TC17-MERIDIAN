@@ -11,46 +11,62 @@ import {
   Globe2,
   Landmark,
   Layers,
+  PackageSearch,
   Plus,
   Rocket,
   ShoppingBag,
   Terminal,
   Trophy,
+  X,
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
 import { moneyToCredits } from '../types/meridian';
-import type { FloatingWindowItem, PaneKind, PaneParams, TileContent } from './paneRegistry';
+import {
+  focusDefaults,
+  paneTitle,
+  type FloatingWindowItem,
+  type PaneKind,
+  type PaneParams,
+  type TileContent,
+} from './paneRegistry';
 import {
   clearLeaf,
   closeLeaf,
   makeLeaf,
   setLeafContent,
-  setLeafTitle,
+  setLeafParams,
   splitLeaf,
   updateSplitRatio,
   type SplitDirection,
   type SplitNode,
 } from './splitTree';
 import {
+  hydrateWorkspaces,
   loadSavedWorkspaces,
   persistWorkspaces,
   type WorkspaceEntry,
 } from './workspaces';
+import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SplitLayout } from './SplitLayout';
 import { FloatingWindowsLayer } from './FloatingWindowsLayer';
 import { CommandPalette } from './CommandPalette';
 
-const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode; params?: PaneParams }> = [
+/**
+ * Rail entries carry no entity ids: what they open is resolved from the player's last focused
+ * entity (or from the live world the first time). "K线" no longer always opens steel@HUB.
+ */
+const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode }> = [
   { kind: 'orbit', label: '星图', icon: <Compass className="w-4 h-4" /> },
-  { kind: 'planet', label: '行星', icon: <Globe2 className="w-4 h-4" />, params: { planetId: 'P2' } },
-  { kind: 'demand', label: '需求', icon: <ShoppingBag className="w-4 h-4" />, params: { planetId: 'P2' } },
-  { kind: 'factory', label: '产线', icon: <Factory className="w-4 h-4" />, params: { planetId: 'P1' } },
-  { kind: 'cargo', label: '仓库', icon: <Box className="w-4 h-4" />, params: { locationId: 'P1' } },
+  { kind: 'planet', label: '行星', icon: <Globe2 className="w-4 h-4" /> },
+  { kind: 'demand', label: '需求', icon: <ShoppingBag className="w-4 h-4" /> },
+  { kind: 'factory', label: '产线', icon: <Factory className="w-4 h-4" /> },
+  { kind: 'cargo', label: '仓库', icon: <Box className="w-4 h-4" /> },
   { kind: 'fleet', label: '舰队', icon: <Rocket className="w-4 h-4" /> },
-  { kind: 'ticker', label: '行情', icon: <Activity className="w-4 h-4" />, params: { stationId: 'ST:HUB' } },
-  { kind: 'chart', label: 'K线', icon: <CandlestickChart className="w-4 h-4" />, params: { stationId: 'ST:HUB', itemId: 'steel' } },
-  { kind: 'orderbook', label: '盘口', icon: <Layers className="w-4 h-4" />, params: { stationId: 'ST:HUB', itemId: 'steel' } },
-  { kind: 'treasury', label: '银行', icon: <Landmark className="w-4 h-4" />, params: { planetId: 'P1' } },
+  { kind: 'items', label: '物品', icon: <PackageSearch className="w-4 h-4" /> },
+  { kind: 'ticker', label: '行情', icon: <Activity className="w-4 h-4" /> },
+  { kind: 'chart', label: 'K线', icon: <CandlestickChart className="w-4 h-4" /> },
+  { kind: 'orderbook', label: '盘口', icon: <Layers className="w-4 h-4" /> },
+  { kind: 'treasury', label: '银行', icon: <Landmark className="w-4 h-4" /> },
   { kind: 'ranking', label: '排行', icon: <Trophy className="w-4 h-4" /> },
   { kind: 'files', label: '文件', icon: <FolderTree className="w-4 h-4" /> },
   { kind: 'script', label: '脚本', icon: <Code2 className="w-4 h-4" /> },
@@ -58,12 +74,59 @@ const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode
   { kind: 'console', label: '控制台', icon: <Terminal className="w-4 h-4" /> },
 ];
 
+const MAX_FLOATING_WINDOWS = 10;
+
+/**
+ * Fill any missing entity for a pane that is being opened, so the pane's title and its content agree
+ * from the first frame. Uses only the live world/catalog — no default entity is ever hardcoded.
+ */
+function fillPaneDefaults(
+  kind: PaneKind,
+  params: PaneParams,
+  world: ReturnType<typeof useWorldIndex>,
+  catalog: ReturnType<typeof useCatalogIndex>,
+): PaneParams {
+  const out: PaneParams = { ...params };
+  const hub = world.stations.find((s) => s.isHub)?.id ?? world.stations[0]?.id ?? null;
+  const planet = world.homePlanetId ?? world.planets[0]?.id ?? null;
+  if (!out.stationId && (kind === 'ticker' || kind === 'chart' || kind === 'orderbook')) {
+    if (hub) out.stationId = hub;
+  }
+  if (!out.itemId && (kind === 'chart' || kind === 'orderbook' || kind === 'item')) {
+    const first = catalog.items[0]?.id;
+    if (first) out.itemId = first;
+  }
+  if (!out.planetId && (kind === 'planet' || kind === 'demand' || kind === 'factory' || kind === 'treasury')) {
+    if (planet) out.planetId = planet;
+  }
+  if (!out.locationId && kind === 'cargo') {
+    const loc = planet ?? hub;
+    if (loc) out.locationId = loc;
+  }
+  return out;
+}
+
+/** Distinct staggered slots so several floating windows never land exactly on top of each other. */
+function slotPosition(index: number, width: number, height: number): { x: number; y: number } {
+  const cols = 3;
+  const i = index % 12;
+  const col = i % cols;
+  const row = Math.floor(i / cols);
+  return {
+    x: Math.max(12, Math.min(window.innerWidth - width - 12, 64 + col * 46)),
+    y: Math.max(44, Math.min(window.innerHeight - height - 12, 52 + row * 38)),
+  };
+}
+
 export const DesktopShell: React.FC = () => {
   const init = useGameStore((s) => s.init);
   const state = useGameStore((s) => s.state);
   const wsStatus = useGameStore((s) => s.wsStatus);
   const lastError = useGameStore((s) => s.lastError);
   const clearError = useGameStore((s) => s.clearError);
+  const touchFocus = useGameStore((s) => s.touchFocus);
+  const catalog = useCatalogIndex();
+  const world = useWorldIndex();
 
   const initialWs = useRef(loadSavedWorkspaces());
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialWs.current.list);
@@ -73,6 +136,14 @@ export const DesktopShell: React.FC = () => {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addingWs, setAddingWs] = useState(false);
   const [newWsName, setNewWsName] = useState('');
+  const [windowListOpen, setWindowListOpen] = useState(false);
+  const hydratedRef = useRef(false);
+  const workspaceRef = useRef(workspaces);
+  workspaceRef.current = workspaces;
+  const worldRef = useRef(world);
+  worldRef.current = world;
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
 
   const topZRef = useRef(40);
   const floatSeqRef = useRef(1);
@@ -80,6 +151,27 @@ export const DesktopShell: React.FC = () => {
   useEffect(() => {
     void init();
   }, [init]);
+
+  // Fill preset panes with real entities once the world is available, instead of shipping
+  // "P2"/"steel" constants that stop existing the moment the world grows.
+  const hubStationId = world.stations.find((s) => s.isHub)?.id ?? world.stations[0]?.id ?? null;
+  const defaultItemId =
+    catalog.items.find((i) => (world.quotesByItem.get(i.id)?.length ?? 0) > 0)?.id ??
+    catalog.items[0]?.id ??
+    null;
+
+  useEffect(() => {
+    if (!world.ready) return;
+    hydratedRef.current = true;
+    const ctx = { homePlanetId: world.homePlanetId, defaultStationId: hubStationId, defaultItemId };
+    setWorkspaces((prev) => {
+      const next = hydrateWorkspaces(prev, ctx);
+      if (next === prev) return prev;
+      persistWorkspaces(next, activeWsId);
+      return next;
+    });
+    // Deps are primitives: this only re-runs when the resolved defaults actually change.
+  }, [world.ready, world.homePlanetId, hubStationId, defaultItemId, activeWsId, workspaces]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -105,27 +197,41 @@ export const DesktopShell: React.FC = () => {
     [activeWsId],
   );
 
-  const openTemp = useCallback((kind: PaneKind, params: PaneParams = {}) => {
-    const seq = floatSeqRef.current++;
-    const z = ++topZRef.current;
-    const offset = (seq % 6) * 26;
-    const width = kind === 'script' ? 680 : kind === 'chart' || kind === 'orbit' ? 520 : 460;
-    const height = kind === 'script' ? 460 : 380;
-
-    setFloatingWindows((prev) => [
-      ...prev,
-      {
-        id: `float-${Date.now()}-${seq}`,
+  const openTemp = useCallback(
+    (kind: PaneKind, params: PaneParams = {}) => {
+      const seq = floatSeqRef.current++;
+      const z = ++topZRef.current;
+      const focus = useGameStore.getState().lastFocus;
+      const resolved = fillPaneDefaults(
         kind,
-        params,
-        x: Math.min(window.innerWidth - width - 20, 120 + offset),
-        y: Math.min(window.innerHeight - height - 20, 72 + offset),
-        w: width,
-        h: height,
-        z,
-      },
-    ]);
-  }, []);
+        { ...focusDefaults(kind, focus), ...params },
+        worldRef.current,
+        catalogRef.current,
+      );
+      const width = kind === 'script' ? 680 : kind === 'chart' || kind === 'orbit' ? 520 : 460;
+      const height = kind === 'script' ? 460 : 380;
+
+      setFloatingWindows((prev) => {
+        const next = [
+          ...prev,
+          {
+            id: `float-${Date.now()}-${seq}`,
+            kind,
+            params: resolved,
+            // Stagger, but never beyond the six visible offsets: pick the least-used slot.
+            ...slotPosition(prev.length, width, height),
+            w: width,
+            h: height,
+            z,
+          },
+        ];
+        // Bounded: past a handful of windows they overlap beyond recovery and each one is a full
+        // pane mount with its own data subscriptions.
+        return next.length > MAX_FLOATING_WINDOWS ? next.slice(next.length - MAX_FLOATING_WINDOWS) : next;
+      });
+    },
+    [],
+  );
 
   const bringFloatToFront = useCallback((id: string) => {
     const z = ++topZRef.current;
@@ -144,9 +250,33 @@ export const DesktopShell: React.FC = () => {
     setFloatingWindows((prev) => prev.filter((w) => w.id !== id));
   }, []);
 
-  const setFloatTitle = useCallback((id: string, title: string) => {
-    setFloatingWindows((prev) => prev.map((w) => (w.id === id ? { ...w, title } : w)));
-  }, []);
+  const setFloatParams = useCallback(
+    (id: string, patch: Partial<PaneParams>) => {
+      touchFocus(patch);
+      setFloatingWindows((prev) =>
+        prev.map((w) => {
+          if (w.id !== id) return w;
+          return { ...w, title: undefined, params: { ...w.params, ...patch } };
+        }),
+      );
+    },
+    [touchFocus],
+  );
+
+  const replaceFloat = useCallback((id: string, kind: PaneKind, params: PaneParams) => {
+    touchFocus(params);
+    setFloatingWindows((prev) =>
+      prev.map((w) => (w.id === id ? { ...w, kind, params, title: undefined } : w)),
+    );
+  }, [touchFocus]);
+
+  const setTileParams = useCallback(
+    (tileId: string, patch: Partial<PaneParams>) => {
+      touchFocus(patch);
+      updateActiveTree((tree) => setLeafParams(tree, tileId, patch));
+    },
+    [touchFocus, updateActiveTree],
+  );
 
   const dockFloatToTile = useCallback(
     (winId: string, tileId: string) => {
@@ -155,8 +285,7 @@ export const DesktopShell: React.FC = () => {
         if (!win) return prev;
         const content: TileContent = {
           kind: win.kind,
-          params: win.params,
-          title: win.title,
+          params: fillPaneDefaults(win.kind, win.params, worldRef.current, catalogRef.current),
         };
         updateActiveTree((tree) => setLeafContent(tree, tileId, content));
         return prev.filter((w) => w.id !== winId);
@@ -286,8 +415,15 @@ export const DesktopShell: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1.5 pl-2 border-l border-slate-800">
+            <button
+              onClick={() => setWindowListOpen((v) => !v)}
+              className="pill-btn whitespace-nowrap"
+              title="列出/切换已打开的临时窗口"
+            >
+              {floatingWindows.length} 个窗口
+            </button>
             <button onClick={() => setPaletteOpen(true)} className="cta-blue whitespace-nowrap">
-              ⌘K 临时窗口
+              ⌘K 搜索
             </button>
           </div>
         </div>
@@ -309,7 +445,7 @@ export const DesktopShell: React.FC = () => {
             {RAIL_BUTTONS.map((btn) => (
               <button
                 key={btn.kind}
-                onClick={() => openTemp(btn.kind, btn.params)}
+                onClick={() => openTemp(btn.kind)}
                 className="w-9 h-9 rounded-[3px] flex flex-col items-center justify-center text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/30 transition-colors"
                 title={`打开临时悬浮窗：${btn.label}`}
               >
@@ -332,11 +468,19 @@ export const DesktopShell: React.FC = () => {
               onClose={(tileId) => updateActiveTree((tree) => closeLeaf(tree, tileId))}
               onClear={(tileId) => updateActiveTree((tree) => clearLeaf(tree, tileId))}
               onSelectContent={(tileId, content) =>
-                updateActiveTree((tree) => setLeafContent(tree, tileId, content))
+                updateActiveTree((tree) =>
+                  setLeafContent(tree, tileId, {
+                    kind: content.kind,
+                    params: fillPaneDefaults(
+                      content.kind,
+                      content.params,
+                      worldRef.current,
+                      catalogRef.current,
+                    ),
+                  }),
+                )
               }
-              onSetTitle={(tileId, title) =>
-                updateActiveTree((tree) => setLeafTitle(tree, tileId, title))
-              }
+              onSetParams={setTileParams}
               onResize={(splitId, ratio) =>
                 updateActiveTree((tree) => updateSplitRatio(tree, splitId, ratio))
               }
@@ -353,7 +497,8 @@ export const DesktopShell: React.FC = () => {
         onMove={moveFloat}
         onResize={resizeFloat}
         onClose={closeFloat}
-        onSetTitle={setFloatTitle}
+        onSetParams={setFloatParams}
+        onReplaceContent={replaceFloat}
         onHoverTile={setDropTargetTileId}
         onDropOnTile={dockFloatToTile}
         openTemp={openTemp}
@@ -364,6 +509,42 @@ export const DesktopShell: React.FC = () => {
         onClose={() => setPaletteOpen(false)}
         openTemp={openTemp}
       />
+
+      {windowListOpen && (
+        <div className="fixed right-2 top-11 z-[9999] w-64 bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden">
+          <div className="px-2 py-1.5 border-b border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+            <span>临时窗口（{floatingWindows.length}/{MAX_FLOATING_WINDOWS}）</span>
+            <button onClick={() => setWindowListOpen(false)} className="hover:text-white">
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            {floatingWindows.length === 0 && (
+              <div className="px-2 py-3 text-[10px] text-slate-500">没有打开的临时窗口</div>
+            )}
+            {floatingWindows.map((win) => (
+              <div key={win.id} className="px-2 py-1 flex items-center justify-between gap-2 hover:bg-sky-500/10">
+                <button
+                  onClick={() => {
+                    bringFloatToFront(win.id);
+                    setWindowListOpen(false);
+                  }}
+                  className="text-[11px] text-sky-200 truncate text-left"
+                >
+                  {paneTitle(win.kind, win.params, { catalog, world })}
+                </button>
+                <button
+                  onClick={() => closeFloat(win.id)}
+                  className="text-slate-500 hover:text-rose-300 shrink-0"
+                  title="关闭"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

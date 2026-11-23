@@ -17,7 +17,9 @@ import {
 import { api } from '../api/client';
 import { useGameStore, type QuoteSample } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { STATION_NAMES, type CandleRow } from '../types/meridian';
+import type { CandleRow } from '../types/meridian';
+import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
+import { SearchSelect, type PickerOption } from '../components/SearchSelect';
 
 // Exact UTC midnight (2024-01-01 00:00:00 UTC) so minute-stepped ticks align cleanly.
 const BASE_TS = 1_704_067_200;
@@ -325,28 +327,50 @@ function hasHistoricalRealChange(
   return false;
 }
 
-export const ChartPanel: React.FC<PaneProps> = ({
-  params,
-  setTitle,
-  openTemp,
-}) => {
+export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useGameStore((s) => s.catalog);
   const state = useGameStore((s) => s.state);
   const watchBook = useGameStore((s) => s.watchBook);
   const books = useGameStore((s) => s.books);
   const quoteHistory = useGameStore((s) => s.quoteHistory);
+  const catalogIdx = useCatalogIndex();
+  const world = useWorldIndex();
 
-  const [stationId, setStationId] = useState<string>(params.stationId || 'ST:HUB');
-  const [itemId, setItemId] = useState<string>(params.itemId || 'steel');
+  // Params are the identity of this pane: no local copy, no hardcoded default symbol.
+  const stationId =
+    params.stationId ?? world.stations.find((s) => s.isHub)?.id ?? world.stations[0]?.id ?? '';
+  const itemId = params.itemId ?? catalogIdx.items[0]?.id ?? '';
   const [period, setPeriod] = useState<number>(1);
   const [hoverBar, setHoverBar] = useState<HoverReadout | null>(null);
   const [historySlice, setHistorySlice] = useState<HistorySlice | null>(null);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (params.stationId) setStationId(params.stationId);
-    if (params.itemId) setItemId(params.itemId);
-  }, [params.stationId, params.itemId]);
+  const setStation = useCallback((id: string) => setParams({ stationId: id }), [setParams]);
+  const setItem = useCallback((id: string) => setParams({ itemId: id }), [setParams]);
+
+  const stationOptions = useMemo<PickerOption[]>(
+    () =>
+      world.stations.map((s) => ({
+        id: s.id,
+        label: s.label,
+        sub: s.isHub ? '中心枢纽' : undefined,
+        badge: s.isHub ? '枢纽' : undefined,
+        keywords: s.id,
+      })),
+    [world.stations],
+  );
+
+  const itemOptions = useMemo<PickerOption[]>(
+    () =>
+      catalogIdx.items.map((it) => ({
+        id: it.id,
+        label: it.name,
+        sub: catalogIdx.categoryName(it.demand_category) ?? undefined,
+        keywords: `${it.id} ${it.tags.join(' ')} ${catalogIdx.roleLabel(it.role)}`,
+        facets: { category: it.demand_category ?? undefined, role: it.role },
+      })),
+    [catalogIdx],
+  );
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -368,6 +392,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
   historySliceRef.current = historySlice;
 
   useEffect(() => {
+    if (!stationId || !itemId) return;
     const unwatch = watchBook(stationId, itemId);
     return unwatch;
   }, [stationId, itemId, watchBook]);
@@ -377,11 +402,7 @@ export const ChartPanel: React.FC<PaneProps> = ({
     [catalog?.items],
   );
 
-  useEffect(() => {
-    const itemName = itemMap.get(itemId)?.name ?? itemId;
-    const stName = STATION_NAMES[stationId] ?? stationId;
-    setTitle(`K线 · ${itemName} @ ${stName}`);
-  }, [stationId, itemId, itemMap, setTitle]);
+
 
   // Clear stale hover readout whenever switching symbol/station/period
   useEffect(() => {
@@ -466,6 +487,9 @@ export const ChartPanel: React.FC<PaneProps> = ({
     let cancelled = false;
     const seq = ++reqSeqRef.current;
     const step = Math.max(1, period);
+
+    // Nothing selected yet (fresh pane / removed entity) — show the picker instead of fetching.
+    if (!stationId || !itemId) return;
 
     // Avoid redundant initial fetch when slice already matches this key
     const existing = historySliceRef.current;
@@ -1048,32 +1072,26 @@ export const ChartPanel: React.FC<PaneProps> = ({
     <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
       <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <select
+          <SearchSelect
+            options={stationOptions}
             value={stationId}
-            onChange={(e) => setStationId(e.target.value)}
-            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
-          >
-            {Object.entries(STATION_NAMES).map(([id, name]) => (
-              <option key={id} value={id}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <select
+            onChange={setStation}
+            emptyLabel="选择站点"
+            placeholder="搜索站点…"
+            title="切换站点"
+          />
+          <SearchSelect
+            options={itemOptions}
             value={itemId}
-            onChange={(e) => setItemId(e.target.value)}
-            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm text-sky-300"
-          >
-            {(catalog?.items ?? []).length === 0 ? (
-              <option value={itemId}>{itemId}</option>
-            ) : (
-              (catalog?.items ?? []).map((it) => (
-                <option key={it.id} value={it.id}>
-                  {it.name}
-                </option>
-              ))
-            )}
-          </select>
+            onChange={setItem}
+            emptyLabel="选择物品"
+            placeholder="搜索物品名 / id / 标签…"
+            facets={[
+              { key: 'category', label: '类别', values: catalogIdx.facets.category },
+              { key: 'role', label: '角色', values: catalogIdx.facets.role },
+            ]}
+            title="切换物品"
+          />
         </div>
 
         <div className="flex items-center gap-1">

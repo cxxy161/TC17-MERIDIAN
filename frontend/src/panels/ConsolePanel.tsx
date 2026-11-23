@@ -1,6 +1,42 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useGameStore, type LogHistoryLine } from '../store/useGameStore';
+import type { ProductionPack } from '../types/meridian';
+
+/**
+ * The `RESOURCE_*` preamble used to be rebuilt and re-compiled on every single console evaluation,
+ * so a big pack (thousands of items) made every line feel slow. It only depends on the pack, so it
+ * is cached per pack. Ids that are not valid JS identifiers are skipped (they used to produce a
+ * SyntaxError that broke the whole evaluation), and a name lookup is provided for discoverability.
+ */
+const preambleCache = new WeakMap<ProductionPack, string>();
+
+function isValidIdent(id: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id);
+}
+
+function buildResourcePreamble(catalog: ProductionPack | null): string {
+  if (!catalog) return 'const RESOURCES_ALL = []; const RESOURCES = {}; const itemIdByName = () => null;';
+  const cached = preambleCache.get(catalog);
+  if (cached) return cached;
+
+  const ids = catalog.items.map((i) => i.id);
+  const constLines = catalog.items
+    .filter((it) => isValidIdent(`RESOURCE_${it.id.toUpperCase()}`))
+    .map((it) => `const RESOURCE_${it.id.toUpperCase()} = ${JSON.stringify(it.id)};`)
+    .join('\n');
+  const byName = Object.fromEntries(catalog.items.map((i) => [i.name, i.id]));
+  const byId = Object.fromEntries(catalog.items.map((i) => [i.id, i.name]));
+  const preamble = [
+    constLines,
+    `const RESOURCES_ALL = ${JSON.stringify(ids)};`,
+    `const RESOURCES = ${JSON.stringify(byId)};`,
+    `const itemIdByName = (n) => (${JSON.stringify(byName)})[n] ?? (${JSON.stringify(byId)})[n] ?? null;`,
+    'const OK = 0, ORDER_BUY = "buy", ORDER_SELL = "sell";',
+  ].join('\n');
+  preambleCache.set(catalog, preamble);
+  return preamble;
+}
 import type { PaneProps } from '../layout/paneRegistry';
 import { moneyToCredits } from '../types/meridian';
 import {
@@ -350,26 +386,13 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
     const beforeMem = JSON.stringify(Memory);
 
     try {
-      const resourceConstLines = (catalog?.items ?? [])
-        .map((it) => `const RESOURCE_${it.id.toUpperCase()} = ${JSON.stringify(it.id)};`)
-        .join('\n');
-      const wrapped = `
-        ${resourceConstLines}
-        const RESOURCES_ALL = ${JSON.stringify((catalog?.items ?? []).map((i) => i.id))};
-        const OK = 0, ORDER_BUY = "buy", ORDER_SELL = "sell";
-        return (${raw});
-      `;
+      const preamble = buildResourcePreamble(catalog);
       let result: unknown;
       try {
-        const fn = new Function('Game', 'Memory', 'console', wrapped);
+        const fn = new Function('Game', 'Memory', 'console', `${preamble}\nreturn (${raw});`);
         result = fn(Game, Memory, fakeConsole);
       } catch {
-        const stmtFn = new Function(
-          'Game',
-          'Memory',
-          'console',
-          `${resourceConstLines}\nconst RESOURCES_ALL = ${JSON.stringify((catalog?.items ?? []).map((i) => i.id))};\n${raw}`,
-        );
+        const stmtFn = new Function('Game', 'Memory', 'console', `${preamble}\n${raw}`);
         result = stmtFn(Game, Memory, fakeConsole);
       }
 

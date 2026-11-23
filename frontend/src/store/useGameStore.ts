@@ -21,14 +21,28 @@ export interface QuoteSample {
   price: number;
 }
 
+export interface FocusState {
+  planetId?: string;
+  locationId?: string;
+  stationId?: string;
+  itemId?: string;
+}
+
+/**
+ * Only the books someone is actually watching get a price series. Previously every station/item
+ * pair in the world accumulated 500 samples, which is O(stations × items × 500) of retained memory
+ * for data no panel ever read.
+ */
 function mergeQuoteHistory(
   prev: Record<string, QuoteSample[]>,
   state: StateResponse,
+  watched?: Record<string, unknown>,
 ): Record<string, QuoteSample[]> {
-  const next: Record<string, QuoteSample[]> = { ...prev };
+  const next: Record<string, QuoteSample[]> = watched ? {} : { ...prev };
   const t = state.tick;
   for (const row of state.market_tickers ?? []) {
     const key = `${row.station_id}::${row.item_id}`;
+    if (watched && !(key in watched)) continue;
     const arr = next[key] ?? [];
     const last = arr[arr.length - 1];
     if (!last || t < last.tick) {
@@ -77,6 +91,9 @@ interface GameStore {
   quoteHistory: Record<string, QuoteSample[]>;
   watchedBooks: Record<string, { stationId: string; itemId: string; refs: number }>;
   companyId: string;
+  /** Last entity the player interacted with, used to open new panes without hardcoded defaults. */
+  lastFocus: FocusState;
+  touchFocus: (patch: FocusState) => void;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   consoleHistory: LogHistoryLine[];
   lastError: string | null;
@@ -110,6 +127,9 @@ let reconnectTimer: number | null = null;
 let tickSyncInFlight = false;
 let tickSyncPending = false;
 let bookSeqCounter = 0;
+let bookRotation = 0;
+/** Upper bound of book refreshes started in a single tick. */
+const MAX_BOOK_FETCH_PER_TICK = 6;
 const latestBookSeq: Record<string, number> = {};
 
 export const useGameStore = create<GameStore>((set, get) => ({
@@ -124,6 +144,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   quoteHistory: {},
   watchedBooks: {},
   companyId: 'player1',
+  lastFocus: {},
   wsStatus: 'connecting',
   consoleHistory: [],
   lastError: null,
@@ -140,7 +161,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         catalog,
         state,
         scripts,
-        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state),
+        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
         draftModules: prev.scriptDirty ? prev.draftModules : mods,
         activeScriptModule: mods[prev.activeScriptModule] !== undefined ? prev.activeScriptModule : (mods.main !== undefined ? 'main' : Object.keys(mods)[0] ?? 'main'),
         lastError: null,
@@ -173,7 +194,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
               return {
                 state: initState,
                 books: rolledBack ? {} : prev.books,
-                quoteHistory: mergeQuoteHistory(rolledBack ? {} : prev.quoteHistory, initState),
+                quoteHistory: mergeQuoteHistory(
+                  rolledBack ? {} : prev.quoteHistory,
+                  initState,
+                  prev.watchedBooks,
+                ),
               };
             });
             return;
@@ -220,7 +245,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
               do {
                 tickSyncPending = false;
                 const companyId = get().companyId;
-                const watched = Object.values(get().watchedBooks);
+                // Cap the per-tick fanout: one HTTP request per watched book per tick does not
+                // scale past a handful of panes, so rotate through the watched set instead.
+                const allWatched = Object.values(get().watchedBooks);
+                const budget = MAX_BOOK_FETCH_PER_TICK;
+                const offset = allWatched.length > budget ? bookRotation++ % allWatched.length : 0;
+                const watched =
+                  allWatched.length <= budget
+                    ? allWatched
+                    : [...allWatched.slice(offset), ...allWatched.slice(0, offset)].slice(0, budget);
                 const bookSeqs = watched.map((w) => {
                   const key = `${w.stationId}::${w.itemId}`;
                   const seq = ++bookSeqCounter;
@@ -260,6 +293,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
                     quoteHistory: mergeQuoteHistory(
                       rolledBack ? {} : prev.quoteHistory,
                       nextState,
+                      prev.watchedBooks,
                     ),
                     scripts:
                       prev.scripts && nextState.last_player_output
@@ -290,7 +324,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const state = await api.getState(get().companyId);
       set((prev) => ({
         state,
-        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state),
+        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
         scripts:
           prev.scripts && state.last_player_output
             ? {
@@ -546,6 +580,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     })),
 
   clearConsole: () => set({ consoleHistory: [] }),
+  touchFocus: (patch) =>
+    set((prev) => {
+      const next = { ...prev.lastFocus };
+      let changed = false;
+      for (const [k, v] of Object.entries(patch) as Array<[keyof FocusState, string | undefined]>) {
+        if (v && next[k] !== v) {
+          next[k] = v;
+          changed = true;
+        }
+      }
+      return changed ? { lastFocus: next } : {};
+    }),
+
   setCompanyId: (cid) => {
     set({ companyId: cid });
     void get().refreshState();

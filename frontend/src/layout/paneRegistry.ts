@@ -1,4 +1,5 @@
-import { STATION_NAMES } from '../types/meridian';
+import type { CatalogIndex } from '../entities/catalogIndex';
+import type { WorldIndex } from '../entities/worldIndex';
 
 export type PaneKind =
   | 'orbit'
@@ -10,6 +11,8 @@ export type PaneKind =
   | 'ticker'
   | 'chart'
   | 'orderbook'
+  | 'items'
+  | 'item'
   | 'treasury'
   | 'ranking'
   | 'files'
@@ -22,17 +25,26 @@ export interface PaneParams {
   locationId?: string;
   stationId?: string;
   itemId?: string;
+  buildingId?: string;
+  recipeId?: string;
 }
 
 export interface PaneProps {
   params: PaneParams;
-  setTitle: (title: string) => void;
+  /**
+   * The pane's params are its identity. Panels must write entity changes here instead of keeping a
+   * private copy in local state, so titles, deep links and restored workspaces all stay truthful.
+   */
+  setParams: (patch: Partial<PaneParams>) => void;
+  /** Replace this pane's content in place (drill down without spawning another window). */
+  openInPlace: (kind: PaneKind, params?: PaneParams) => void;
   openTemp: (kind: PaneKind, params?: PaneParams) => void;
 }
 
 export interface TileContent {
   kind: PaneKind;
   params: PaneParams;
+  /** @deprecated Titles are derived from `(kind, params)`; kept only to read old saved workspaces. */
   title?: string;
 }
 
@@ -40,6 +52,7 @@ export interface FloatingWindowItem {
   id: string;
   kind: PaneKind;
   params: PaneParams;
+  /** @deprecated see TileContent.title */
   title?: string;
   x: number;
   y: number;
@@ -52,72 +65,85 @@ export interface PaneMeta {
   kind: PaneKind;
   label: string;
   description: string;
-  defaultParams?: PaneParams;
+  /** Grouping for the command palette / empty-tile picker. */
+  group: '观察' | '生产' | '贸易' | '财务' | '开发';
+  keywords?: string;
 }
 
 export const PANE_CATALOG: PaneMeta[] = [
-  { kind: 'orbit', label: '星系轨道雷达', description: '观察行星实时公转与中心枢纽相对位置' },
-  { kind: 'planet', label: '行星遥测', description: '查看星球信息、环境储备与 3D 球体地貌', defaultParams: { planetId: 'P2' } },
-  { kind: 'demand', label: '城市需求', description: '查看星球本回合城市消费挂单需求与本地报价', defaultParams: { planetId: 'P2' } },
-  { kind: 'factory', label: '工厂产线', description: '管理地块槽位、建筑建造与热切配方', defaultParams: { planetId: 'P1' } },
-  { kind: 'cargo', label: '仓库库存', description: '查看地表、行星轨道站或中心枢纽库存', defaultParams: { locationId: 'P1' } },
-  { kind: 'fleet', label: '舰队调度', description: '飞船状态、混装派船运输与修船' },
-  { kind: 'ticker', label: '全站行情', description: '全品类买一/卖一/最新价与 50 回合量', defaultParams: { stationId: 'ST:HUB' } },
-  { kind: 'chart', label: 'K线图', description: '蜡烛图、均线与成交量（可多开并排盯盘）', defaultParams: { stationId: 'ST:HUB', itemId: 'steel' } },
-  { kind: 'orderbook', label: '盘口深度', description: '实时买卖深度、成交流水与手工限价下单', defaultParams: { stationId: 'ST:HUB', itemId: 'steel' } },
-  { kind: 'treasury', label: '央行与财务', description: '现金、储蓄、借贷与行星央行存贷操作', defaultParams: { planetId: 'P1' } },
-  { kind: 'ranking', label: '势力排行', description: '玩家与演化 NPC 净资产排名及货币守恒审计' },
-  { kind: 'files', label: '代码文件', description: '类 VS Code 文件夹与脚本模块树管理' },
-  { kind: 'script', label: '脚本编辑器', description: 'Screeps 风格多模块 JS 策略 IDE 与热重载' },
-  { kind: 'memory', label: 'Memory 内存', description: '独立查看、搜索与编辑 128KB 持久化 JSON' },
-  { kind: 'console', label: '控制台', description: 'F12 交互式 JS 命令行与沙盒实时日志流' },
+  { kind: 'orbit', label: '星系轨道雷达', description: '观察行星公转与中心枢纽相对位置', group: '观察' },
+  { kind: 'planet', label: '行星遥测', description: '星球信息、环境储备与 3D 地貌', group: '观察' },
+  { kind: 'demand', label: '城市需求', description: '本回合城市消费需求与本地报价', group: '观察' },
+  { kind: 'items', label: '物品总表', description: '全物品检索：持有、挂单、行情、用途', group: '观察', keywords: '物品 目录 索引 搜索 全部' },
+  { kind: 'item', label: '物品详情', description: '单个物品的配方、库存分布、全站行情、我的挂单', group: '观察', keywords: '物品 详情 配方 用途' },
+  { kind: 'factory', label: '工厂产线', description: '地块槽位、建筑建造与热切配方', group: '生产' },
+  { kind: 'cargo', label: '仓库库存', description: '查看任一地点库存（可搜索/只看有货）', group: '生产' },
+  { kind: 'fleet', label: '舰队调度', description: '飞船状态、混装派船运输与修船', group: '生产' },
+  { kind: 'ticker', label: '全站行情', description: '按站点查看买一/卖一/最新价（可搜索排序）', group: '贸易' },
+  { kind: 'chart', label: 'K线图', description: '蜡烛图、均线与成交量（可多开并排盯盘）', group: '贸易' },
+  { kind: 'orderbook', label: '盘口深度', description: '实时买卖深度、成交流水与手工限价下单', group: '贸易' },
+  { kind: 'treasury', label: '央行与财务', description: '现金、储蓄、借贷与母星央行存贷', group: '财务' },
+  { kind: 'ranking', label: '势力排行', description: '玩家与演化 NPC 净资产排名及货币守恒审计', group: '财务' },
+  { kind: 'files', label: '代码文件', description: '脚本模块树管理', group: '开发' },
+  { kind: 'script', label: '脚本编辑器', description: 'Screeps 风格多模块 JS 策略 IDE 与热重载', group: '开发' },
+  { kind: 'memory', label: 'Memory 内存', description: '查看、搜索与编辑 128KB 持久化 JSON', group: '开发' },
+  { kind: 'console', label: '控制台', description: 'F12 交互式 JS 命令行与沙盒实时日志流', group: '开发' },
 ];
 
-export function formatPaneTitle(kind: PaneKind, params: PaneParams): string {
-  const planetLabels: Record<string, string> = {
-    P1: '灼热矿星-I',
-    P2: '新伊甸-II',
-    P3: '凛冬外星-III',
-  };
+export const PANE_META_BY_KIND: Record<PaneKind, PaneMeta> = PANE_CATALOG.reduce(
+  (acc, meta) => {
+    acc[meta.kind] = meta;
+    return acc;
+  },
+  {} as Record<PaneKind, PaneMeta>,
+);
+
+export interface TitleContext {
+  catalog: CatalogIndex;
+  world: WorldIndex;
+}
+
+const NOT_CHOSEN = '未选择';
+
+function itemTitle(catalog: CatalogIndex, itemId?: string): string {
+  if (!itemId) return NOT_CHOSEN;
+  return catalog.itemName(itemId);
+}
+
+/**
+ * Titles are always derived from the pane's params — never stored. Storing them (the previous
+ * behaviour) meant a title could keep naming entity A while the pane showed entity B.
+ */
+export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: TitleContext): string {
+  const p = params ?? {};
+  const { catalog, world } = ctx;
   switch (kind) {
     case 'orbit':
       return '星系轨道';
-    case 'planet': {
-      const pid = params.planetId || 'P2';
-      return `行星 · ${planetLabels[pid] ?? pid}`;
-    }
-    case 'demand': {
-      const pid = params.planetId || 'P2';
-      return `消费需求 · ${planetLabels[pid] ?? pid}`;
-    }
-    case 'factory': {
-      const pid = params.planetId || 'P1';
-      return `产线 · ${planetLabels[pid] ?? pid}`;
-    }
-    case 'cargo': {
-      const loc = params.locationId || 'P1';
-      return `仓库 · ${STATION_NAMES[loc] ?? planetLabels[loc] ?? loc}`;
-    }
+    case 'planet':
+      return `行星 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+    case 'demand':
+      return `需求 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+    case 'factory':
+      return `产线 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+    case 'cargo':
+      return `仓库 · ${p.locationId ? world.locationLabel(p.locationId) : NOT_CHOSEN}`;
     case 'fleet':
       return '舰队调度';
-    case 'ticker': {
-      const sid = params.stationId || 'ST:HUB';
-      return `行情 · ${STATION_NAMES[sid] ?? sid}`;
-    }
-    case 'chart': {
-      const sid = params.stationId || 'ST:HUB';
-      const item = params.itemId || 'steel';
-      return `K线 · ${item} @ ${sid === 'ST:HUB' ? '枢纽' : sid}`;
-    }
+    case 'ticker':
+      return `行情 · ${p.stationId ? world.stationLabel(p.stationId) : NOT_CHOSEN}`;
+    case 'chart':
     case 'orderbook': {
-      const sid = params.stationId || 'ST:HUB';
-      const item = params.itemId || 'steel';
-      return `盘口 · ${item} @ ${sid === 'ST:HUB' ? '枢纽' : sid}`;
+      const prefix = kind === 'chart' ? 'K线' : '盘口';
+      const station = p.stationId ? world.stationLabel(p.stationId) : NOT_CHOSEN;
+      return `${prefix} · ${itemTitle(catalog, p.itemId)} @ ${station}`;
     }
-    case 'treasury': {
-      const pid = params.planetId || 'P1';
-      return `财务 · ${planetLabels[pid] ?? pid}`;
-    }
+    case 'items':
+      return '物品总表';
+    case 'item':
+      return `物品 · ${itemTitle(catalog, p.itemId)}`;
+    case 'treasury':
+      return `财务 · ${p.planetId ? world.planetName(p.planetId) : '母星'}`;
     case 'ranking':
       return '势力排行';
     case 'files':
@@ -128,5 +154,33 @@ export function formatPaneTitle(kind: PaneKind, params: PaneParams): string {
       return 'Memory 内存';
     case 'console':
       return '控制台';
+    default:
+      return kind;
+  }
+}
+
+/** Params a pane should open with when the caller did not specify one (never a hardcoded entity). */
+export function focusDefaults(kind: PaneKind, focus: PaneParams): PaneParams {
+  switch (kind) {
+    case 'planet':
+    case 'demand':
+    case 'factory':
+    case 'treasury':
+      return focus.planetId ? { planetId: focus.planetId } : {};
+    case 'cargo':
+      return focus.locationId ? { locationId: focus.locationId } : {};
+    case 'ticker':
+      return focus.stationId ? { stationId: focus.stationId } : {};
+    case 'chart':
+    case 'orderbook': {
+      const out: PaneParams = {};
+      if (focus.stationId) out.stationId = focus.stationId;
+      if (focus.itemId) out.itemId = focus.itemId;
+      return out;
+    }
+    case 'item':
+      return focus.itemId ? { itemId: focus.itemId } : {};
+    default:
+      return {};
   }
 }
