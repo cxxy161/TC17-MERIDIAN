@@ -349,6 +349,12 @@ pub fn run_player_tick(
         }
     });
 
+    // Clear interrupt handler and memory limit before dropping Context/Runtime so OOM/timeout teardowns cannot re-trigger during GC
+    rt.set_interrupt_handler(None);
+    rt.set_memory_limit(usize::MAX);
+    drop(ctx);
+    drop(rt);
+
     let cpu_used_ms = started_at.elapsed().as_secs_f64() * 1000.0;
     let timed_out = timed_out_flag.load(Ordering::Relaxed);
     let oom = run_error

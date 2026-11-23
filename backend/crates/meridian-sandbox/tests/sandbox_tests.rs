@@ -281,3 +281,66 @@ fn test_parallel_runner_with_npcs_preserves_conservation() {
     let p_out = &runner.last_player_outputs["player_main"];
     assert!(p_out.error.is_none(), "player JS error: {:?}", p_out.error);
 }
+
+#[test]
+fn test_npc_ecosystem_sustains_active_market_volume() {
+    let catalog = load_catalog();
+    let mut world = World::new_standard(catalog);
+    let mut runner = SimulationRunner::new(PlayerRunConfig::default());
+
+    let cohort = [
+        ("env_recycle", "P2"),
+        ("env_recycle", "P2"),
+        ("env_recycle", "P2"),
+        ("env_recycle", "P3"),
+        ("agri_bio", "P2"),
+        ("agri_bio", "P2"),
+        ("agri_bio", "P2"),
+        ("agri_bio", "P3"),
+        ("mining_ind", "P1"),
+        ("mining_ind", "P1"),
+        ("mining_ind", "P3"),
+        ("mining_ind", "P2"),
+    ];
+    for (i, (prof, planet)) in cohort.iter().enumerate() {
+        let cid = format!("npc_{i:02}");
+        world
+            .spawn_company(&cid, format!("Auto-{prof}-{i:02}"), false, prof, planet, 8_000.0)
+            .unwrap();
+        runner.register_npc(cid, NpcGenome::from_seed(7000 + i as u64 * 97));
+    }
+
+    let mut total_fills = 0usize;
+    let mut total_qty = 0u64;
+    let mut item_counts: std::collections::BTreeMap<String, (usize, u64)> =
+        std::collections::BTreeMap::new();
+    let mut station_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    let mut unique_items = std::collections::HashSet::new();
+    for _ in 0..240 {
+        let rep = runner.step_world(&mut world);
+        assert_eq!(world.conservation_error(), 0, "conservation drift at tick {}", rep.tick);
+        total_fills += rep.fills.len();
+        for f in &rep.fills {
+            total_qty += f.qty as u64;
+            unique_items.insert(f.item_id.clone());
+            let e = item_counts.entry(f.item_id.clone()).or_insert((0, 0));
+            e.0 += 1;
+            e.1 += f.qty as u64;
+            *station_counts.entry(f.station_id.clone()).or_insert(0) += 1;
+        }
+    }
+    println!(
+        "240-tick NPC market telemetry: fills={total_fills}, qty={total_qty}, stations={station_counts:?}, items={item_counts:?}"
+    );
+
+    assert!(
+        total_fills >= 40,
+        "expected healthy NPC market trading across 240 ticks, got only {total_fills} fills ({unique_items:?})"
+    );
+    assert!(
+        unique_items.len() >= 3,
+        "expected multiple distinct commodities traded, got {:?}",
+        unique_items
+    );
+}

@@ -259,6 +259,7 @@ impl World {
                         progress: 0,
                         active_batch: false,
                         standby_ticks: 0,
+                        idle_ticks: 0,
                     },
                 );
                 plot.building_ids.push(bid);
@@ -474,6 +475,7 @@ impl World {
                                         progress: 0,
                                         active_batch: false,
                                         standby_ticks: 0,
+                                        idle_ticks: 0,
                                     },
                                 );
                                 self.plots.get_mut(&pid).unwrap().building_ids.push(bid);
@@ -577,12 +579,17 @@ impl World {
                         updated.active_batch = true;
                         updated.progress = 0;
                         updated.standby_ticks = 0;
+                        updated.idle_ticks = 0;
                     } else {
+                        updated.idle_ticks = updated.idle_ticks.saturating_add(1);
                         Self::consume_light_standby(&mut updated, &bdef, &recipe, &mut self.companies);
                     }
                 } else {
+                    updated.idle_ticks = updated.idle_ticks.saturating_add(1);
                     Self::consume_light_standby(&mut updated, &bdef, &recipe, &mut self.companies);
                 }
+            } else {
+                updated.idle_ticks = 0;
             }
 
             self.buildings.insert(bid, updated);
@@ -748,7 +755,9 @@ impl World {
             let prev_bid = *self.planets[planet_id].prev_bids.get(item).unwrap_or(&last_p);
             let raw_bid = match ba {
                 Some(ask_p) => item_cap.min((ask_p * 103) / 100),
-                None => item_cap.min(((last_p * 108) / 100).max((prev_bid * 102) / 100)),
+                None => item_cap
+                    .min(last_p.saturating_mul(6))
+                    .min(((last_p * 108) / 100).max((prev_bid * 102) / 100)),
             };
             let clean_bid = raw_bid.max(to_money(0.02 * self.cpi));
             let needed_escrow = (qty as i128 * clean_bid as i128) as Money;
@@ -1170,6 +1179,7 @@ impl World {
                                 b.owner_id = company_id.to_string();
                                 b.active_batch = false;
                                 b.progress = 0;
+                                b.idle_ticks = 0;
                             }
                         }
                     }
@@ -1555,12 +1565,13 @@ impl World {
             let Some(home_p) = self.planets.get(&comp.home_planet_id) else {
                 continue;
             };
-            let bld_count: usize = comp
+            let blds: Vec<&BuildingInstance> = comp
                 .plots
                 .iter()
                 .filter_map(|pid| self.plots.get(pid))
-                .map(|pl| pl.building_ids.len())
-                .sum();
+                .flat_map(|pl| pl.building_ids.iter().filter_map(|bid| self.buildings.get(bid)))
+                .collect();
+            let bld_count = blds.len();
             let est_assets = to_money(
                 (comp.plots.len() as f64) * from_money(home_p.primary_land_price(self.cpi)) * 0.8
                     + (bld_count as f64) * 140.0 * self.cpi
@@ -1570,12 +1581,21 @@ impl World {
 
             let liquid = comp.cash + comp.savings;
             let insolvent = liquid < to_money(30.0 * self.cpi) && comp.debt > est_assets;
-            if insolvent {
+            let all_stalled = bld_count > 0
+                && blds
+                    .iter()
+                    .all(|b| !b.active_batch && b.idle_ticks >= 120);
+            let stalled_broke = liquid < to_money(45.0 * self.cpi) && all_stalled;
+            let deep_zombie = bld_count > 0
+                && blds
+                    .iter()
+                    .all(|b| !b.active_batch && b.idle_ticks >= 360);
+            if insolvent || stalled_broke || deep_zombie {
                 comp.distress_ticks += 1;
             } else {
                 comp.distress_ticks = 0;
             }
-            if comp.distress_ticks >= 48 {
+            if (insolvent && comp.distress_ticks >= 48) || comp.distress_ticks >= 96 {
                 dead.push(cid.clone());
             }
         }

@@ -66,6 +66,8 @@ pub struct BuildingInstance {
     pub progress: u32,
     pub active_batch: bool,
     pub standby_ticks: u32,
+    #[serde(default)]
+    pub idle_ticks: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
