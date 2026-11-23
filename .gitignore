@@ -19,6 +19,9 @@ backend/**/*.rs.bk
 *.sqlite
 *.jsonl
 
+# Local external reference clones
+/archive/screeps-engine/
+
 # Env & Editor
 .env
 .env.local
