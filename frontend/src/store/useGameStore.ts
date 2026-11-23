@@ -472,7 +472,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const clean = newName.trim().replace(/^\/+|\/+$/g, '').replace(/\.js$/, '');
     if (!clean || clean === oldName) return;
     set((prev) => {
-      if (!(oldName in prev.draftModules)) return prev;
+      if (!(oldName in prev.draftModules) || clean in prev.draftModules) return prev;
       const next = { ...prev.draftModules };
       next[clean] = next[oldName];
       delete next[oldName];
@@ -515,7 +515,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
   renameScriptFolder: (oldPath, newPath) => {
     const cleanOld = oldPath.trim().replace(/^\/+|\/+$/g, '');
     const cleanNew = newPath.trim().replace(/^\/+|\/+$/g, '');
-    if (!cleanOld || !cleanNew || cleanOld === cleanNew) return;
+    if (
+      !cleanOld ||
+      !cleanNew ||
+      cleanOld === cleanNew ||
+      cleanNew.startsWith(`${cleanOld}/`)
+    ) {
+      return;
+    }
     set((prev) => {
       const nextMods: Record<string, string> = {};
       const prefix = `${cleanOld}/`;
@@ -528,11 +535,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
           nextMods[k] = v;
         }
       }
-      const nextFolders = prev.scriptFolders.map((f) => {
-        if (f === cleanOld) return cleanNew;
-        if (f.startsWith(prefix)) return `${cleanNew}/${f.slice(prefix.length)}`;
-        return f;
-      });
+      const nextFoldersSet = new Set(
+        prev.scriptFolders.map((f) => {
+          if (f === cleanOld) return cleanNew;
+          if (f.startsWith(prefix)) return `${cleanNew}/${f.slice(prefix.length)}`;
+          return f;
+        }),
+      );
+      nextFoldersSet.add(cleanNew);
+      const nextFolders = Array.from(nextFoldersSet);
       saveFolders(nextFolders);
       const nextActive = prev.activeScriptModule.startsWith(prefix)
         ? `${cleanNew}/${prev.activeScriptModule.slice(prefix.length)}`

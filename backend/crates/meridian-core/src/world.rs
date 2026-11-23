@@ -169,6 +169,27 @@ impl World {
         x
     }
 
+    /// Count how many developable plots on `planet_id` are currently owned by NPCs.
+    pub fn npc_plot_count_on(&self, planet_id: &str) -> u32 {
+        self.plots
+            .values()
+            .filter(|pl| {
+                pl.planet_id == planet_id
+                    && pl.owner_id.as_deref().is_some_and(|oid| {
+                        self.companies.get(oid).is_some_and(|c| !c.is_player)
+                    })
+            })
+            .count() as u32
+    }
+
+    /// Strict 90% ceiling of a planet's developable plots available to all NPCs combined.
+    pub fn npc_plot_cap_on(&self, planet_id: &str) -> u32 {
+        self.planets
+            .get(planet_id)
+            .map(|p| (p.total_developable_plots * 9) / 10)
+            .unwrap_or(0)
+    }
+
     /// Spawn a player or NPC company with starter plot, profession buildings, ship, and starting cash.
     pub fn spawn_company(
         &mut self,
@@ -189,16 +210,55 @@ impl World {
             .get(profession)
             .ok_or_else(|| format!("Unknown profession '{profession}'"))?
             .clone();
+        if !self.planets.contains_key(home_planet_id) {
+            return Err(format!("Unknown planet '{home_planet_id}'"));
+        }
+        if !is_player && self.npc_plot_count_on(home_planet_id) >= self.npc_plot_cap_on(home_planet_id) {
+            return Err(format!("NPC 90% plot cap reached on '{home_planet_id}'"));
+        }
 
-        let plot_id = self.next_plot_id;
-        self.next_plot_id += 1;
-        let mut plot = self
-            .planets
-            .get_mut(home_planet_id)
-            .ok_or_else(|| format!("Unknown planet '{home_planet_id}'"))?
-            .materialize_primary_plot(plot_id, &self.catalog)
-            .ok_or_else(|| format!("No unclaimed plots left on '{home_planet_id}'"))?;
-        plot.owner_id = Some(cid.clone());
+        // Reuse cheapest BANK-foreclosed secondhand plot first for NPCs so bankruptcies recycle land.
+        let bank_listing_idx = if !is_player {
+            self.planets[home_planet_id]
+                .land_listings
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.seller_id == "BANK")
+                .min_by_key(|(_, l)| l.ask_price)
+                .map(|(i, _)| i)
+        } else {
+            None
+        };
+
+        let (plot_id, mut plot) = if let Some(idx) = bank_listing_idx {
+            let lst = self
+                .planets
+                .get_mut(home_planet_id)
+                .unwrap()
+                .land_listings
+                .remove(idx);
+            let mut pl = self
+                .plots
+                .remove(&lst.plot_id)
+                .ok_or_else(|| format!("Listed plot {} missing", lst.plot_id))?;
+            for old_bid in pl.building_ids.drain(..) {
+                self.buildings.remove(&old_bid);
+            }
+            pl.jobs.clear();
+            pl.owner_id = Some(cid.clone());
+            (pl.id, pl)
+        } else {
+            let pid_new = self.next_plot_id;
+            self.next_plot_id += 1;
+            let mut pl = self
+                .planets
+                .get_mut(home_planet_id)
+                .unwrap()
+                .materialize_primary_plot(pid_new, &self.catalog)
+                .ok_or_else(|| format!("No unclaimed plots left on '{home_planet_id}'"))?;
+            pl.owner_id = Some(cid.clone());
+            (pid_new, pl)
+        };
 
         let initial_cash = to_money(initial_cash_credits.max(0.0));
         self.ledger.record_mint(initial_cash);
@@ -268,6 +328,45 @@ impl World {
 
         self.plots.insert(plot_id, plot);
         self.companies.insert(cid, comp);
+        Ok(())
+    }
+
+    /// Spawn a market-driven startup NPC backed partly by a PlanetBank loan (preserving conservation).
+    pub fn spawn_npc_startup(
+        &mut self,
+        id: impl Into<CompanyId>,
+        name: impl Into<String>,
+        profession: &str,
+        home_planet_id: &str,
+        total_seed_credits: f64,
+    ) -> Result<(), String> {
+        let cid: CompanyId = id.into();
+        let seed_total = to_money(total_seed_credits.max(1_000.0));
+        let max_loan = seed_total / 2;
+        let reserve_floor = to_money(2_000.0 * self.cpi.max(0.5));
+        let loan = self
+            .planets
+            .get(home_planet_id)
+            .map(|p| {
+                if p.bank.reserves > reserve_floor + max_loan {
+                    max_loan
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0);
+        let mint_credits = from_money(seed_total - loan);
+        self.spawn_company(cid.clone(), name, false, profession, home_planet_id, mint_credits)?;
+        if loan > 0 {
+            if let Some(p) = self.planets.get_mut(home_planet_id) {
+                p.bank.reserves -= loan;
+                p.bank.total_loans += loan;
+            }
+            if let Some(c) = self.companies.get_mut(&cid) {
+                c.cash += loan;
+                c.debt += loan;
+            }
+        }
         Ok(())
     }
 
@@ -1139,6 +1238,11 @@ impl World {
                 if !self.planets.contains_key(&planet_id) {
                     return false;
                 }
+                if !self.companies[company_id].is_player
+                    && self.npc_plot_count_on(&planet_id) >= self.npc_plot_cap_on(&planet_id)
+                {
+                    return false;
+                }
                 if let Some(lid) = listing_id {
                     let pos = self.planets[&planet_id]
                         .land_listings
@@ -1576,22 +1680,22 @@ impl World {
                 + comp.savings;
 
             let liquid = comp.cash + comp.savings;
-            let insolvent = liquid < to_money(30.0 * self.cpi) && comp.debt > est_assets;
+            let insolvent = liquid < to_money(50.0 * self.cpi) && comp.debt > (est_assets * 3) / 4;
             let all_stalled = bld_count > 0
                 && blds
                     .iter()
-                    .all(|b| !b.active_batch && b.idle_ticks >= 120);
-            let stalled_broke = liquid < to_money(45.0 * self.cpi) && all_stalled;
+                    .all(|b| !b.active_batch && b.idle_ticks >= 96);
+            let stalled_broke = liquid < to_money(75.0 * self.cpi) && all_stalled;
             let deep_zombie = bld_count > 0
                 && blds
                     .iter()
-                    .all(|b| !b.active_batch && b.idle_ticks >= 360);
+                    .all(|b| !b.active_batch && b.idle_ticks >= 240);
             if insolvent || stalled_broke || deep_zombie {
                 comp.distress_ticks += 1;
             } else {
                 comp.distress_ticks = 0;
             }
-            if (insolvent && comp.distress_ticks >= 48) || comp.distress_ticks >= 96 {
+            if (insolvent && comp.distress_ticks >= 36) || comp.distress_ticks >= 72 {
                 dead.push(cid.clone());
             }
         }

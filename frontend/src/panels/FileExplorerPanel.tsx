@@ -101,6 +101,33 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
+  const [dragItem, setDragItem] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+
+  const moveDraggedToFolder = (targetFolderPath: string) => {
+    if (!dragItem) return;
+    const baseName = dragItem.path.split('/').pop();
+    if (!baseName) return;
+    const destPath = targetFolderPath ? `${targetFolderPath}/${baseName}` : baseName;
+    if (destPath === dragItem.path) return;
+    if (dragItem.kind === 'file') {
+      if (dragItem.path === 'main') return;
+      renameDraftModule(dragItem.path, destPath);
+    } else {
+      if (
+        targetFolderPath === dragItem.path ||
+        targetFolderPath.startsWith(`${dragItem.path}/`)
+      ) {
+        return;
+      }
+      renameScriptFolder(dragItem.path, destPath);
+    }
+    if (targetFolderPath) {
+      setExpanded((prev) => ({ ...prev, [targetFolderPath]: true }));
+    }
+    setDragItem(null);
+    setDropTarget(null);
+  };
 
   const modNames = useMemo(() => {
     const src = Object.keys(draftModules).length > 0 ? draftModules : (scripts?.modules ?? { main: '' });
@@ -156,16 +183,55 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
       if (item.kind === 'folder') {
         const open = isExpanded(item.path);
         const isSel = selectedFolder === item.path;
+        const isDropOver = dropTarget === item.path && dragItem?.path !== item.path;
         return (
           <div key={`folder:${item.path}`}>
             <div
+              draggable={!isRenamingThis}
+              onDragStart={(e) => {
+                e.stopPropagation();
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', `folder:${item.path}`);
+                setDragItem({ kind: 'folder', path: item.path });
+              }}
+              onDragEnd={() => {
+                setDragItem(null);
+                setDropTarget(null);
+              }}
+              onDragOver={(e) => {
+                if (!dragItem || dragItem.path === item.path) return;
+                if (
+                  dragItem.kind === 'folder' &&
+                  item.path.startsWith(`${dragItem.path}/`)
+                ) {
+                  return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                if (dropTarget !== item.path) setDropTarget(item.path);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget === e.target && dropTarget === item.path) {
+                  setDropTarget(null);
+                }
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                moveDraggedToFolder(item.path);
+              }}
               onClick={() => {
                 setSelectedFolder(item.path);
                 setExpanded((prev) => ({ ...prev, [item.path]: !open }));
               }}
               style={{ paddingLeft: 6 + depth * 14 }}
               className={`group flex items-center justify-between pr-2 py-1 text-[11px] cursor-pointer hover:bg-sky-500/10 ${
-                isSel ? 'bg-sky-500/10 text-sky-200' : 'text-slate-300'
+                isDropOver
+                  ? 'bg-sky-500/25 ring-1 ring-inset ring-sky-400 text-sky-100'
+                  : isSel
+                    ? 'bg-sky-500/10 text-sky-200'
+                    : 'text-slate-300'
               }`}
             >
               <div className="flex items-center gap-1.5 min-w-0 flex-1">
@@ -267,9 +333,42 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
       }
 
       const isActive = activeMod === item.path;
+      const canDragFile = item.path !== 'main' && !isRenamingThis;
       return (
         <div key={`file:${item.path}`}>
           <div
+            draggable={canDragFile}
+            onDragStart={(e) => {
+              if (!canDragFile) return;
+              e.stopPropagation();
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/plain', `file:${item.path}`);
+              setDragItem({ kind: 'file', path: item.path });
+            }}
+            onDragEnd={() => {
+              setDragItem(null);
+              setDropTarget(null);
+            }}
+            onDragOver={(e) => {
+              if (!dragItem || dragItem.path === item.path) return;
+              const parentDir = item.path.includes('/')
+                ? item.path.split('/').slice(0, -1).join('/')
+                : '';
+              const targetKey = parentDir || '__ROOT__';
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              if (dropTarget !== targetKey) setDropTarget(targetKey);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const parentDir = item.path.includes('/')
+                ? item.path.split('/').slice(0, -1).join('/')
+                : '';
+              moveDraggedToFolder(parentDir);
+            }}
+            title={canDragFile ? '拖动到文件夹或空白根目录可移动分类' : '入口模块 main.js 固定在根目录'}
             onClick={() => {
               setActiveMod(item.path);
               const dir = item.path.includes('/') ? item.path.split('/').slice(0, -1).join('/') : '';
@@ -408,7 +507,28 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
 
       {/* Tree */}
       <div
-        className="flex-1 overflow-y-auto py-1 bg-[#1b212b]"
+        className={`flex-1 overflow-y-auto py-1 bg-[#1b212b] ${
+          dropTarget === '__ROOT__' && dragItem
+            ? 'ring-1 ring-inset ring-sky-400/70 bg-sky-500/10'
+            : ''
+        }`}
+        onDragOver={(e) => {
+          if (!dragItem) return;
+          e.preventDefault();
+          e.stopPropagation();
+          e.dataTransfer.dropEffect = 'move';
+          if (dropTarget !== '__ROOT__') setDropTarget('__ROOT__');
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target && dropTarget === '__ROOT__') {
+            setDropTarget(null);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          moveDraggedToFolder('');
+        }}
         onClick={(e) => {
           if (e.target === e.currentTarget) setSelectedFolder('');
         }}

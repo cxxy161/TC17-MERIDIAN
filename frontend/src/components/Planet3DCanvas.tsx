@@ -355,10 +355,10 @@ function buildGoldbergFacets(N: number, profile: PlanetProfile): GoldbergFacet[]
   return facets;
 }
 
-function rotatePoint(p: Vec3, yaw: number, pitch: number, tiltRad: number): Vec3 {
-  // 1) Spin around local Y (planet rotation + user yaw)
-  const cy = Math.cos(yaw);
-  const sy = Math.sin(yaw);
+function planetToWorld(p: Vec3, spinYaw: number, tiltRad: number): Vec3 {
+  // 1) Spin around local Y (planetary axial rotation only)
+  const cy = Math.cos(spinYaw);
+  const sy = Math.sin(spinYaw);
   const x1 = p.x * cy + p.z * sy;
   const y1 = p.y;
   const z1 = -p.x * sy + p.z * cy;
@@ -366,18 +366,39 @@ function rotatePoint(p: Vec3, yaw: number, pitch: number, tiltRad: number): Vec3
   // 2) Axial tilt around Z
   const ct = Math.cos(tiltRad);
   const st = Math.sin(tiltRad);
-  const x2 = x1 * ct - y1 * st;
-  const y2 = x1 * st + y1 * ct;
-  const z2 = z1;
-
-  // 3) Camera pitch around X
-  const cp = Math.cos(pitch);
-  const sp = Math.sin(pitch);
   return {
-    x: x2,
-    y: y2 * cp - z2 * sp,
-    z: y2 * sp + z2 * cp,
+    x: x1 * ct - y1 * st,
+    y: x1 * st + y1 * ct,
+    z: z1,
   };
+}
+
+function worldToCamera(p: Vec3, camYaw: number, camPitch: number): Vec3 {
+  // 1) Orbit camera horizontally around world Y
+  const cy = Math.cos(camYaw);
+  const sy = Math.sin(camYaw);
+  const x1 = p.x * cy + p.z * sy;
+  const y1 = p.y;
+  const z1 = -p.x * sy + p.z * cy;
+
+  // 2) Pitch camera around X
+  const cp = Math.cos(camPitch);
+  const sp = Math.sin(camPitch);
+  return {
+    x: x1,
+    y: y1 * cp - z1 * sp,
+    z: y1 * sp + z1 * cp,
+  };
+}
+
+function rotatePlanetPoint(
+  p: Vec3,
+  spinYaw: number,
+  tiltRad: number,
+  camYaw: number,
+  camPitch: number,
+): Vec3 {
+  return worldToCamera(planetToWorld(p, spinYaw, tiltRad), camYaw, camPitch);
 }
 
 export interface Planet3DCanvasProps {
@@ -474,13 +495,15 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           const cy = h / 2 + 2;
           const radius = Math.min(w, h) * 0.36;
           const tiltRad = (profile.tiltDeg * Math.PI) / 180;
-          const yaw = spinYaw + userYawOffsetRef.current;
-          const pitch = pitchRef.current;
-          const sunDir = norm3({ x: 0.72, y: 0.42, z: 0.55 });
+          const camYaw = userYawOffsetRef.current;
+          const camPitch = pitchRef.current;
+          // Sun stays fixed in world space so orbiting/dragging the camera never shifts the terminator
+          const sunWorld = norm3({ x: 0.72, y: 0.42, z: 0.55 });
+          const sunDir = worldToCamera(sunWorld, camYaw, camPitch);
 
           // Subtle polar axis spine
-          const northPole = rotatePoint({ x: 0, y: 1.2, z: 0 }, yaw, pitch, tiltRad);
-          const southPole = rotatePoint({ x: 0, y: -1.2, z: 0 }, yaw, pitch, tiltRad);
+          const northPole = rotatePlanetPoint({ x: 0, y: 1.2, z: 0 }, spinYaw, tiltRad, camYaw, camPitch);
+          const southPole = rotatePlanetPoint({ x: 0, y: -1.2, z: 0 }, spinYaw, tiltRad, camYaw, camPitch);
           ctx.strokeStyle = 'rgba(203, 213, 225, 0.28)';
           ctx.lineWidth = 1;
           ctx.beginPath();
@@ -490,8 +513,8 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
 
           // Atmosphere glow behind globe
           const grad = ctx.createRadialGradient(
-            cx - radius * 0.25,
-            cy - radius * 0.25,
+            cx + sunDir.x * radius * 0.22,
+            cy - sunDir.y * radius * 0.22,
             radius * 0.4,
             cx,
             cy,
@@ -514,12 +537,12 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           }> = [];
 
           for (const f of facets) {
-            const rc = rotatePoint(f.center, yaw, pitch, tiltRad);
-            const rn = rotatePoint(f.normal, yaw, pitch, tiltRad);
+            const rc = rotatePlanetPoint(f.center, spinYaw, tiltRad, camYaw, camPitch);
+            const rn = rotatePlanetPoint(f.normal, spinYaw, tiltRad, camYaw, camPitch);
             if (rn.z <= -0.05) continue;
             const light = Math.max(0.24, 0.28 + Math.max(0, dot3(rn, sunDir)) * 0.92);
             const pts: Array<[number, number]> = f.corners.map((c) => {
-              const p = rotatePoint(c, yaw, pitch, tiltRad);
+              const p = rotatePlanetPoint(c, spinYaw, tiltRad, camYaw, camPitch);
               return [cx + p.x * radius, cy - p.y * radius];
             });
             visible.push({ facet: f, depth: rc.z, light, pts });

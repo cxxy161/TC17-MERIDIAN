@@ -1087,16 +1087,29 @@ pub fn decide_npc_intents(
                         building_type: btype.clone(),
                     });
                 }
-            } else if let Some(land_p) = snap
-                .planets
-                .get(home_pid)
-                .and_then(|p| p.primary_land_price)
-            {
-                if snap.company.cash > land_p + to_money(200.0 * snap.cpi) {
-                    intents.push(Intent::BuyPlot {
-                        planet_id: home_pid.clone(),
-                        listing_id: None,
-                    });
+            } else if snap.company.plots.len() < 4 {
+                if let Some(p_view) = snap.planets.get(home_pid) {
+                    let best_listing = p_view
+                        .land_listings
+                        .iter()
+                        .min_by_key(|l| l.ask_price);
+                    let prim_price = p_view.primary_land_price;
+                    let (target_lid, land_p) = match (best_listing, prim_price) {
+                        (Some(lst), Some(pp)) if lst.ask_price <= pp => {
+                            (Some(lst.listing_id), Some(lst.ask_price))
+                        }
+                        (Some(lst), None) => (Some(lst.listing_id), Some(lst.ask_price)),
+                        (_, Some(pp)) => (None, Some(pp)),
+                        (None, None) => (None, None),
+                    };
+                    if let Some(cost) = land_p {
+                        if snap.company.cash > cost + to_money(400.0 * snap.cpi) {
+                            intents.push(Intent::BuyPlot {
+                                planet_id: home_pid.clone(),
+                                listing_id: target_lid,
+                            });
+                        }
+                    }
                 }
             }
         }

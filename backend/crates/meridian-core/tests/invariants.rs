@@ -386,3 +386,51 @@ fn test_manufacturing_recipe_switch_recycling_and_interplanetary_logistics() {
     assert!(snap.quotes.contains_key("ST:P1"));
     assert!(snap.quotes.contains_key("ST:HUB"));
 }
+
+#[test]
+fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
+    let catalog = load_production_catalog();
+    let mut world = World::new_standard(catalog);
+
+    // P2 has 135 developable plots -> 90% NPC cap = 121 plots
+    let cap = world.npc_plot_cap_on("P2");
+    assert_eq!(cap, 121);
+
+    world
+        .spawn_company("npc_landlord", "NPC Landlord", false, "env_recycle", "P2", 5_000_000.0)
+        .expect("spawn npc");
+    assert_eq!(world.npc_plot_count_on("P2"), 1);
+
+    // Have the NPC buy plots until hitting the 90% ceiling
+    for _ in 1..cap {
+        let rep = world.step_tick(vec![(
+            "npc_landlord".to_string(),
+            vec![Intent::BuyPlot {
+                planet_id: "P2".to_string(),
+                listing_id: None,
+            }],
+        )]);
+        assert_eq!(rep.rejected_intents, 0);
+    }
+    assert_eq!(world.npc_plot_count_on("P2"), cap);
+
+    // Next NPC BuyPlot AND spawning another NPC on P2 must BOTH be blocked!
+    let rep_over = world.step_tick(vec![(
+        "npc_landlord".to_string(),
+        vec![Intent::BuyPlot {
+            planet_id: "P2".to_string(),
+            listing_id: None,
+        }],
+    )]);
+    assert_eq!(rep_over.rejected_intents, 1);
+    assert!(world
+        .spawn_company("npc_blocked", "Blocked", false, "agri_bio", "P2", 8_000.0)
+        .is_err());
+
+    // Meanwhile a human player can still claim the reserved 10% plots on P2!
+    world
+        .spawn_company("human_p2", "Human Pioneer", true, "agri_bio", "P2", 50_000.0)
+        .expect("player must be able to spawn in the reserved 10% land");
+    assert_eq!(world.npc_plot_count_on("P2"), cap);
+    assert_eq!(world.conservation_error(), 0);
+}

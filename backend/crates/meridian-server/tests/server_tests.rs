@@ -81,7 +81,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(health["ok"], true);
         assert_eq!(health["conservation_error"], 0);
-        assert_eq!(health["companies_count"], 13);
+        assert_eq!(health["companies_count"], 49);
 
         let (st, cat) = read_json(
             app.clone()
@@ -236,7 +236,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(admin_res["conservation_error"], 0);
-        assert_eq!(admin_res["companies"].as_array().unwrap().len(), 13);
+        assert_eq!(admin_res["companies"].as_array().unwrap().len(), 49);
         assert_eq!(admin_res["planets"].as_array().unwrap().len(), 3);
 
         // 6c. Verify max-speed (tick_ms=0) sim control works
@@ -292,6 +292,13 @@ fn test_long_horizon_1200_ticks_economy_never_stalls() {
     for t in 0..1200 {
         let out = engine.step_once().expect("step_once");
         assert_eq!(out.conservation_error, 0, "conservation violated at tick {}", out.tick);
+        for pid in ["P1", "P2", "P3"] {
+            assert!(
+                engine.world.npc_plot_count_on(pid) <= engine.world.npc_plot_cap_on(pid),
+                "NPC plot cap (90%) exceeded on {pid} at tick {}",
+                out.tick
+            );
+        }
         buckets[t / 200] += out.fills_count;
         total_bankruptcies += out.bankruptcies.len();
     }
@@ -348,10 +355,15 @@ fn test_long_horizon_1200_ticks_economy_never_stalls() {
         "market degenerated to too few active items in ticks 800..1200: {late_item_fills:?}"
     );
     assert!(
-        prof_counts.get("agri_bio").copied().unwrap_or(0) >= 2
-            && prof_counts.get("mining_ind").copied().unwrap_or(0) >= 2
-            && prof_counts.get("env_recycle").copied().unwrap_or(0) >= 2,
+        prof_counts.get("agri_bio").copied().unwrap_or(0) >= 4
+            && prof_counts.get("mining_ind").copied().unwrap_or(0) >= 4
+            && prof_counts.get("env_recycle").copied().unwrap_or(0) >= 4,
         "profession extinction occurred: {prof_counts:?}"
+    );
+    let total_npcs: usize = prof_counts.values().sum();
+    assert!(
+        (40..=72).contains(&total_npcs),
+        "expected healthy 40..=72 active NPCs after startups/bankruptcies, got {total_npcs}"
     );
     assert!(fuel_total >= 40, "system-wide fuel extinction: fuel={fuel_total}");
 }

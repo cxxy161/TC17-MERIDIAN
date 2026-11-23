@@ -216,8 +216,8 @@ impl GameEngine {
                 events_tx,
                 auth: crate::auth::AuthLimiter::default(),
             };
-            // Heal cohort back to 12 balanced NPCs if an older DB lost slots on restart
-            while engine.world.companies.values().filter(|c| !c.is_player).count() < 12 {
+            // Heal cohort if an older DB has fewer than the minimum active NPC floor (respecting 90% plot cap)
+            while engine.world.companies.values().filter(|c| !c.is_player).count() < 36 {
                 let before = engine.world.companies.len();
                 engine.respawn_evolved_npc();
                 if engine.world.companies.len() == before {
@@ -256,21 +256,20 @@ impl GameEngine {
         store.save_player_bundle("player1", &starter_bundle)?;
         store.save_player_memory("player1", "{}", true)?;
 
-        // Balanced cohort of 12 0-hardcoded NPCs across P1/P2/P3
-        let cohort = [
-            ("env_recycle", "P2"),
-            ("env_recycle", "P2"),
-            ("env_recycle", "P2"),
-            ("env_recycle", "P3"),
-            ("agri_bio", "P2"),
-            ("agri_bio", "P2"),
-            ("agri_bio", "P2"),
-            ("agri_bio", "P3"),
-            ("mining_ind", "P1"),
-            ("mining_ind", "P1"),
-            ("mining_ind", "P3"),
-            ("mining_ind", "P2"),
-        ];
+        // Balanced initial cohort of 48 0-hardcoded NPCs across P1/P2/P3 (90% plot cap safe)
+        let mut cohort: Vec<(&str, &str)> = Vec::with_capacity(48);
+        // P1 (12): heavy mining/industrial base + local support
+        cohort.extend(std::iter::repeat_n(("mining_ind", "P1"), 8));
+        cohort.extend(std::iter::repeat_n(("env_recycle", "P1"), 2));
+        cohort.extend(std::iter::repeat_n(("agri_bio", "P1"), 2));
+        // P2 (24): populous habitable core + all 3 chains
+        cohort.extend(std::iter::repeat_n(("env_recycle", "P2"), 9));
+        cohort.extend(std::iter::repeat_n(("agri_bio", "P2"), 9));
+        cohort.extend(std::iter::repeat_n(("mining_ind", "P2"), 6));
+        // P3 (12): outer cold planet fuel/water/mining + agri
+        cohort.extend(std::iter::repeat_n(("env_recycle", "P3"), 5));
+        cohort.extend(std::iter::repeat_n(("agri_bio", "P3"), 3));
+        cohort.extend(std::iter::repeat_n(("mining_ind", "P3"), 4));
 
         for (i, (prof, planet)) in cohort.iter().enumerate() {
             let cid = format!("npc_{i:02}");
@@ -363,10 +362,14 @@ impl GameEngine {
                 .save_player_memory(cid, &pvm.memory_json, pvm.enabled);
         }
 
-        // Evolutionary NPC replacement when an NPC goes bankrupt
+        // Remove genomes of bankrupted NPCs (their plots return to BANK land_listings)
         for dead_cid in &report.bankruptcies {
             let _ = self.store.delete_npc_genome(dead_cid);
-            self.respawn_evolved_npc();
+        }
+
+        // Dynamic market-driven NPC startups every 24 ticks (respecting 90% per-planet land cap)
+        if self.world.tick % 24 == 0 {
+            self.run_npc_startups();
         }
 
         if self.world.tick % 10 == 0 {
@@ -402,22 +405,26 @@ impl GameEngine {
         }
         self.next_npc_seq = seq + 1;
 
-        // Preserve ecosystem profession & planet niche diversity while still evolving genomes
-        // from top surviving NPCs.
-        let target_niches: [(&str, &str, usize); 7] = [
-            ("env_recycle", "P2", 3),
-            ("env_recycle", "P3", 1),
-            ("agri_bio", "P2", 3),
-            ("agri_bio", "P3", 1),
-            ("mining_ind", "P1", 2),
-            ("mining_ind", "P3", 1),
-            ("mining_ind", "P2", 1),
+        // Preserve ecosystem profession & planet niche diversity scaled to 48-NPC baseline
+        let target_niches: [(&str, &str, usize); 9] = [
+            ("env_recycle", "P2", 9),
+            ("agri_bio", "P2", 9),
+            ("mining_ind", "P2", 6),
+            ("mining_ind", "P1", 8),
+            ("env_recycle", "P1", 2),
+            ("agri_bio", "P1", 2),
+            ("env_recycle", "P3", 5),
+            ("agri_bio", "P3", 3),
+            ("mining_ind", "P3", 4),
         ];
         let mut best_idx = (seq as usize) % target_niches.len();
         let mut best_deficit: i32 = i32::MIN;
         for off in 0..target_niches.len() {
             let i = ((seq as usize) + off) % target_niches.len();
             let (p, pl, want) = target_niches[i];
+            if self.world.npc_plot_count_on(pl) >= self.world.npc_plot_cap_on(pl) {
+                continue;
+            }
             let have = self
                 .world
                 .companies
@@ -431,32 +438,271 @@ impl GameEngine {
             }
         }
         let (prof, planet, _) = target_niches[best_idx];
+        self.spawn_evolved_company_on(prof, planet, seq, &ranked, 6_000.0 * self.world.cpi.clamp(0.5, 4.0));
+    }
 
+    fn spawn_evolved_company_on(
+        &mut self,
+        prof: &str,
+        planet: &str,
+        seq: u64,
+        ranked: &[(f64, String, String, String)],
+        seed_credits: f64,
+    ) -> bool {
+        if self.world.npc_plot_count_on(planet) >= self.world.npc_plot_cap_on(planet) {
+            return false;
+        }
         let new_cid = format!("npc_evo_{seq}");
         if self
             .world
-            .spawn_company(&new_cid, format!("Evo-{prof}-{seq}"), false, prof, planet, 8_000.0)
-            .is_ok()
+            .spawn_npc_startup(&new_cid, format!("Evo-{prof}-{seq}"), prof, planet, seed_credits)
+            .is_err()
         {
-            let genome = if ranked.len() >= 2 {
-                let ga = self
-                    .runner
-                    .npc_genomes
-                    .get(&ranked[0].1)
-                    .cloned()
-                    .unwrap_or_default();
-                let gb = self
-                    .runner
-                    .npc_genomes
-                    .get(&ranked[1].1)
-                    .cloned()
-                    .unwrap_or_default();
-                NpcGenome::crossover_mutate(&ga, &gb, seq.wrapping_mul(1315423911), 0.15)
-            } else {
-                NpcGenome::from_seed(seq.wrapping_mul(2654435761))
+            return false;
+        }
+        let same_prof_elites: Vec<&str> = ranked
+            .iter()
+            .filter(|r| r.2 == prof)
+            .map(|r| r.1.as_str())
+            .collect();
+        let pool: Vec<&str> = if same_prof_elites.len() >= 2 {
+            same_prof_elites
+        } else {
+            ranked.iter().map(|r| r.1.as_str()).collect()
+        };
+        let genome = if pool.len() >= 2 {
+            let elite_len = (pool.len() / 4).max(2).min(pool.len());
+            let idx_a = (seq as usize) % elite_len;
+            let idx_b = ((seq as usize).wrapping_mul(7) + 1) % elite_len;
+            let ga = self
+                .runner
+                .npc_genomes
+                .get(pool[idx_a])
+                .cloned()
+                .unwrap_or_default();
+            let gb = self
+                .runner
+                .npc_genomes
+                .get(pool[idx_b])
+                .cloned()
+                .unwrap_or_default();
+            NpcGenome::crossover_mutate(&ga, &gb, seq.wrapping_mul(1315423911), 0.15)
+        } else {
+            NpcGenome::from_seed(seq.wrapping_mul(2654435761))
+        };
+        let _ = self.store.save_npc_genome(&new_cid, &genome);
+        self.runner.register_npc(new_cid, genome);
+        true
+    }
+
+    /// Market-driven NPC startups on planets with profitable shortages (capped at 90% planet land & <=72 NPCs).
+    fn run_npc_startups(&mut self) {
+        const MAX_GLOBAL_NPCS: usize = 72;
+        let mut total_npcs = self
+            .world
+            .companies
+            .values()
+            .filter(|c| !c.is_player)
+            .count();
+        if total_npcs >= MAX_GLOBAL_NPCS {
+            return;
+        }
+
+        let mut ranked: Vec<(f64, String, String, String)> = self
+            .world
+            .companies
+            .values()
+            .filter(|c| !c.is_player)
+            .map(|c| {
+                let net = from_money(c.cash + c.savings - c.debt);
+                (
+                    net,
+                    c.id.clone(),
+                    c.profession.clone(),
+                    c.home_planet_id.clone(),
+                )
+            })
+            .collect();
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let cpi = self.world.cpi.max(0.25);
+        let profs = ["env_recycle", "agri_bio", "mining_ind"];
+        for pid in ["P2", "P1", "P3"] {
+            if total_npcs >= MAX_GLOBAL_NPCS {
+                break;
+            }
+            let Some(p) = self.world.planets.get(pid) else {
+                continue;
             };
-            let _ = self.store.save_npc_genome(&new_cid, &genome);
-            self.runner.register_npc(new_cid, genome);
+            let cap_p = match pid {
+                "P2" => (24 + (p.population / 350.0) as usize).min(42),
+                _ => 18,
+            };
+            let min_p = match pid {
+                "P2" => 20,
+                _ => 10,
+            };
+            let mut cur_on_p = self
+                .world
+                .companies
+                .values()
+                .filter(|c| !c.is_player && c.home_planet_id == pid)
+                .count();
+            if cur_on_p >= cap_p {
+                continue;
+            }
+
+            let sid = format!("ST:{pid}");
+            let n_spawn = if cur_on_p < min_p { 2 } else { 1 };
+
+            for _ in 0..n_spawn {
+                if total_npcs >= MAX_GLOBAL_NPCS
+                    || cur_on_p >= cap_p
+                    || self.world.npc_plot_count_on(pid) >= self.world.npc_plot_cap_on(pid)
+                {
+                    break;
+                }
+                // Check there is either a BANK listing or unclaimed plot before picking startup
+                let has_land = self
+                    .world
+                    .planets
+                    .get(pid)
+                    .map(|pl| {
+                        pl.unclaimed_plots_remaining > 0
+                            || pl.land_listings.iter().any(|l| l.seller_id == "BANK")
+                    })
+                    .unwrap_or(false);
+                if !has_land {
+                    break;
+                }
+
+                // Evaluate best profession on this planet using current market prices & shortages
+                let (best_prof, best_margin) = {
+                    let st_opt = self.world.stations.get(&sid);
+                    let hub_opt = self.world.stations.get("ST:HUB");
+                    let mut best_prof = profs[0];
+                    let mut best_score = f64::NEG_INFINITY;
+                    let mut best_margin = 0.0;
+                    for &pr_id in &profs {
+                        let Some(pr_def) = self.world.catalog.professions.get(pr_id) else {
+                            continue;
+                        };
+                        let have_pr = self
+                            .world
+                            .companies
+                            .values()
+                            .filter(|c| !c.is_player && c.home_planet_id == pid && c.profession == pr_id)
+                            .count();
+                        let mut top_m = -1.0f64;
+                        let mut shortage_bonus = 0.0f64;
+                        for btype in &pr_def.starter_buildings {
+                            let Some(rids) = self.world.catalog.recipes_by_building.get(btype) else {
+                                continue;
+                            };
+                            for rid in rids {
+                                let Some(r) = self.world.catalog.recipes.get(rid) else {
+                                    continue;
+                                };
+                                let inputs_ok = r.inputs.iter().all(|inp| {
+                                    inp.item == "waste"
+                                        || st_opt
+                                            .and_then(|s| s.best_ask(&inp.item))
+                                            .is_some()
+                                        || hub_opt
+                                            .and_then(|h| h.best_ask(&inp.item))
+                                            .is_some()
+                                });
+                                if !inputs_ok && !r.inputs.is_empty() {
+                                    continue;
+                                }
+                                let in_c = r.labor_cost * cpi
+                                    + r.power_cost as f64
+                                        * st_opt
+                                            .and_then(|s| {
+                                                s.best_ask("power")
+                                                    .or_else(|| s.last_trade_price.get("power").copied())
+                                            })
+                                            .map(from_money)
+                                            .unwrap_or(2.0 * cpi)
+                                    + r.inputs
+                                        .iter()
+                                        .map(|inp| {
+                                            let p_est = st_opt
+                                                .and_then(|s| {
+                                                    s.best_ask(&inp.item)
+                                                        .or_else(|| s.last_trade_price.get(&inp.item).copied())
+                                                })
+                                                .map(from_money)
+                                                .unwrap_or_else(|| {
+                                                    self.world
+                                                        .catalog
+                                                        .items
+                                                        .get(&inp.item)
+                                                        .map(|i| i.ref_price * cpi)
+                                                        .unwrap_or(2.0 * cpi)
+                                                });
+                                            inp.qty as f64 * p_est
+                                        })
+                                        .sum::<f64>();
+                                let out_v: f64 = r
+                                    .outputs
+                                    .iter()
+                                    .map(|o| {
+                                        let p_est = st_opt
+                                            .map(|s| {
+                                                let lp = s
+                                                    .last_trade_price
+                                                    .get(&o.item)
+                                                    .copied()
+                                                    .map(from_money)
+                                                    .unwrap_or(1.0);
+                                                let bb = s.best_bid(&o.item).map(from_money).unwrap_or(0.0);
+                                                if s.best_ask(&o.item).is_none() && bb > lp {
+                                                    shortage_bonus += 0.25;
+                                                    bb.min(lp * 4.0)
+                                                } else {
+                                                    lp.max(bb)
+                                                }
+                                            })
+                                            .unwrap_or(2.0 * cpi);
+                                        o.qty as f64 * p_est
+                                    })
+                                    .sum();
+                                let m = ((out_v - in_c) / in_c.max(1.0)).clamp(-1.0, 3.0);
+                                if m > top_m {
+                                    top_m = m;
+                                }
+                            }
+                        }
+                        // Encourage underrepresented professions on the planet so no monopoly forms
+                        let crowding_pen = (have_pr as f64 / (cur_on_p.max(1) as f64 / 3.0)) * 0.25;
+                        let score = top_m + shortage_bonus - crowding_pen;
+                        if score > best_score {
+                            best_score = score;
+                            best_prof = pr_id;
+                            best_margin = top_m;
+                        }
+                    }
+                    (best_prof, best_margin)
+                };
+
+                if cur_on_p >= min_p && best_margin <= 0.12 {
+                    break;
+                }
+
+                let mut seq = self.next_npc_seq;
+                while self.world.companies.contains_key(&format!("npc_evo_{seq}")) {
+                    seq += 1;
+                }
+                self.next_npc_seq = seq + 1;
+                let seed_cash = (6_000.0 * cpi).clamp(3_000.0, 12_000.0);
+                if self.spawn_evolved_company_on(best_prof, pid, seq, &ranked, seed_cash) {
+                    cur_on_p += 1;
+                    total_npcs += 1;
+                } else {
+                    break;
+                }
+            }
         }
     }
 
