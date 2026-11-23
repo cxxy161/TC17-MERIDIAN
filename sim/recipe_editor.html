@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Meridian 产线节点编辑器 (ComfyUI Style · Schema v1.0.0)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0b0e14;
+      --panel: #131720;
+      --panel-2: #191f2c;
+      --border: #2a3244;
+      --text: #d6deeb;
+      --muted: #7f8ca3;
+      --blue: #58a6ff;
+      --accent: #2563eb;
+      --green: #3fb950;
+      --orange: #f0883e;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --env: #38bdf8;
+      --agri: #4ade80;
+      --mining: #fb923c;
+      --sys: #a78bfa;
+    }
+    html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", monospace; font-size: 12px; }
+
+    /* Topbar */
+    .topbar {
+      height: 46px; background: var(--panel); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 12px; gap: 10px; z-index: 30; position: relative;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; }
+    .brand h1 { font-size: 14px; font-weight: 700; color: #f8fafc; white-space: nowrap; }
+    .pill {
+      font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--panel-2); color: var(--muted); white-space: nowrap;
+    }
+    .pill.ok { color: var(--green); border-color: rgba(63,185,80,0.45); background: rgba(63,185,80,0.08); }
+    .pill.err { color: var(--red); border-color: rgba(248,81,73,0.45); background: rgba(248,81,73,0.1); }
+    .pill.warn { color: var(--orange); border-color: rgba(240,136,62,0.45); background: rgba(240,136,62,0.08); }
+
+    .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto; }
+    button, select, input, textarea {
+      background: #1c2230; color: var(--text); border: 1px solid var(--border);
+      padding: 4px 8px; border-radius: 6px; font-size: 12px; font-family: inherit;
+    }
+    button { cursor: pointer; white-space: nowrap; transition: background 0.12s, border-color 0.12s; }
+    button:hover { background: #262f42; border-color: #3f4b66; }
+    button.primary { background: var(--accent); border-color: #3b82f6; color: #fff; }
+    button.primary:hover { background: #1d4ed8; }
+    button.active { background: rgba(37, 99, 235, 0.25); border-color: var(--blue); color: #93c5fd; }
+    button.danger { border-color: rgba(248,81,73,0.45); color: var(--red); }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: var(--blue); }
+
+    /* Workspace */
+    .workspace { position: relative; width: 100%; height: calc(100vh - 46px); display: flex; overflow: hidden; }
+
+    /* Canvas */
+    .canvas-wrap {
+      flex: 1; position: relative; overflow: hidden;
+      background-color: #0b0e14;
+      background-image:
+        radial-gradient(circle, #1e2536 1px, transparent 1px),
+        linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 24px 24px, 120px 120px, 120px 120px;
+      cursor: grab;
+      user-select: none;
+    }
+    .canvas-wrap.panning { cursor: grabbing; }
+    .canvas-stage {
+      position: absolute; left: 0; top: 0; transform-origin: 0 0;
+      width: 3200px; height: 1800px;
+    }
+
+    /* Swimlanes */
+    .swimlane {
+      position: absolute; left: 20px; width: 2100px; border-radius: 12px;
+      border: 1px dashed rgba(255,255,255,0.08); background: rgba(255,255,255,0.012);
+      pointer-events: none;
+    }
+    .swimlane-label {
+      position: absolute; left: 14px; top: 10px; font-size: 12px; font-weight: 700;
+      letter-spacing: 0.4px; opacity: 0.85; display: flex; align-items: center; gap: 6px;
+    }
+
+    /* SVG Edges */
+    svg.edge-layer {
+      position: absolute; left: 0; top: 0; width: 3200px; height: 1800px;
+      pointer-events: none; overflow: visible;
+    }
+    .edge-path {
+      fill: none; stroke-width: 2.2; opacity: 0.72; pointer-events: stroke; cursor: pointer;
+      transition: stroke-width 0.12s, opacity 0.12s;
+    }
+    .edge-path:hover, .edge-path.selected { stroke-width: 4; opacity: 1; }
+    .edge-path.feedback {
+      stroke-dasharray: 6 5; stroke-width: 2; opacity: 0.92;
+      animation: dashFlow 1.2s linear infinite;
+    }
+    .edge-path.dimmed { opacity: 0.12; }
+    @keyframes dashFlow { to { stroke-dashoffset: -22; } }
+
+    .edge-label-bg { fill: #131720; stroke: #2a3244; stroke-width: 1; rx: 4; }
+    .edge-label-txt { fill: #cbd5e1; font-size: 10px; font-family: inherit; pointer-events: none; }
+
+    /* ComfyUI Node */
+    .node {
+      position: absolute; width: 256px; background: rgba(20, 25, 36, 0.96);
+      border: 1.5px solid var(--border); border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+      transition: box-shadow 0.15s, border-color 0.15s, opacity 0.15s;
+    }
+    .node:hover { border-color: #475569; }
+    .node.selected { border-color: var(--blue); box-shadow: 0 0 0 2px rgba(88,166,255,0.28), 0 10px 28px rgba(0,0,0,0.6); }
+    .node.dimmed { opacity: 0.22; }
+    .node.neg-margin { border-color: var(--red); }
+
+    .node-head {
+      padding: 7px 10px; border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: center;
+      cursor: move; border-bottom: 1px solid rgba(255,255,255,0.06); gap: 6px;
+    }
+    .node-title { font-weight: 700; font-size: 13px; color: #f8fafc; display: flex; align-items: center; gap: 6px; }
+    .node-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .node-badges { display: flex; align-items: center; gap: 4px; }
+    .fb-badge {
+      font-size: 10px; padding: 1px 5px; border-radius: 999px;
+      background: rgba(167, 139, 250, 0.16); color: #c4b5fd; border: 1px solid rgba(167,139,250,0.4);
+      cursor: help;
+    }
+    .role-tag {
+      font-size: 10px; padding: 1px 5px; border-radius: 4px; font-weight: 600;
+      background: rgba(255,255,255,0.06); color: var(--muted);
+    }
+
+    .node-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+    .node-ports-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; min-height: 22px; }
+    .ports-col { display: flex; flex-direction: column; gap: 5px; }
+    .port-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #cbd5e1; position: relative; }
+    .port-item.out { justify-content: flex-end; }
+    .port-dot {
+      width: 11px; height: 11px; border-radius: 50%; border: 2px solid #0b0e14;
+      background: #64748b; cursor: crosshair; flex-shrink: 0; transition: transform 0.1s;
+    }
+    .port-dot:hover { transform: scale(1.3); }
+    .port-item.in .port-dot { margin-left: -16px; }
+    .port-item.out .port-dot { margin-right: -16px; }
+
+    .recipe-switcher { display: flex; gap: 4px; flex-wrap: wrap; }
+    .recipe-chip {
+      font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border);
+      background: #111622; color: var(--muted); cursor: pointer;
+    }
+    .recipe-chip.active { background: rgba(56,189,248,0.14); color: #7dd3fc; border-color: rgba(56,189,248,0.45); }
+
+    .node-meta {
+      display: flex; justify-content: space-between; align-items: center; font-size: 10px; color: var(--muted);
+      padding-top: 5px; border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .profit-pos { color: var(--green); font-weight: 700; }
+    .profit-neg { color: var(--red); font-weight: 700; }
+
+    /* Floating Controls on Canvas */
+    .canvas-hud {
+      position: absolute; left: 14px; bottom: 14px; display: flex; gap: 6px; z-index: 15;
+      background: rgba(19,23,32,0.9); border: 1px solid var(--border); padding: 6px 8px; border-radius: 8px;
+      backdrop-filter: blur(6px);
+    }
+    .focus-banner {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 15;
+      background: rgba(37,99,235,0.2); border: 1px solid rgba(88,166,255,0.5); color: #dbeafe;
+      padding: 5px 12px; border-radius: 999px; display: none; align-items: center; gap: 8px;
+      backdrop-filter: blur(6px);
+    }
+    .focus-banner.show { display: flex; }
+
+    /* Right Inspector */
+    .inspector {
+      width: 360px; background: var(--panel); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; z-index: 20; overflow: hidden;
+    }
+    .inspector.collapsed { width: 0; border-left: none; }
+    .insp-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--panel-2); }
+    .insp-tab {
+      flex: 1; text-align: center; padding: 8px 4px; cursor: pointer; font-size: 11px; color: var(--muted);
+      border-bottom: 2px solid transparent;
+    }
+    .insp-tab.active { color: #f8fafc; border-bottom-color: var(--blue); background: var(--panel); }
+    .insp-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 11px; color: var(--muted); }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .box { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
+    .box-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 12px; color: #f1f5f9; }
+    .io-edit-row { display: grid; grid-template-columns: 1fr 64px 26px; gap: 5px; align-items: center; }
+
+    /* Bottom Drawer (Throughput & Audit) */
+    .drawer {
+      position: absolute; left: 0; right: 360px; bottom: 0; height: 260px;
+      background: rgba(19, 23, 32, 0.97); border-top: 1px solid var(--border);
+      z-index: 25; display: none; flex-direction: column;
+    }
+    .drawer.open { display: flex; }
+    .inspector.collapsed ~ .drawer { right: 0; }
+    .drawer-head {
+      padding: 7px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;
+      background: var(--panel-2);
+    }
+    .drawer-body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+    th, td { padding: 5px 8px; border-bottom: 1px solid #222938; text-align: left; }
+    th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Modal */
+    .modal-mask {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 50;
+      display: none; align-items: center; justify-content: center;
+    }
+    .modal-mask.open { display: flex; }
+    .modal {
+      width: 680px; max-width: 92vw; background: var(--panel); border: 1px solid var(--border);
+      border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .modal textarea { width: 100%; height: 320px; font-family: monospace; font-size: 11px; }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <h1>Meridian 产线节点图</h1>
+    <span class="pill" id="schemaBadge">Schema v1.0.0</span>
+    <span class="pill ok" id="healthBadge">体检中...</span>
+    <span class="pill" id="statsBadge">3职业 · 16物品 · 7建筑 · 16配方</span>
+  </div>
+  <div class="toolbar">
+    <button id="btnViewGlobal" class="active" onclick="setViewMode('global')">🌐 全局泳道图</button>
+    <button id="btnViewFocus" onclick="toggleFocusMode()">🎯 聚焦选中节点</button>
+    <button onclick="autoLayout()">📐 自动对齐</button>
+    <button onclick="fitView()">🔍 适应画布</button>
+    <button onclick="toggleDrawer('audit')">🩺 经济学体检</button>
+    <button onclick="toggleDrawer('planet')">🪐 星球配比</button>
+    <button onclick="openJsonModal()">📦 导入/导出 JSON</button>
+    <button class="danger" onclick="resetDefault()">↺ 重置 3×5 模板</button>
+    <button onclick="toggleInspector()">☰ 属性面板</button>
+  </div>
+</div>
+
+<div class="workspace">
+  <div class="canvas-wrap" id="canvasWrap">
+    <div class="focus-banner" id="focusBanner">
+      <span id="focusText">聚焦模式</span>
+      <button onclick="setViewMode('global')">退出聚焦</button>
+    </div>
+    <div class="canvas-stage" id="canvasStage">
+      <div id="swimlanesLayer"></div>
+      <svg class="edge-layer" id="edgeLayer"></svg>
+      <div id="nodesLayer"></div>
+    </div>
+    <div class="canvas-hud">
+      <button onclick="zoomBy(1.15)">＋</button>
+      <button onclick="zoomBy(0.87)">－</button>
+      <span id="zoomLabel" style="align-self:center; color:var(--muted); min-width:44px; text-align:center;">100%</span>
+      <span style="color:var(--muted); align-self:center; margin-left:4px;">滚轮缩放 · 拖空白平移 · 拖端口连线 · ━━ 正向产线 · <span style="color:#a78bfa">┄┄ 回流/循环</span></span>
+    </div>
+  </div>
+
+  <aside class="inspector" id="inspector">
+    <div class="insp-tabs">
+      <div class="insp-tab active" data-tab="node" onclick="switchInspTab('node')">节点/配方</div>
+      <div class="insp-tab" data-tab="buildings" onclick="switchInspTab('buildings')">建筑(7)</div>
+      <div class="insp-tab" data-tab="professions" onclick="switchInspTab('professions')">职业/大类</div>
+    </div>
+    <div class="insp-body" id="inspBody"></div>
+  </aside>
+
+  <div class="drawer" id="bottomDrawer">
+    <div class="drawer-head">
+      <strong id="drawerTitle">面板</strong>
+      <button onclick="closeDrawer()">✕ 关闭</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </div>
+</div>
+
+<div class="modal-mask" id="jsonModal">
+  <div class="modal">
+    <div class="box-head">
+      <span>Schema v1.0.0 JSON 导入 / 导出</span>
+      <button onclick="closeJsonModal()">✕</button>
+    </div>
+    <textarea id="jsonTextarea"></textarea>
+    <div style="display:flex; justify-content:flex-end; gap:8px;">
+      <button onclick="downloadJson()">⬇ 下载 .json</button>
+      <button class="primary" onclick="importJson()">⬆ 应用导入</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'meridian_prod_v1_comfy';
+
+function buildDefaultData() {
+  return {
+    schema_version: "1.0.0",
+    meta: {
+      name: "Meridian 3×5 起步产线包",
+      author: "Meridian",
+      ticks_per_day: 24,
+      tick_seconds: 60,
+      updated_at: new Date().toISOString()
+    },
+    demand_categories: [
+      { id: "env_support", name: "维生与环保", wealth_tier: 1, description: "电力、净水、氧气与垃圾消纳" },
+      { id: "daily_life", name: "饮食与穿着", wealth_tier: 1, description: "口粮、营养饮料与基础衣物" },
+      { id: "infra_tools", name: "基建与日用", wealth_tier: 1, description: "结构建材与日用五金维修工具" }
+    ],
+    professions: [
+      { id: "env_recycle", name: "环境能源与回收", demand_category: "env_support", color: "#38bdf8", description: "掌控能源、净水、氧气与城市废料再生" },
+      { id: "agri_bio", name: "生态农食与轻纺", demand_category: "daily_life", color: "#4ade80", description: "掌控作物、工业碳纤维与日常饮食穿着" },
+      { id: "mining_ind", name: "矿业与重工基建", demand_category: "infra_tools", color: "#fb923c", description: "掌控采矿、炼钢、建材、五金与轨道造船" }
+    ],
+    items: [
+      // ① 环境能源与回收 (5) + waste
+      { id: "power", name: "电力", role: "factory_consume", profession: "env_recycle", demand_category: "env_support", wealth_tier: 1, step_depth: 0, volume: 0.1, ref_price: 1.5, base_demand_per_1k: 1.5, tags: ["power"] },
+      { id: "water", name: "净水", role: "planet_supply", profession: "env_recycle", demand_category: "env_support", wealth_tier: 1, step_depth: 0, volume: 1.0, ref_price: 2.0, base_demand_per_1k: 2.0, tags: [] },
+      { id: "oxygen", name: "氧气", role: "planet_supply", profession: "env_recycle", demand_category: "env_support", wealth_tier: 1, step_depth: 1, volume: 0.5, ref_price: 2.5, base_demand_per_1k: 1.6, tags: [] },
+      { id: "fuel", name: "燃料", role: "factory_consume", profession: "env_recycle", demand_category: null, wealth_tier: 1, step_depth: 2, volume: 1.0, ref_price: 5.0, base_demand_per_1k: 0.5, tags: ["fuel"] },
+      { id: "disposal_cert", name: "垃圾消纳", role: "planet_supply", profession: "env_recycle", demand_category: "env_support", wealth_tier: 1, step_depth: 2, volume: 0.1, ref_price: 3.0, base_demand_per_1k: 1.0, tags: ["recycle"] },
+      { id: "waste", name: "城市废料", role: "byproduct", profession: "system", demand_category: null, wealth_tier: 1, step_depth: 0, volume: 1.0, ref_price: 0.0, base_demand_per_1k: 0, tags: ["waste"] },
+
+      // ② 生态农食与轻纺 (5)
+      { id: "bio_crop", name: "生物作物", role: "foundation", profession: "agri_bio", demand_category: null, wealth_tier: 1, step_depth: 1, volume: 1.0, ref_price: 3.0, base_demand_per_1k: 0, tags: [] },
+      { id: "bio_fiber", name: "生物纤维", role: "foundation", profession: "agri_bio", demand_category: null, wealth_tier: 1, step_depth: 2, volume: 0.8, ref_price: 4.0, base_demand_per_1k: 0, tags: ["carbon"] },
+      { id: "rations", name: "基础口粮", role: "planet_supply", profession: "agri_bio", demand_category: "daily_life", wealth_tier: 1, step_depth: 2, volume: 0.8, ref_price: 3.5, base_demand_per_1k: 2.5, tags: ["food"] },
+      { id: "beverage", name: "营养饮料", role: "planet_supply", profession: "agri_bio", demand_category: "daily_life", wealth_tier: 1, step_depth: 3, volume: 1.0, ref_price: 6.0, base_demand_per_1k: 1.2, tags: ["drink"] },
+      { id: "clothing", name: "基础衣物", role: "planet_supply", profession: "agri_bio", demand_category: "daily_life", wealth_tier: 1, step_depth: 3, volume: 1.2, ref_price: 8.5, base_demand_per_1k: 0.8, tags: [] },
+
+      // ③ 矿业与重工基建 (5)
+      { id: "ore", name: "基础矿石", role: "foundation", profession: "mining_ind", demand_category: null, wealth_tier: 1, step_depth: 0, volume: 1.5, ref_price: 2.5, base_demand_per_1k: 0, tags: [] },
+      { id: "steel", name: "金属钢材", role: "foundation", profession: "mining_ind", demand_category: null, wealth_tier: 1, step_depth: 2, volume: 1.2, ref_price: 8.0, base_demand_per_1k: 0, tags: [] },
+      { id: "building_mat", name: "结构建材", role: "factory_consume", profession: "mining_ind", demand_category: "infra_tools", wealth_tier: 1, step_depth: 3, volume: 1.5, ref_price: 7.0, base_demand_per_1k: 1.0, tags: ["build"] },
+      { id: "daily_goods", name: "日用品", role: "planet_supply", profession: "mining_ind", demand_category: "infra_tools", wealth_tier: 1, step_depth: 3, volume: 0.8, ref_price: 8.0, base_demand_per_1k: 1.2, tags: ["repair"] },
+      { id: "ship_small", name: "小货船", role: "capital", profession: "mining_ind", demand_category: null, wealth_tier: 1, step_depth: 4, volume: 50.0, ref_price: 280.0, base_demand_per_1k: 0.02, tags: ["ship"] }
+    ],
+    buildings: [
+      { id: "power_water_station", name: "能源水站", profession: "env_recycle", slots_used: 1, build_ticks: 4, build_cost: [{ item: "building_mat", qty: 6 }] },
+      { id: "recycling_plant", name: "生态回收中心", profession: "env_recycle", slots_used: 1, build_ticks: 5, build_cost: [{ item: "building_mat", qty: 8 }] },
+      { id: "bio_greenhouse", name: "生态温室", profession: "agri_bio", slots_used: 1, build_ticks: 4, build_cost: [{ item: "building_mat", qty: 6 }] },
+      { id: "consumer_workshop", name: "生活消费工坊", profession: "agri_bio", slots_used: 1, build_ticks: 5, build_cost: [{ item: "building_mat", qty: 8 }] },
+      { id: "mine_smelter", name: "矿业冶炼厂", profession: "mining_ind", slots_used: 1, build_ticks: 5, build_cost: [{ item: "building_mat", qty: 8 }] },
+      { id: "infra_factory", name: "结构与日用厂", profession: "mining_ind", slots_used: 1, build_ticks: 6, build_cost: [{ item: "building_mat", qty: 10 }] },
+      { id: "shipyard", name: "轨道船坞", profession: "mining_ind", slots_used: 2, build_ticks: 12, build_cost: [{ item: "building_mat", qty: 24 }, { item: "steel", qty: 12 }] }
+    ],
+    recipes: [
+      // 1. 能源水站 (6)
+      { id: "solar_power", name: "光伏发电", building_id: "power_water_station", tier: 1, cycle_ticks: 2, power_cost: 0, labor_cost: 4, inputs: [], outputs: [{ item: "power", qty: 12 }], enabled: true },
+      { id: "fuel_power", name: "燃料高功率发电", building_id: "power_water_station", tier: 1, cycle_ticks: 2, power_cost: 0, labor_cost: 4, inputs: [{ item: "fuel", qty: 1 }], outputs: [{ item: "power", qty: 28 }], enabled: true },
+      { id: "ice_water", name: "冰水提取", building_id: "power_water_station", tier: 1, cycle_ticks: 2, power_cost: 2, labor_cost: 4, inputs: [], outputs: [{ item: "water", qty: 10 }], enabled: true },
+      { id: "electro_oxygen", name: "电解制氧", building_id: "power_water_station", tier: 1, cycle_ticks: 2, power_cost: 4, labor_cost: 4, inputs: [{ item: "water", qty: 4 }], outputs: [{ item: "oxygen", qty: 10 }], enabled: true },
+      { id: "synth_fuel", name: "合成推进燃料", building_id: "power_water_station", tier: 1, cycle_ticks: 3, power_cost: 4, labor_cost: 6, inputs: [{ item: "water", qty: 4 }, { item: "bio_fiber", qty: 1 }], outputs: [{ item: "fuel", qty: 6 }], enabled: true },
+      { id: "electro_fuel_backup", name: "纯电解制燃料(备用)", building_id: "power_water_station", tier: 1, cycle_ticks: 3, power_cost: 8, labor_cost: 6, inputs: [{ item: "water", qty: 5 }], outputs: [{ item: "fuel", qty: 6 }], enabled: true },
+
+      // 2. 生态回收中心 (1)
+      { id: "waste_recycle", name: "城市垃圾再生处理", building_id: "recycling_plant", tier: 1, cycle_ticks: 3, power_cost: 3, labor_cost: 6, inputs: [{ item: "waste", qty: 8 }], outputs: [{ item: "disposal_cert", qty: 6 }, { item: "water", qty: 3 }, { item: "bio_fiber", qty: 1 }, { item: "ore", qty: 1 }], enabled: true },
+
+      // 3. 生态温室 (2)
+      { id: "hydro_crop", name: "水培作物培育", building_id: "bio_greenhouse", tier: 1, cycle_ticks: 3, power_cost: 2, labor_cost: 6, inputs: [{ item: "water", qty: 4 }], outputs: [{ item: "bio_crop", qty: 8 }], enabled: true },
+      { id: "crop_to_fiber", name: "高碳作物裂解纤维", building_id: "bio_greenhouse", tier: 1, cycle_ticks: 3, power_cost: 2, labor_cost: 4, inputs: [{ item: "bio_crop", qty: 5 }], outputs: [{ item: "bio_fiber", qty: 6 }], enabled: true },
+
+      // 4. 生活消费工坊 (3)
+      { id: "make_rations", name: "基础口粮压制", building_id: "consumer_workshop", tier: 1, cycle_ticks: 3, power_cost: 2, labor_cost: 5, inputs: [{ item: "bio_crop", qty: 4 }, { item: "water", qty: 3 }], outputs: [{ item: "rations", qty: 10 }], enabled: true },
+      { id: "make_beverage", name: "营养饮料罐装", building_id: "consumer_workshop", tier: 1, cycle_ticks: 4, power_cost: 3, labor_cost: 8, inputs: [{ item: "bio_crop", qty: 4 }, { item: "water", qty: 6 }, { item: "steel", qty: 1 }], outputs: [{ item: "beverage", qty: 8 }], enabled: true },
+      { id: "make_clothing", name: "基础衣物缝制", building_id: "consumer_workshop", tier: 1, cycle_ticks: 4, power_cost: 3, labor_cost: 10, inputs: [{ item: "bio_fiber", qty: 5 }, { item: "water", qty: 2 }, { item: "daily_goods", qty: 1 }], outputs: [{ item: "clothing", qty: 6 }], enabled: true },
+
+      // 5. 矿业冶炼厂 (3)
+      { id: "deep_mining", name: "深井矿石开采", building_id: "mine_smelter", tier: 1, cycle_ticks: 2, power_cost: 3, labor_cost: 6, inputs: [], outputs: [{ item: "ore", qty: 10 }], enabled: true },
+      { id: "steel_carbon", name: "碳还原炼钢", building_id: "mine_smelter", tier: 1, cycle_ticks: 4, power_cost: 3, labor_cost: 8, inputs: [{ item: "ore", qty: 6 }, { item: "bio_fiber", qty: 3 }], outputs: [{ item: "steel", qty: 6 }], enabled: true },
+      { id: "steel_arc_backup", name: "纯电弧炉炼钢(备用)", building_id: "mine_smelter", tier: 1, cycle_ticks: 4, power_cost: 16, labor_cost: 8, inputs: [{ item: "ore", qty: 6 }], outputs: [{ item: "steel", qty: 6 }], enabled: true },
+
+      // 6. 结构与日用厂 (2)
+      { id: "make_building_mat", name: "结构建材浇筑", building_id: "infra_factory", tier: 1, cycle_ticks: 4, power_cost: 3, labor_cost: 8, inputs: [{ item: "ore", qty: 5 }, { item: "steel", qty: 3 }], outputs: [{ item: "building_mat", qty: 8 }], enabled: true },
+      { id: "make_daily_goods", name: "日用五金制造", building_id: "infra_factory", tier: 1, cycle_ticks: 4, power_cost: 3, labor_cost: 10, inputs: [{ item: "steel", qty: 3 }, { item: "bio_fiber", qty: 2 }], outputs: [{ item: "daily_goods", qty: 6 }], enabled: true },
+
+      // 7. 轨道船坞 (1)
+      { id: "build_ship_small", name: "小货船建造", building_id: "shipyard", tier: 1, cycle_ticks: 10, power_cost: 12, labor_cost: 30, inputs: [{ item: "steel", qty: 12 }, { item: "building_mat", qty: 8 }, { item: "daily_goods", qty: 6 }], outputs: [{ item: "ship_small", qty: 1 }], enabled: true }
+    ]
+  };
+}
+
+let state = loadState();
+let layout = loadLayout();
+let activeRecipeByItem = {};
+let selectedItemId = 'steel';
+let selectedEdge = null;
+let viewMode = 'global'; // 'global' | 'focus'
+let inspTab = 'node';
+let hoveredItemId = null;
+
+// Canvas transform
+let pan = { x: 30, y: 20 };
+let zoom = 0.88;
+let isPanning = false;
+let panStart = { x: 0, y: 0 };
+let draggingNode = null;
+let dragOffset = { x: 0, y: 0 };
+let linkingFrom = null; // { itemId, x, y }
+let tempLinkEnd = null;
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return buildDefaultData();
+}
+
+function saveState() {
+  state.meta.updated_at = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function loadLayout() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY + '_layout');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return computeAutoLayout(state);
+}
+
+function saveLayout() {
+  localStorage.setItem(STORAGE_KEY + '_layout', JSON.stringify(layout));
+}
+
+function computeAutoLayout(data) {
+  const pos = {};
+  const profOrder = ['env_recycle', 'agri_bio', 'mining_ind', 'system'];
+  const lanes = {};
+  profOrder.forEach(p => lanes[p] = { 0: [], 1: [], 2: [], 3: [], 4: [] });
+  data.items.forEach(it => {
+    const p = profOrder.includes(it.profession) ? it.profession : 'system';
+    const d = Math.min(4, Math.max(0, it.step_depth || 0));
+    lanes[p][d].push(it);
+  });
+
+  let yCursor = 50;
+  profOrder.forEach(p => {
+    const colMap = lanes[p];
+    let maxRows = 1;
+    Object.values(colMap).forEach(arr => { if (arr.length > maxRows) maxRows = arr.length; });
+    const laneHeight = Math.max(190, maxRows * 155 + 45);
+    for (let d = 0; d <= 4; d++) {
+      colMap[d].forEach((it, idx) => {
+        pos[it.id] = { x: 60 + d * 340, y: yCursor + 36 + idx * 150 };
+      });
+    }
+    yCursor += laneHeight + 24;
+  });
+  return pos;
+}
+
+function autoLayout() {
+  layout = computeAutoLayout(state);
+  saveLayout();
+  renderAll();
+}
+
+function getProfColor(profId) {
+  if (profId === 'system') return '#a78bfa';
+  const p = state.professions.find(x => x.id === profId);
+  return p ? p.color : '#64748b';
+}
+
+function getItem(id) { return state.items.find(x => x.id === id); }
+function getBuilding(id) { return state.buildings.find(x => x.id === id); }
+function getRecipesForItem(itemId) {
+  return state.recipes.filter(r => r.enabled !== false && r.outputs.some(o => o.item === itemId));
+}
+function getActiveRecipe(itemId) {
+  const list = getRecipesForItem(itemId);
+  if (!list.length) return null;
+  const chosen = activeRecipeByItem[itemId];
+  return list.find(r => r.id === chosen) || list[0];
+}
+
+function calcRecipeEconomics(r) {
+  const powerItem = getItem('power');
+  const powerPrice = powerItem ? powerItem.ref_price : 1.5;
+  let inCost = 0;
+  r.inputs.forEach(iq => {
+    const it = getItem(iq.item);
+    inCost += (it ? it.ref_price : 0) * iq.qty;
+  });
+  const powerCostVal = (r.power_cost || 0) * powerPrice;
+  const labor = r.labor_cost || 0;
+  const totalCost = inCost + powerCostVal + labor;
+  let outVal = 0;
+  r.outputs.forEach(oq => {
+    const it = getItem(oq.item);
+    outVal += (it ? it.ref_price : 0) * oq.qty;
+  });
+  const profit = outVal - totalCost;
+  const margin = outVal > 0 ? (profit / outVal) * 100 : 0;
+  return { inCost, powerCostVal, labor, totalCost, outVal, profit, margin };
+}
+
+function runHealthAudit() {
+  const errors = [];
+  const warnings = [];
+  const profIds = new Set(state.professions.map(p => p.id));
+  const itemIds = new Set(state.items.map(i => i.id));
+  const bldIds = new Set(state.buildings.map(b => b.id));
+
+  state.items.forEach(i => {
+    if (i.profession !== 'system' && !profIds.has(i.profession)) errors.push(`物品 ${i.id} 引用未知职业 ${i.profession}`);
+  });
+  state.recipes.forEach(r => {
+    if (!bldIds.has(r.building_id)) errors.push(`配方 ${r.id} 引用未知建筑 ${r.building_id}`);
+    r.inputs.forEach(iq => { if (!itemIds.has(iq.item)) errors.push(`配方 ${r.id} 输入未知物品 ${iq.item}`); });
+    r.outputs.forEach(oq => { if (!itemIds.has(oq.item)) errors.push(`配方 ${r.id} 输出未知物品 ${oq.item}`); });
+    if (r.enabled !== false) {
+      const eco = calcRecipeEconomics(r);
+      if (eco.profit < 0) warnings.push(`配方「${r.name}」负毛利 (${eco.profit.toFixed(1)})`);
+    }
+  });
+
+  // Reachability BFS from zero-input recipes + byproduct
+  const reachable = new Set(state.items.filter(i => i.role === 'byproduct').map(i => i.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    state.recipes.forEach(r => {
+      if (r.enabled === false) return;
+      if (r.inputs.every(iq => reachable.has(iq.item))) {
+        r.outputs.forEach(oq => {
+          if (!reachable.has(oq.item)) { reachable.add(oq.item); changed = true; }
+        });
+      }
+    });
+  }
+  state.items.forEach(i => {
+    if (!reachable.has(i.id)) errors.push(`物品「${i.name}」(${i.id}) 存在闭环死锁，无法从零原料启动`);
+  });
+
+  return { errors, warnings, reachable };
+}
+
+function isFeedbackEdge(fromId, toId) {
+  const from = getItem(fromId);
+  const to = getItem(toId);
+  if (!from || !to) return false;
+  if (from.role === 'byproduct') return true; // waste -> recycled items
+  if (fromId === 'fuel' && toId === 'power') return true; // fuel -> power
+  return (from.step_depth || 0) > (to.step_depth || 0);
+}
+
+function getFocusSet(centerId) {
+  const up = new Set([centerId]);
+  const down = new Set([centerId]);
+  // Upstream
+  let q = [centerId];
+  while (q.length) {
+    const cur = q.shift();
+    const r = getActiveRecipe(cur);
+    if (r) r.inputs.forEach(iq => { if (!up.has(iq.item)) { up.add(iq.item); q.push(iq.item); } });
+  }
+  // Downstream
+  q = [centerId];
+  while (q.length) {
+    const cur = q.shift();
+    state.recipes.forEach(r => {
+      if (r.enabled === false) return;
+      if (r.inputs.some(iq => iq.item === cur)) {
+        r.outputs.forEach(oq => { if (!down.has(oq.item)) { down.add(oq.item); q.push(oq.item); } });
+      }
+    });
+  }
+  return new Set([...up, ...down]);
+}
+
+function renderAll() {
+  applyTransform();
+  renderSwimlanes();
+  renderNodes();
+  renderEdges();
+  renderInspector();
+  updateTopBadges();
+}
+
+function applyTransform() {
+  const stage = document.getElementById('canvasStage');
+  stage.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
+  document.getElementById('zoomLabel').textContent = Math.round(zoom * 100) + '%';
+}
+
+function renderSwimlanes() {
+  const layer = document.getElementById('swimlanesLayer');
+  if (viewMode === 'focus') { layer.innerHTML = ''; return; }
+  const profOrder = ['env_recycle', 'agri_bio', 'mining_ind', 'system'];
+  let html = '';
+  let yCursor = 50;
+  profOrder.forEach(pid => {
+    const items = state.items.filter(i => (profOrder.includes(i.profession) ? i.profession : 'system') === pid);
+    const colCounts = {};
+    items.forEach(i => { const d = i.step_depth || 0; colCounts[d] = (colCounts[d] || 0) + 1; });
+    const maxRows = Math.max(1, ...Object.values(colCounts));
+    const h = Math.max(190, maxRows * 155 + 45);
+    const prof = state.professions.find(p => p.id === pid);
+    const title = pid === 'system' ? '⚙️ 系统副产 (System)' : `${prof ? prof.name : pid}`;
+    const color = getProfColor(pid);
+    html += `<div class="swimlane" style="top:${yCursor}px; height:${h}px; border-color:${color}33;">
+      <div class="swimlane-label" style="color:${color};">● ${title}</div>
+    </div>`;
+    yCursor += h + 24;
+  });
+  layer.innerHTML = html;
+}
+
+function renderNodes() {
+  const layer = document.getElementById('nodesLayer');
+  const focusSet = viewMode === 'focus' && selectedItemId ? getFocusSet(selectedItemId) : null;
+  let html = '';
+
+  state.items.forEach(it => {
+    const p = layout[it.id] || { x: 100, y: 100 };
+    const color = getProfColor(it.profession);
+    const recipes = getRecipesForItem(it.id);
+    const activeR = getActiveRecipe(it.id);
+    const bld = activeR ? getBuilding(activeR.building_id) : null;
+    const eco = activeR ? calcRecipeEconomics(activeR) : null;
+    const isSelected = selectedItemId === it.id;
+    const isDimmed = focusSet && !focusSet.has(it.id);
+    const isNeg = eco && eco.profit < 0;
+
+    // Feedback badges
+    const fbOut = state.recipes.filter(r => r.enabled !== false && r.inputs.some(iq => iq.item === it.id) && r.outputs.some(oq => isFeedbackEdge(it.id, oq.item)));
+    const fbBadge = fbOut.length ? `<span class="fb-badge" title="存在回流/循环去向，悬停或选中节点展开">↻ ${fbOut.length}</span>` : '';
+
+    const inPorts = activeR && activeR.inputs.length ? activeR.inputs.map(iq => {
+      const inIt = getItem(iq.item);
+      return `<div class="port-item in">
+        <span class="port-dot" data-port-dir="in" data-item="${it.id}" data-link-item="${iq.item}" style="background:${getProfColor(inIt?.profession)}" title="输入: ${inIt?.name || iq.item}"></span>
+        <span>${inIt ? inIt.name : iq.item}×${iq.qty}</span>
+      </div>`;
+    }).join('') : `<div class="port-item in"><span class="port-dot" data-port-dir="in" data-item="${it.id}" onmouseup="finishLink('${it.id}')"></span><span style="color:var(--muted)">无原料</span></div>`;
+
+    const outPorts = activeR ? activeR.outputs.map(oq => {
+      const outIt = getItem(oq.item);
+      return `<div class="port-item out">
+        <span>${outIt ? outIt.name : oq.item}×${oq.qty}</span>
+        <span class="port-dot" data-port-dir="out" data-item="${it.id}" data-link-item="${oq.item}" style="background:${getProfColor(outIt?.profession)}" onmousedown="startLink(event, '${it.id}')"></span>
+      </div>`;
+    }).join('') : `<div class="port-item out">
+      <span>${it.name}(副产)</span>
+      <span class="port-dot" data-port-dir="out" data-item="${it.id}" data-link-item="${it.id}" style="background:${color}" onmousedown="startLink(event, '${it.id}')"></span>
+    </div>`;
+
+    const switcher = recipes.length > 1 ? `<div class="recipe-switcher">
+      ${recipes.map(r => `<span class="recipe-chip ${activeR && r.id === activeR.id ? 'active' : ''}" onclick="event.stopPropagation(); switchItemRecipe('${it.id}','${r.id}')">${r.name}</span>`).join('')}
+    </div>` : (activeR ? `<div style="font-size:11px; color:#94a3b8;">🏭 ${bld ? bld.name : activeR.building_id} · ${activeR.name}</div>` : `<div style="font-size:11px; color:var(--muted);">城市消费排放</div>`);
+
+    const metaHtml = eco ? `
+      <span>¥${it.ref_price.toFixed(1)} · ${activeR.cycle_ticks}t · ⚡${activeR.power_cost}</span>
+      <span class="${eco.profit >= 0 ? 'profit-pos' : 'profit-neg'}">${eco.profit >= 0 ? '+' : ''}${eco.profit.toFixed(1)} (${eco.margin.toFixed(0)}%)</span>
+    ` : `<span>¥${it.ref_price.toFixed(1)}</span><span>副产</span>`;
+
+    html += `<div class="node ${isSelected ? 'selected' : ''} ${isDimmed ? 'dimmed' : ''} ${isNeg ? 'neg-margin' : ''}"
+      id="node-${it.id}" style="left:${p.x}px; top:${p.y}px;"
+      onmousedown="onNodeMouseDown(event, '${it.id}')"
+      onmouseenter="hoveredItemId='${it.id}'; renderEdges();"
+      onmouseleave="hoveredItemId=null; renderEdges();"
+      onmouseup="finishLink('${it.id}')">
+      <div class="node-head" style="background: linear-gradient(90deg, ${color}22, transparent);">
+        <div class="node-title"><span class="node-dot" style="background:${color}"></span>${it.name}</div>
+        <div class="node-badges">${fbBadge}<span class="role-tag">${it.role}</span></div>
+      </div>
+      <div class="node-body">
+        ${switcher}
+        <div class="node-ports-row">
+          <div class="ports-col">${inPorts}</div>
+          <div class="ports-col">${outPorts}</div>
+        </div>
+        <div class="node-meta">${metaHtml}</div>
+      </div>
+    </div>`;
+  });
+  layer.innerHTML = html;
+}
+
+function getPortCenter(dir, nodeItemId, linkItemId) {
+  const selector = linkItemId
+    ? `.port-dot[data-port-dir="${dir}"][data-item="${nodeItemId}"][data-link-item="${linkItemId}"]`
+    : `.port-dot[data-port-dir="${dir}"][data-item="${nodeItemId}"]`;
+  const dot = document.querySelector(selector);
+  const stage = document.getElementById('canvasStage');
+  if (!dot || !stage) return null;
+  const dr = dot.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  return {
+    x: (dr.left + dr.width / 2 - sr.left) / zoom,
+    y: (dr.top + dr.height / 2 - sr.top) / zoom
+  };
+}
+
+function renderEdges() {
+  const svg = document.getElementById('edgeLayer');
+  const focusSet = viewMode === 'focus' && selectedItemId ? getFocusSet(selectedItemId) : null;
+  let paths = '';
+
+  state.items.forEach(targetIt => {
+    const r = getActiveRecipe(targetIt.id);
+    if (!r) return;
+    r.inputs.forEach(iq => {
+      const fb = isFeedbackEdge(iq.item, targetIt.id);
+      const showFb = fb && (hoveredItemId === iq.item || hoveredItemId === targetIt.id || selectedItemId === iq.item || selectedItemId === targetIt.id);
+      if (fb && !showFb) return; // Hide feedback loop unless hovered/selected
+
+      const p1 = getPortCenter('out', iq.item, iq.item) || (() => {
+        const fp = layout[iq.item]; return fp ? { x: fp.x + 256, y: fp.y + 62 } : null;
+      })();
+      const p2 = getPortCenter('in', targetIt.id, iq.item) || (() => {
+        const tp = layout[targetIt.id]; return tp ? { x: tp.x, y: tp.y + 62 } : null;
+      })();
+      if (!p1 || !p2) return;
+
+      const x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y;
+      const dx = Math.max(60, Math.abs(x2 - x1) * 0.45);
+      const d = fb
+        ? `M ${x1} ${y1} C ${x1 + 90} ${y1 - 90}, ${x2 - 90} ${y2 - 90}, ${x2} ${y2}`
+        : `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+
+      const color = fb ? '#a78bfa' : getProfColor(getItem(iq.item)?.profession);
+      const dimmed = focusSet && (!focusSet.has(iq.item) || !focusSet.has(targetIt.id));
+      const isSel = selectedEdge && selectedEdge.from === iq.item && selectedEdge.to === targetIt.id;
+
+      paths += `<path class="edge-path ${fb ? 'feedback' : ''} ${dimmed ? 'dimmed' : ''} ${isSel ? 'selected' : ''}"
+        d="${d}" stroke="${color}"
+        onclick="selectEdge('${iq.item}','${targetIt.id}','${r.id}')">
+        <title>${getItem(iq.item)?.name} ×${iq.qty} → ${targetIt.name} (${r.name})</title>
+      </path>`;
+    });
+  });
+
+  if (linkingFrom && tempLinkEnd) {
+    const d = `M ${linkingFrom.x} ${linkingFrom.y} C ${linkingFrom.x + 80} ${linkingFrom.y}, ${tempLinkEnd.x - 80} ${tempLinkEnd.y}, ${tempLinkEnd.x} ${tempLinkEnd.y}`;
+    paths += `<path d="${d}" stroke="#58a6ff" stroke-width="2.5" stroke-dasharray="5 4" fill="none"/>`;
+  }
+  svg.innerHTML = paths;
+}
+
+// Canvas Pan & Zoom & Drag
+const canvasWrap = document.getElementById('canvasWrap');
+canvasWrap.addEventListener('mousedown', e => {
+  if (e.target === canvasWrap || e.target.id === 'canvasStage' || e.target.id === 'swimlanesLayer') {
+    isPanning = true;
+    panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    canvasWrap.classList.add('panning');
+  }
+});
+window.addEventListener('mousemove', e => {
+  if (isPanning) {
+    pan.x = e.clientX - panStart.x;
+    pan.y = e.clientY - panStart.y;
+    applyTransform();
+  } else if (draggingNode) {
+    const rect = canvasWrap.getBoundingClientRect();
+    const x = (e.clientX - rect.left - pan.x) / zoom - dragOffset.x;
+    const y = (e.clientY - rect.top - pan.y) / zoom - dragOffset.y;
+    layout[draggingNode] = { x: Math.round(x), y: Math.round(y) };
+    const el = document.getElementById('node-' + draggingNode);
+    if (el) { el.style.left = layout[draggingNode].x + 'px'; el.style.top = layout[draggingNode].y + 'px'; }
+    renderEdges();
+  } else if (linkingFrom) {
+    const rect = canvasWrap.getBoundingClientRect();
+    tempLinkEnd = { x: (e.clientX - rect.left - pan.x) / zoom, y: (e.clientY - rect.top - pan.y) / zoom };
+    renderEdges();
+  }
+});
+window.addEventListener('mouseup', () => {
+  if (isPanning) { isPanning = false; canvasWrap.classList.remove('panning'); }
+  if (draggingNode) { draggingNode = null; saveLayout(); }
+  if (linkingFrom) { linkingFrom = null; tempLinkEnd = null; renderEdges(); }
+});
+canvasWrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY < 0 ? 1.1 : 0.91;
+  zoomBy(factor, e.clientX, e.clientY);
+}, { passive: false });
+
+function zoomBy(factor, cx, cy) {
+  const rect = canvasWrap.getBoundingClientRect();
+  const mx = (cx !== undefined ? cx - rect.left : rect.width / 2);
+  const my = (cy !== undefined ? cy - rect.top : rect.height / 2);
+  const newZoom = Math.min(2.2, Math.max(0.35, zoom * factor));
+  pan.x = mx - (mx - pan.x) * (newZoom / zoom);
+  pan.y = my - (my - pan.y) * (newZoom / zoom);
+  zoom = newZoom;
+  applyTransform();
+}
+
+function fitView() {
+  pan = { x: 24, y: 12 };
+  zoom = 0.82;
+  applyTransform();
+}
+
+function onNodeMouseDown(e, itemId) {
+  if (e.target.classList.contains('port-dot') || e.target.classList.contains('recipe-chip')) return;
+  e.stopPropagation();
+  selectedItemId = itemId;
+  selectedEdge = null;
+  const rect = canvasWrap.getBoundingClientRect();
+  const p = layout[itemId] || { x: 100, y: 100 };
+  draggingNode = itemId;
+  dragOffset = {
+    x: (e.clientX - rect.left - pan.x) / zoom - p.x,
+    y: (e.clientY - rect.top - pan.y) / zoom - p.y
+  };
+  renderNodes();
+  renderEdges();
+  renderInspector();
+}
+
+function startLink(e, fromItemId) {
+  e.stopPropagation();
+  const p = layout[fromItemId] || { x: 100, y: 100 };
+  linkingFrom = { itemId: fromItemId, x: p.x + 256, y: p.y + 62 };
+  tempLinkEnd = { x: linkingFrom.x, y: linkingFrom.y };
+}
+
+function finishLink(toItemId) {
+  if (!linkingFrom || linkingFrom.itemId === toItemId) return;
+  const r = getActiveRecipe(toItemId);
+  if (r && !r.inputs.some(iq => iq.item === linkingFrom.itemId)) {
+    r.inputs.push({ item: linkingFrom.itemId, qty: 1 });
+    saveState();
+    selectedItemId = toItemId;
+    renderAll();
+  }
+  linkingFrom = null;
+  tempLinkEnd = null;
+}
+
+function selectEdge(fromId, toId, recipeId) {
+  selectedEdge = { from: fromId, to: toId, recipeId };
+  selectedItemId = toId;
+  renderEdges();
+  renderInspector();
+}
+
+function switchItemRecipe(itemId, recipeId) {
+  activeRecipeByItem[itemId] = recipeId;
+  selectedItemId = itemId;
+  renderAll();
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('btnViewGlobal').classList.toggle('active', mode === 'global');
+  document.getElementById('btnViewFocus').classList.toggle('active', mode === 'focus');
+  const banner = document.getElementById('focusBanner');
+  if (mode === 'focus' && selectedItemId) {
+    const it = getItem(selectedItemId);
+    document.getElementById('focusText').textContent = `🎯 聚焦：${it ? it.name : selectedItemId}（上游来源 ← 当前 → 下游去向）`;
+    banner.classList.add('show');
+  } else {
+    banner.classList.remove('show');
+  }
+  renderAll();
+}
+
+function toggleFocusMode() {
+  setViewMode(viewMode === 'focus' ? 'global' : 'focus');
+}
+
+function toggleInspector() {
+  document.getElementById('inspector').classList.toggle('collapsed');
+}
+
+function switchInspTab(tab) {
+  inspTab = tab;
+  document.querySelectorAll('.insp-tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+  renderInspector();
+}
+
+function renderInspector() {
+  const body = document.getElementById('inspBody');
+  if (inspTab === 'node') {
+    const it = getItem(selectedItemId);
+    if (!it) { body.innerHTML = '<div style="color:var(--muted)">点击画布上的节点查看详情</div>'; return; }
+    const r = getActiveRecipe(it.id);
+    const eco = r ? calcRecipeEconomics(r) : null;
+    body.innerHTML = `
+      <div class="box">
+        <div class="box-head"><span>物品属性 (${it.id})</span><button class="primary" onclick="addNewItem()">+ 新物品</button></div>
+        <div class="row-2">
+          <div class="field"><label>名称</label><input value="${it.name}" onchange="updateItem('${it.id}','name',this.value)"></div>
+          <div class="field"><label>参考价 (ref_price)</label><input type="number" step="0.1" value="${it.ref_price}" onchange="updateItem('${it.id}','ref_price',+this.value)"></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>职能 (role)</label>
+            <select onchange="updateItem('${it.id}','role',this.value)">
+              ${['foundation','factory_consume','planet_supply','capital','byproduct'].map(ro => `<option value="${ro}" ${it.role===ro?'selected':''}>${ro}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>产线深度 (step_depth)</label><input type="number" min="0" max="5" value="${it.step_depth}" onchange="updateItem('${it.id}','step_depth',+this.value)"></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>归属职业</label>
+            <select onchange="updateItem('${it.id}','profession',this.value)">
+              ${state.professions.map(p => `<option value="${p.id}" ${it.profession===p.id?'selected':''}>${p.name}</option>`).join('')}
+              <option value="system" ${it.profession==='system'?'selected':''}>系统 (system)</option>
+            </select>
+          </div>
+          <div class="field"><label>每1k人口需求</label><input type="number" step="0.1" value="${it.base_demand_per_1k||0}" onchange="updateItem('${it.id}','base_demand_per_1k',+this.value)"></div>
+        </div>
+      </div>
+      ${r ? `
+      <div class="box">
+        <div class="box-head"><span>当前配方: ${r.name}</span><button onclick="addNewRecipe('${it.id}')">+ 替代配方</button></div>
+        <div class="row-2">
+          <div class="field"><label>所属建筑</label>
+            <select onchange="updateRecipe('${r.id}','building_id',this.value)">
+              ${state.buildings.map(b => `<option value="${b.id}" ${r.building_id===b.id?'selected':''}>${b.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field"><label>周期 (ticks)</label><input type="number" min="1" value="${r.cycle_ticks}" onchange="updateRecipe('${r.id}','cycle_ticks',+this.value)"></div>
+        </div>
+        <div class="row-2">
+          <div class="field"><label>耗电 (power_cost)</label><input type="number" min="0" value="${r.power_cost}" onchange="updateRecipe('${r.id}','power_cost',+this.value)"></div>
+          <div class="field"><label>人工 (labor_cost)</label><input type="number" min="0" step="0.5" value="${r.labor_cost}" onchange="updateRecipe('${r.id}','labor_cost',+this.value)"></div>
+        </div>
+        <div class="field"><label>原料输入 (可从画布拖端口连线添加)</label>
+          ${r.inputs.map((iq, idx) => `
+            <div class="io-edit-row">
+              <select onchange="updateRecipeIO('${r.id}','inputs',${idx},'item',this.value)">
+                ${state.items.map(x => `<option value="${x.id}" ${iq.item===x.id?'selected':''}>${x.name}</option>`).join('')}
+              </select>
+              <input type="number" min="1" value="${iq.qty}" onchange="updateRecipeIO('${r.id}','inputs',${idx},'qty',+this.value)">
+              <button class="danger" onclick="removeRecipeIO('${r.id}','inputs',${idx})">✕</button>
+            </div>
+          `).join('')}
+          <button onclick="addRecipeIO('${r.id}','inputs')">+ 添加原料</button>
+        </div>
+        <div class="field"><label>产物输出</label>
+          ${r.outputs.map((oq, idx) => `
+            <div class="io-edit-row">
+              <select onchange="updateRecipeIO('${r.id}','outputs',${idx},'item',this.value)">
+                ${state.items.map(x => `<option value="${x.id}" ${oq.item===x.id?'selected':''}>${x.name}</option>`).join('')}
+              </select>
+              <input type="number" min="1" value="${oq.qty}" onchange="updateRecipeIO('${r.id}','outputs',${idx},'qty',+this.value)">
+              <button class="danger" onclick="removeRecipeIO('${r.id}','outputs',${idx})">✕</button>
+            </div>
+          `).join('')}
+        </div>
+        <div style="font-size:11px; color:var(--muted); border-top:1px solid var(--border); padding-top:6px;">
+          产出估值: <b style="color:#f8fafc">${eco.outVal.toFixed(1)}</b> · 总成本: <b>${eco.totalCost.toFixed(1)}</b> ·
+          单步毛利: <b class="${eco.profit>=0?'profit-pos':'profit-neg'}">${eco.profit.toFixed(1)} (${eco.margin.toFixed(1)}%)</b>
+        </div>
+      </div>` : `<div class="box"><button class="primary" onclick="addNewRecipe('${it.id}')">+ 为该物品创建配方</button></div>`}
+    `;
+  } else if (inspTab === 'buildings') {
+    body.innerHTML = state.buildings.map(b => `
+      <div class="box">
+        <div class="box-head"><span>🏭 ${b.name}</span><span class="role-tag">${b.id}</span></div>
+        <div class="row-2">
+          <div class="field"><label>建造耗时</label><input type="number" value="${b.build_ticks}" onchange="b.build_ticks=+this.value; saveState();"></div>
+          <div class="field"><label>归属职业</label><input value="${b.profession}" disabled></div>
+        </div>
+      </div>
+    `).join('');
+  } else {
+    body.innerHTML = `
+      <div class="box"><div class="box-head"><span>三大职业</span></div>
+        ${state.professions.map(p => `<div style="display:flex;justify-content:space-between;"><span><b style="color:${p.color}">●</b> ${p.name}</span><span class="role-tag">${p.demand_category}</span></div>`).join('')}
+      </div>
+      <div class="box"><div class="box-head"><span>星球需求大类</span></div>
+        ${state.demand_categories.map(d => `<div style="display:flex;justify-content:space-between;"><span>${d.name}</span><span class="role-tag">T${d.wealth_tier}</span></div>`).join('')}
+      </div>
+    `;
+  }
+}
+
+function updateItem(id, field, val) {
+  const it = getItem(id);
+  if (it) { it[field] = val; saveState(); renderAll(); }
+}
+function updateRecipe(id, field, val) {
+  const r = state.recipes.find(x => x.id === id);
+  if (r) { r[field] = val; saveState(); renderAll(); }
+}
+function updateRecipeIO(rid, kind, idx, field, val) {
+  const r = state.recipes.find(x => x.id === rid);
+  if (r && r[kind][idx]) { r[kind][idx][field] = val; saveState(); renderAll(); }
+}
+function addRecipeIO(rid, kind) {
+  const r = state.recipes.find(x => x.id === rid);
+  if (r) { r[kind].push({ item: state.items[0].id, qty: 1 }); saveState(); renderAll(); }
+}
+function removeRecipeIO(rid, kind, idx) {
+  const r = state.recipes.find(x => x.id === rid);
+  if (r) { r[kind].splice(idx, 1); saveState(); renderAll(); }
+}
+function addNewItem() {
+  const id = 'item_' + Date.now().toString().slice(-4);
+  state.items.push({ id, name: '新物品', role: 'foundation', profession: 'mining_ind', demand_category: null, wealth_tier: 1, step_depth: 1, volume: 1.0, ref_price: 5.0, base_demand_per_1k: 0, tags: [] });
+  layout[id] = { x: 400, y: 300 };
+  selectedItemId = id;
+  saveState(); saveLayout(); renderAll();
+}
+function addNewRecipe(itemId) {
+  const id = 'rec_' + Date.now().toString().slice(-4);
+  const it = getItem(itemId);
+  state.recipes.push({ id, name: (it ? it.name : itemId) + '新工艺', building_id: state.buildings[0].id, tier: 1, cycle_ticks: 3, power_cost: 2, labor_cost: 4, inputs: [], outputs: [{ item: itemId, qty: 4 }], enabled: true });
+  activeRecipeByItem[itemId] = id;
+  saveState(); renderAll();
+}
+
+function updateTopBadges() {
+  const audit = runHealthAudit();
+  const hb = document.getElementById('healthBadge');
+  if (audit.errors.length) {
+    hb.className = 'pill err';
+    hb.textContent = `❌ ${audit.errors.length} 死锁/错误`;
+  } else if (audit.warnings.length) {
+    hb.className = 'pill warn';
+    hb.textContent = `⚠️ ${audit.warnings.length} 警告`;
+  } else {
+    hb.className = 'pill ok';
+    hb.textContent = '✅ 零死锁 · 全正毛利';
+  }
+  document.getElementById('statsBadge').textContent = `${state.professions.length}职业 · ${state.items.length}物品 · ${state.buildings.length}建筑 · ${state.recipes.length}配方`;
+}
+
+function toggleDrawer(kind) {
+  const drawer = document.getElementById('bottomDrawer');
+  const title = document.getElementById('drawerTitle');
+  const body = document.getElementById('drawerBody');
+  drawer.classList.add('open');
+
+  if (kind === 'audit') {
+    title.textContent = '🩺 经济学与可达性体检';
+    const audit = runHealthAudit();
+    body.innerHTML = `
+      <div style="margin-bottom:8px;">
+        ${audit.errors.length ? audit.errors.map(e => `<div style="color:var(--red)">❌ ${e}</div>`).join('') : '<div style="color:var(--green)">✅ 所有启用物品与配方均从零原料可达，无闭环死锁。</div>'}
+        ${audit.warnings.map(w => `<div style="color:var(--orange)">⚠️ ${w}</div>`).join('')}
+      </div>
+      <table>
+        <thead><tr><th>配方</th><th>建筑</th><th class="num">周期</th><th class="num">原料成本</th><th class="num">电+人工</th><th class="num">产出估值</th><th class="num">单步毛利</th><th class="num">毛利率</th></tr></thead>
+        <tbody>
+          ${state.recipes.map(r => {
+            const eco = calcRecipeEconomics(r);
+            const b = getBuilding(r.building_id);
+            return `<tr>
+              <td>${r.name}</td><td>${b ? b.name : r.building_id}</td><td class="num">${r.cycle_ticks}t</td>
+              <td class="num">${eco.inCost.toFixed(1)}</td><td class="num">${(eco.powerCostVal + eco.labor).toFixed(1)}</td>
+              <td class="num">${eco.outVal.toFixed(1)}</td>
+              <td class="num ${eco.profit>=0?'profit-pos':'profit-neg'}">${eco.profit.toFixed(1)}</td>
+              <td class="num">${eco.margin.toFixed(1)}%</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+  } else {
+    title.textContent = '🪐 星球吞吐配比测算 (按人口规模)';
+    renderPlanetCalc(5000);
+  }
+}
+
+function renderPlanetCalc(pop) {
+  const body = document.getElementById('drawerBody');
+  const scale = pop / 1000;
+  body.innerHTML = `
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">
+      <label>星球人口：</label>
+      <input type="number" value="${pop}" step="1000" min="1000" onchange="renderPlanetCalc(+this.value)">
+      <span style="color:var(--muted)">按每 1000 人口每 tick 基础需求测算所需主配方建筑数</span>
+    </div>
+    <table>
+      <thead><tr><th>消费品</th><th>需求大类</th><th class="num">每tick总需求</th><th>主配方</th><th class="num">单厂每tick产出</th><th class="num">建议建筑数</th></tr></thead>
+      <tbody>
+        ${state.items.filter(i => (i.base_demand_per_1k || 0) > 0).map(i => {
+          const need = i.base_demand_per_1k * scale;
+          const r = getActiveRecipe(i.id);
+          const outQty = r ? (r.outputs.find(o => o.item === i.id)?.qty || 1) / r.cycle_ticks : 0;
+          const blds = outQty > 0 ? Math.ceil(need / outQty) : '-';
+          return `<tr>
+            <td>${i.name}</td><td>${i.demand_category || '-'}</td><td class="num">${need.toFixed(2)}</td>
+            <td>${r ? r.name : '-'}</td><td class="num">${outQty.toFixed(2)}</td><td class="num"><b>${blds}</b></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function closeDrawer() { document.getElementById('bottomDrawer').classList.remove('open'); }
+function openJsonModal() {
+  document.getElementById('jsonTextarea').value = JSON.stringify(state, null, 2);
+  document.getElementById('jsonModal').classList.add('open');
+}
+function closeJsonModal() { document.getElementById('jsonModal').classList.remove('open'); }
+function importJson() {
+  try {
+    const parsed = JSON.parse(document.getElementById('jsonTextarea').value);
+    state = parsed;
+    saveState();
+    autoLayout();
+    closeJsonModal();
+  } catch (e) { alert('JSON 解析失败: ' + e.message); }
+}
+function downloadJson() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'meridian_production_3x5.json';
+  a.click();
+}
+function resetDefault() {
+  if (!confirm('确定重置为默认 3×5 起步产线模板吗？')) return;
+  state = buildDefaultData();
+  saveState();
+  autoLayout();
+}
+
+renderAll();
+</script>
+</body>
+</html>

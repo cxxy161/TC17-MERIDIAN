@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Meridian · 星图与类地行星独立双视图</title>
+  <script src="https://unpkg.com/three@0.146.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #05070c; color: #c9d1d9; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+    }
+    #canvasWrap { position: fixed; inset: 0; }
+    .topbar {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 10;
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(13, 17, 23, 0.9); border: 1px solid #30363d;
+      padding: 6px 10px; border-radius: 10px; backdrop-filter: blur(8px);
+    }
+    .topbar button {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+    .topbar button.active { background: #1f6feb; border-color: #388bfd; color: #fff; font-weight: 600; }
+    .topbar button:hover:not(.active) { background: #30363d; }
+    .panel {
+      position: fixed; background: rgba(13, 17, 23, 0.88);
+      backdrop-filter: blur(8px); border: 1px solid #30363d;
+      border-radius: 10px; padding: 14px; font-size: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    #leftPanel { top: 68px; left: 16px; width: 320px; max-height: calc(100vh - 86px); overflow-y: auto; }
+    #rightPanel { top: 68px; right: 16px; width: 300px; max-height: calc(100vh - 86px); overflow-y: auto; }
+    h2 { font-size: 14px; color: #f0f6fc; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    h3 { font-size: 12px; color: #8b949e; margin: 12px 0 6px; border-top: 1px solid #21262d; padding-top: 8px; }
+    .row { display: flex; justify-content: space-between; margin-bottom: 5px; gap: 8px; }
+    .row span { color: #8b949e; }
+    .row b { color: #58a6ff; font-variant-numeric: tabular-nums; text-align: right; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+    select, button.ctrl {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      padding: 6px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+    button.primary { background: #1f6feb; border-color: #388bfd; color: #fff; grid-column: span 2; font-weight: 600; }
+    .planet-item {
+      padding: 8px; border: 1px solid #21262d; border-radius: 6px; margin-bottom: 6px;
+      background: #0d1117; cursor: pointer; transition: border-color 0.15s;
+    }
+    .planet-item:hover, .planet-item.selected { border-color: #388bfd; background: #161b22; }
+    .planet-item .ptop { display: flex; justify-content: space-between; font-weight: 600; color: #f0f6fc; margin-bottom: 3px; }
+    .planet-item .psub { font-size: 11px; color: #8b949e; display: flex; justify-content: space-between; }
+    .badge {
+      display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+      background: #21262d; color: #f2cc60; border: 1px solid #30363d;
+    }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 6px; }
+    .leg-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b949e; }
+    .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+    #hint {
+      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+      background: rgba(13, 17, 23, 0.85); border: 1px solid #30363d;
+      padding: 6px 14px; border-radius: 20px; font-size: 12px; color: #8b949e;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvasWrap"></div>
+
+  <div class="topbar" id="topbar">
+    <button id="btnViewSystem" class="active">星图视图 (恒星系)</button>
+    <button id="btnViewPlanet">行星 3D 视图</button>
+    <span style="color:#30363d;">|</span>
+    <div id="planetPills" style="display:flex; gap:6px;"></div>
+  </div>
+
+  <div class="panel" id="leftPanel"></div>
+  <div class="panel" id="rightPanel"></div>
+  <div id="hint">星图模式：拖拽旋转轨道视角 · 点击任意行星查看实时航程或进入单独 3D 行星视图</div>
+
+  <script>
+    // --- Main-Sequence Stars ---
+    const STAR_TYPES = {
+      O: { code: "O型", name: "蓝主序星", color: 0x6ea8fe, hex: "#6ea8fe", tempK: "34,000 K", solarMult: 2.4, wearMult: 1.8, hzRange: [3.2, 4.4], size: 0.42 },
+      B: { code: "B型", name: "蓝白主序星", color: 0x9ec5fe, hex: "#9ec5fe", tempK: "18,000 K", solarMult: 1.8, wearMult: 1.4, hzRange: [2.7, 3.8], size: 0.36 },
+      A: { code: "A型", name: "白主序星", color: 0xf0f6fc, hex: "#f0f6fc", tempK: "8,600 K", solarMult: 1.4, wearMult: 1.15, hzRange: [2.2, 3.2], size: 0.31 },
+      F: { code: "F型", name: "黄白主序星", color: 0xfff3cd, hex: "#fff3cd", tempK: "6,700 K", solarMult: 1.15, wearMult: 1.0, hzRange: [1.9, 2.8], size: 0.28 },
+      G: { code: "G型", name: "黄矮主序星", color: 0xf2cc60, hex: "#f2cc60", tempK: "5,800 K", solarMult: 1.0, wearMult: 1.0, hzRange: [1.6, 2.4], size: 0.26 },
+      K: { code: "K型", name: "橙主序星", color: 0xf78166, hex: "#f78166", tempK: "4,400 K", solarMult: 0.65, wearMult: 0.9, hzRange: [1.2, 1.9], size: 0.22 },
+      M: { code: "M型", name: "红矮主序星", color: 0xe5534b, hex: "#e5534b", tempK: "3,100 K", solarMult: 0.30, wearMult: 1.1, hzRange: [0.85, 1.4], size: 0.18 },
+    };
+
+    const BIOMES = {
+      deep_ocean: { name: "深海", color: 0x0f3b66, buildable: false },
+      shallow_sea: { name: "浅海/大陆架", color: 0x1d6ea3, buildable: false },
+      rainforest: { name: "热带雨林", color: 0x1f7a3e, buildable: true },
+      plains: { name: "温带平原", color: 0x5aa44f, buildable: true },
+      desert: { name: "荒漠戈壁", color: 0xd4a359, buildable: true },
+      tundra: { name: "冻土冰原", color: 0x9bb7c9, buildable: true },
+      mountain: { name: "高山矿脉", color: 0x6e6a64, buildable: true },
+      snow_peak: { name: "雪峰极巅", color: 0xe6edf3, buildable: true },
+    };
+
+    // --- Seeded RNG & 3D Noise ---
+    function mulberry32(a) {
+      return function () {
+        let t = (a += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function makeNoise3D(seed) {
+      const rand = mulberry32(seed);
+      const perm = new Uint8Array(512);
+      const p = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) p[i] = i;
+      for (let i = 255; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        const tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+      }
+      for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+      const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+      const lerp = (a, b, t) => a + t * (b - a);
+      const grad = (hash, x, y, z) => {
+        const h = hash & 15;
+        const u = h < 8 ? x : y;
+        const v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+        return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+      };
+      function noise(x, y, z) {
+        const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+        x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+        const u = fade(x), v = fade(y), w = fade(z);
+        const A = perm[X] + Y, AA = perm[A] + Z, AB = perm[A + 1] + Z;
+        const B = perm[X + 1] + Y, BA = perm[B] + Z, BB = perm[B + 1] + Z;
+        return lerp(
+          lerp(lerp(grad(perm[AA], x, y, z), grad(perm[BA], x - 1, y, z), u),
+               lerp(grad(perm[AB], x, y - 1, z), grad(perm[BB], x - 1, y - 1, z), u), v),
+          lerp(lerp(grad(perm[AA + 1], x, y, z - 1), grad(perm[BA + 1], x - 1, y, z - 1), u),
+               lerp(grad(perm[AB + 1], x, y - 1, z - 1), grad(perm[BB + 1], x - 1, y - 1, z - 1), u), v),
+          w
+        );
+      }
+      return function fbm(x, y, z, octaves = 4) {
+        let sum = 0, amp = 0.5, freq = 1.0, norm = 0;
+        for (let i = 0; i < octaves; i++) {
+          sum += amp * noise(x * freq, y * freq, z * freq);
+          norm += amp; amp *= 0.5; freq *= 2.05;
+        }
+        return sum / norm;
+      };
+    }
+
+    function buildGoldbergSphere(N) {
+      const phi = (1 + Math.sqrt(5)) / 2;
+      const rawVerts = [
+        [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+        [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+        [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+      ].map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize());
+      const icoFaces = [
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+      ];
+      const vertMap = new Map(), verts = [], vertToTris = [];
+      function getVert(v) {
+        const key = `${Math.round(v.x * 1e4)},${Math.round(v.y * 1e4)},${Math.round(v.z * 1e4)}`;
+        if (vertMap.has(key)) return vertMap.get(key);
+        const idx = verts.length;
+        verts.push(v.clone().normalize()); vertToTris.push([]); vertMap.set(key, idx);
+        return idx;
+      }
+      const triCentroids = [];
+      for (const [ia, ib, ic] of icoFaces) {
+        const va = rawVerts[ia], vb = rawVerts[ib], vc = rawVerts[ic];
+        const grid = [];
+        for (let i = 0; i <= N; i++) {
+          grid[i] = [];
+          for (let j = 0; j <= N - i; j++) {
+            const k = N - i - j;
+            grid[i][j] = getVert(new THREE.Vector3().addScaledVector(va, k / N).addScaledVector(vb, i / N).addScaledVector(vc, j / N).normalize());
+          }
+        }
+        for (let i = 0; i < N; i++) {
+          for (let j = 0; j < N - i; j++) {
+            const addTri = (v1, v2, v3) => {
+              const tIdx = triCentroids.length;
+              triCentroids.push(new THREE.Vector3().add(verts[v1]).add(verts[v2]).add(verts[v3]).divideScalar(3).normalize());
+              vertToTris[v1].push(tIdx); vertToTris[v2].push(tIdx); vertToTris[v3].push(tIdx);
+            };
+            addTri(grid[i][j], grid[i + 1][j], grid[i][j + 1]);
+            if (i + j + 1 < N) addTri(grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]);
+          }
+        }
+      }
+      const tiles = [], refUp = new THREE.Vector3(0, 1, 0), refAlt = new THREE.Vector3(1, 0, 0);
+      for (let vIdx = 0; vIdx < verts.length; vIdx++) {
+        const center = verts[vIdx];
+        const ref = Math.abs(center.dot(refUp)) > 0.9 ? refAlt : refUp;
+        const t1 = new THREE.Vector3().crossVectors(ref, center).normalize();
+        const t2 = new THREE.Vector3().crossVectors(center, t1).normalize();
+        const corners = vertToTris[vIdx].map((tIdx) => {
+          const c = triCentroids[tIdx], d = c.clone().sub(center);
+          return { vec: c, angle: Math.atan2(d.dot(t2), d.dot(t1)) };
+        });
+        corners.sort((a, b) => a.angle - b.angle);
+        tiles.push({ id: vIdx + 1, center, corners: corners.map((c) => c.vec), isPentagon: corners.length === 5 });
+      }
+      return tiles;
+    }
+
+    // --- Renderer & Two Separate Scenes/Cameras ---
+    const wrap = document.getElementById("canvasWrap");
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    wrap.appendChild(renderer.domElement);
+
+    const sysScene = new THREE.Scene();
+    const sysCam = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 200);
+    sysCam.position.set(0, 5.8, 7.2);
+    const sysCtrl = new THREE.OrbitControls(sysCam, renderer.domElement);
+    sysCtrl.enableDamping = true; sysCtrl.minDistance = 2.0; sysCtrl.maxDistance = 18.0;
+
+    const plScene = new THREE.Scene();
+    const plCam = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    plCam.position.set(0, 1.1, 3.5);
+    const plCtrl = new THREE.OrbitControls(plCam, renderer.domElement);
+    plCtrl.enableDamping = true; plCtrl.minDistance = 1.6; plCtrl.maxDistance = 8.0;
+    plCtrl.enabled = false;
+
+    function addStarfield(scene) {
+      const geo = new THREE.BufferGeometry();
+      const pos = [];
+      for (let i = 0; i < 1200; i++) {
+        const r = 24 + Math.random() * 26;
+        const t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
+        pos.push(r * Math.sin(p) * Math.cos(t), r * Math.sin(p) * Math.sin(t), r * Math.cos(p));
+      }
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      scene.add(new THREE.Points(geo, new THREE.PointsMaterial({ color: 0x8b949e, size: 0.07 })));
+    }
+    addStarfield(sysScene);
+    addStarfield(plScene);
+
+    // Lighting for Planet View
+    const plSunLight = new THREE.DirectionalLight(0xfff5e4, 1.65);
+    plSunLight.position.set(6, 2.5, 5);
+    plScene.add(plSunLight);
+    plScene.add(new THREE.AmbientLight(0x263248, 0.55));
+
+    // Lighting for System View
+    const sysPointLight = new THREE.PointLight(0xffffff, 2.2, 40);
+    sysScene.add(sysPointLight);
+    sysScene.add(new THREE.AmbientLight(0x3a4863, 0.7));
+
+    // --- State ---
+    let viewMode = "system"; // "system" | "planet"
+    let currentSystem = null;
+    let selectedPlanetIdx = 0;
+    let sysGroup = new THREE.Group();
+    sysScene.add(sysGroup);
+    let planetGroup = new THREE.Group();
+    plScene.add(planetGroup);
+
+    let sysPlanetMeshes = [];
+    let sysRouteLines = null;
+    let plTileMeshes = [];
+    let plBorderLines = null;
+    let plHighlightRing = null;
+    let selectedTileMesh = null;
+    let showBorders = true;
+    let autoSpin = true;
+    let orbitPaused = false;
+    let currentSubdiv = 4;
+    let simDays = 0;
+
+    const ROMAN = ["I", "II", "III", "IV", "V", "VI"];
+
+    function clearGroup(g) {
+      while (g.children.length > 0) {
+        const obj = g.children.pop();
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      }
+    }
+
+    function generateStarSystem(starChoice = "random") {
+      clearGroup(sysGroup);
+      sysPlanetMeshes = [];
+      simDays = 0;
+
+      const seed = Math.floor(Math.random() * 1e8);
+      const rand = mulberry32(seed);
+      const starKeys = Object.keys(STAR_TYPES);
+      const starKey = starChoice === "random" ? starKeys[Math.floor(rand() * starKeys.length)] : starChoice;
+      const star = STAR_TYPES[starKey];
+
+      // Build Star Mesh + Habitable Zone Ring
+      const starMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(star.size, 32, 24),
+        new THREE.MeshBasicMaterial({ color: star.color })
+      );
+      sysGroup.add(starMesh);
+      const haloMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(star.size * 1.35, 32, 24),
+        new THREE.MeshBasicMaterial({ color: star.color, transparent: true, opacity: 0.18 })
+      );
+      sysGroup.add(haloMesh);
+      sysPointLight.color.setHex(star.color);
+
+      // Habitable zone band
+      const hzGeo = new THREE.RingGeometry(star.hzRange[0], star.hzRange[1], 64);
+      hzGeo.rotateX(-Math.PI / 2);
+      sysGroup.add(new THREE.Mesh(hzGeo, new THREE.MeshBasicMaterial({ color: 0x3fb950, side: THREE.DoubleSide, transparent: true, opacity: 0.10 })));
+
+      // Generate 5 Terrestrial Planets at progressive orbital radii
+      const planetCount = 5;
+      const planets = [];
+      let r = star.size + 0.55;
+      for (let i = 0; i < planetCount; i++) {
+        r += 0.55 + rand() * 0.45;
+        const orbDays = Math.round(60 * Math.pow(r, 1.5));
+        const inHZ = r >= star.hzRange[0] && r <= star.hzRange[1];
+        const tooHot = r < star.hzRange[0];
+        const distRatio = (r - star.hzRange[0]) / Math.max(0.2, star.hzRange[1] - star.hzRange[0]);
+
+        let archetypeLabel, seaOffset, tempBias, moistBias, atmos, previewColor;
+        if (tooHot) {
+          archetypeLabel = "灼热岩质类地星";
+          seaOffset = -0.25; tempBias = 0.35 + (star.hzRange[0] - r) * 0.25; moistBias = -0.4;
+          atmos = starKey === "O" || starKey === "B" ? "稀薄电离层 (0.2 atm)" : "干燥CO₂ (0.5 atm)";
+          previewColor = 0xd48349;
+        } else if (inHZ) {
+          const watery = rand() > 0.55;
+          archetypeLabel = watery ? "海洋类地行星" : "标准宜居类地星";
+          seaOffset = watery ? 0.15 : 0.0; tempBias = 0.05 * (0.5 - distRatio); moistBias = watery ? 0.25 : 0.05;
+          atmos = "标准氮氧 (1.0 atm)";
+          previewColor = watery ? 0x1d6ea3 : 0x5aa44f;
+        } else {
+          archetypeLabel = "寒冷冰原类地星";
+          seaOffset = -0.05; tempBias = -0.38 - (r - star.hzRange[1]) * 0.15; moistBias = -0.1;
+          atmos = "寒冷氮甲烷 (0.4 atm)";
+          previewColor = 0x9bb7c9;
+        }
+
+        const gravity = +(0.55 + rand() * 1.45).toFixed(2);
+        const tidallyLocked = starKey === "M" && r < 1.35;
+        const rotHours = tidallyLocked ? orbDays * 24 : Math.round(14 + rand() * 48);
+        const tiltDeg = tidallyLocked ? 2 : Math.round(rand() * 30);
+        const mineralRich = +(0.6 + (tooHot ? 0.6 : 0.1) + rand() * 0.8).toFixed(2);
+
+        const pData = {
+          index: i,
+          name: `${star.code}·行星 ${ROMAN[i]}`,
+          seed: seed + (i + 1) * 7919,
+          archetypeLabel,
+          radius: r,
+          angle: rand() * Math.PI * 2,
+          orbDays,
+          gravity,
+          launchMult: +(0.6 + gravity * 0.85).toFixed(2),
+          atmos,
+          rotHours,
+          tidallyLocked,
+          tiltDeg,
+          mineralRich,
+          seaOffset,
+          tempBias,
+          moistBias,
+          previewColor,
+          inHZ,
+        };
+        planets.push(pData);
+
+        // Orbit circle
+        const pts = [];
+        for (let k = 0; k <= 96; k++) {
+          const a = (k / 96) * Math.PI * 2;
+          pts.push(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+        }
+        const orbGeo = new THREE.BufferGeometry().setFromPoints(pts);
+        sysGroup.add(new THREE.LineLoop(orbGeo, new THREE.LineBasicMaterial({ color: inHZ ? 0x3fb950 : 0x30363d, transparent: true, opacity: inHZ ? 0.5 : 0.6 })));
+
+        // Miniature sphere on star map
+        const pSize = 0.08 + gravity * 0.04;
+        const pMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(pSize, 20, 16),
+          new THREE.MeshStandardMaterial({ color: previewColor, roughness: 0.7 })
+        );
+        pMesh.position.set(Math.cos(pData.angle) * r, 0, Math.sin(pData.angle) * r);
+        pMesh.userData = { planetIndex: i };
+        sysGroup.add(pMesh);
+        sysPlanetMeshes.push(pMesh);
+      }
+
+      // Dynamic route lines between selected planet and others
+      const routeGeo = new THREE.BufferGeometry();
+      sysRouteLines = new THREE.LineSegments(routeGeo, new THREE.LineBasicMaterial({ color: 0x58a6ff, transparent: true, opacity: 0.45 }));
+      sysGroup.add(sysRouteLines);
+
+      const sysNames = ["天苑四星系", "半人马座α", "开普勒-186", "格利泽-581", "鲸鱼座τ", "织女星域"];
+      currentSystem = {
+        name: `${sysNames[seed % sysNames.length]} (#${seed % 1000})`,
+        starKey,
+        star,
+        planets,
+      };
+      selectedPlanetIdx = Math.max(0, planets.findIndex((p) => p.inHZ));
+      buildPlanetMesh(planets[selectedPlanetIdx]);
+      renderUI();
+    }
+
+    function buildPlanetMesh(pData) {
+      clearGroup(planetGroup);
+      plTileMeshes = [];
+      selectedTileMesh = null;
+      plHighlightRing = null;
+
+      plSunLight.color.setHex(currentSystem.star.color);
+      plSunLight.intensity = 1.1 + currentSystem.star.solarMult * 0.45;
+
+      const rand = mulberry32(pData.seed);
+      const elevNoise = makeNoise3D(pData.seed);
+      const moistNoise = makeNoise3D(pData.seed + 1013);
+      const ridgeNoise = makeNoise3D(pData.seed + 4099);
+
+      const rawTiles = buildGoldbergSphere(currentSubdiv);
+      const borderPositions = [];
+      let landCount = 0;
+
+      for (const tile of rawTiles) {
+        const { x, y, z } = tile.center;
+        const cont = elevNoise(x * 1.4, y * 1.4, z * 1.4, 4);
+        const ridge = 1.0 - Math.abs(ridgeNoise(x * 2.4, y * 2.4, z * 2.4, 3));
+        const elev = cont + (ridge - 0.55) * 0.28 - pData.seaOffset;
+
+        const lat = Math.abs(y);
+        const dryBelt = Math.exp(-Math.pow((lat - 0.38) / 0.16, 2)) * 0.28;
+        const moist = moistNoise(x * 2.0, y * 2.0, z * 2.0, 3) + 0.5 - dryBelt + pData.moistBias;
+        const tempC = Math.round(28 - lat * 52 - Math.max(0, elev) * 35 + pData.tempBias * 45);
+
+        let biomeKey;
+        if (elev < -0.06) biomeKey = "deep_ocean";
+        else if (elev < 0.0) biomeKey = "shallow_sea";
+        else if (elev > 0.36 || (elev > 0.25 && tempC < -5)) biomeKey = tempC < -8 ? "snow_peak" : "mountain";
+        else if (tempC < -6) biomeKey = "tundra";
+        else if (moist < 0.30) biomeKey = "desert";
+        else if (tempC > 16 && moist > 0.58) biomeKey = "rainforest";
+        else biomeKey = "plains";
+
+        const biome = BIOMES[biomeKey];
+        if (biome.buildable) landCount++;
+        const r = biome.buildable ? 1.0 + Math.max(0.008, elev * 0.14) : 1.0;
+
+        const geo = new THREE.BufferGeometry();
+        const verts = [];
+        const centerPos = tile.center.clone().multiplyScalar(r);
+        const rim = tile.corners.map((c) => c.clone().multiplyScalar(r));
+        for (let i = 0; i < rim.length; i++) {
+          const p1 = rim[i], p2 = rim[(i + 1) % rim.length];
+          verts.push(centerPos.x, centerPos.y, centerPos.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+          const es = tile.isPentagon ? 1.003 : 1.0015;
+          borderPositions.push(p1.x * es, p1.y * es, p1.z * es, p2.x * es, p2.y * es, p2.z * es);
+        }
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+        geo.computeVertexNormals();
+
+        const mat = new THREE.MeshStandardMaterial({
+          color: biome.color, roughness: biome.buildable ? 0.85 : 0.28,
+          metalness: biome.buildable ? 0.05 : 0.25, flatShading: true,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.userData = {
+          id: tile.id, isPentagon: tile.isPentagon, biomeKey, biome,
+          elev: +elev.toFixed(2), tempC, moist: Math.max(0, Math.min(100, Math.round(moist * 100))),
+          ironRich: +(pData.mineralRich * (biomeKey === "mountain" ? 1.55 : biomeKey === "plains" ? 0.7 : 1.0) * (0.8 + rand() * 0.4)).toFixed(2),
+          solarRich: +(currentSystem.star.solarMult * Math.max(0.2, (1.15 - lat * 0.6) * (biomeKey === "desert" ? 1.45 : biomeKey === "rainforest" ? 0.75 : 1.0))).toFixed(2),
+          farmRich: +(biome.buildable ? Math.max(0.15, (biomeKey === "plains" ? 1.35 : biomeKey === "rainforest" ? 1.25 : biomeKey === "desert" ? 0.25 : 0.55)) : 0).toFixed(2),
+          center: tile.center.clone(), rim,
+        };
+        planetGroup.add(mesh);
+        plTileMeshes.push(mesh);
+      }
+
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute("position", new THREE.Float32BufferAttribute(borderPositions, 3));
+      plBorderLines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.45 }));
+      plBorderLines.visible = showBorders;
+      planetGroup.add(plBorderLines);
+
+      const pentPositions = [];
+      for (const m of plTileMeshes) {
+        if (!m.userData.isPentagon) continue;
+        const rim = m.userData.rim;
+        for (let i = 0; i < rim.length; i++) {
+          const p1 = rim[i], p2 = rim[(i + 1) % rim.length];
+          pentPositions.push(p1.x * 1.004, p1.y * 1.004, p1.z * 1.004, p2.x * 1.004, p2.y * 1.004, p2.z * 1.004);
+        }
+      }
+      const pentGeo = new THREE.BufferGeometry();
+      pentGeo.setAttribute("position", new THREE.Float32BufferAttribute(pentPositions, 3));
+      planetGroup.add(new THREE.LineSegments(pentGeo, new THREE.LineBasicMaterial({ color: 0xf2cc60, opacity: 0.9, transparent: true })));
+
+      const atmoGeo = new THREE.SphereGeometry(1.09, 48, 32);
+      planetGroup.add(new THREE.Mesh(atmoGeo, new THREE.MeshBasicMaterial({ color: pData.previewColor, transparent: true, opacity: 0.09, side: THREE.BackSide })));
+
+      planetGroup.rotation.z = THREE.MathUtils.degToRad(pData.tiltDeg);
+      pData.totalTiles = rawTiles.length;
+      pData.landPct = Math.round((landCount / rawTiles.length) * 100);
+    }
+
+    function setViewMode(mode, planetIdx = selectedPlanetIdx) {
+      viewMode = mode;
+      if (planetIdx !== selectedPlanetIdx) {
+        selectedPlanetIdx = planetIdx;
+        buildPlanetMesh(currentSystem.planets[selectedPlanetIdx]);
+      }
+      sysCtrl.enabled = mode === "system";
+      plCtrl.enabled = mode === "planet";
+      document.getElementById("btnViewSystem").classList.toggle("active", mode === "system");
+      document.getElementById("btnViewPlanet").classList.toggle("active", mode === "planet");
+      document.getElementById("hint").textContent = mode === "system"
+        ? "星图模式：拖拽旋转轨道视角 · 点击任意行星查看实时航程或切换至该行星 3D 视图"
+        : "行星 3D 模式：左键拖拽旋转 · 点击任意六边形或金色五边形查看地理、光照与产业加成";
+      renderUI();
+    }
+
+    function renderUI() {
+      const s = currentSystem.star;
+      const p = currentSystem.planets[selectedPlanetIdx];
+
+      // Topbar planet pills
+      const pillsEl = document.getElementById("planetPills");
+      pillsEl.innerHTML = currentSystem.planets.map((pl, idx) =>
+        `<button class="${viewMode === "planet" && idx === selectedPlanetIdx ? "active" : ""}" onclick="setViewMode('planet', ${idx})">${ROMAN[idx]}</button>`
+      ).join("");
+
+      const leftEl = document.getElementById("leftPanel");
+      const rightEl = document.getElementById("rightPanel");
+
+      if (viewMode === "system") {
+        leftEl.innerHTML = `
+          <h2><span>${currentSystem.name}</span><span class="badge" style="color:${s.hex}">${s.code} ${s.name}</span></h2>
+          <div class="row"><span>恒星表面温度</span><b>${s.tempK}</b></div>
+          <div class="row"><span>光伏光照系数</span><b>${s.solarMult}x</b></div>
+          <div class="row"><span>恒星辐射磨损</span><b>${s.wearMult}x</b></div>
+          <div class="row"><span>宜居带范围</span><b>${s.hzRange[0]} ~ ${s.hzRange[1]} AU</b></div>
+          <div class="row"><span>星系运行天数</span><b id="sysDayHud">Day ${Math.floor(simDays)}</b></div>
+          <h3>生成新星系 (主序星)</h3>
+          <div class="controls">
+            <select id="starSelect">
+              <option value="random">随机主序星</option>
+              <option value="O" ${currentSystem.starKey==="O"?"selected":""}>O型 蓝主序星</option>
+              <option value="B" ${currentSystem.starKey==="B"?"selected":""}>B型 蓝白主序星</option>
+              <option value="A" ${currentSystem.starKey==="A"?"selected":""}>A型 白主序星</option>
+              <option value="F" ${currentSystem.starKey==="F"?"selected":""}>F型 黄白主序星</option>
+              <option value="G" ${currentSystem.starKey==="G"?"selected":""}>G型 黄矮主序星</option>
+              <option value="K" ${currentSystem.starKey==="K"?"selected":""}>K型 橙主序星</option>
+              <option value="M" ${currentSystem.starKey==="M"?"selected":""}>M型 红矮星</option>
+            </select>
+            <button class="ctrl" id="btnToggleOrbit">${orbitPaused ? "公转: 暂停" : "公转: 运行"}</button>
+            <button class="primary" id="btnGenSys">生成新恒星系</button>
+          </div>
+          <h3>星系内类地行星 (点击选中 / 双击进3D)</h3>
+          <div id="planetList">${currentSystem.planets.map((pl, idx) => `
+            <div class="planet-item ${idx === selectedPlanetIdx ? "selected" : ""}" onclick="selectPlanetOnMap(${idx})">
+              <div class="ptop"><span>${pl.name}</span><span style="color:${pl.inHZ ? "#3fb950" : "#8b949e"}">${pl.inHZ ? "宜居带" : pl.archetypeLabel}</span></div>
+              <div class="psub"><span>轨道 ${pl.radius.toFixed(2)} AU · ${pl.orbDays}天</span><span>重力 ${pl.gravity}g</span></div>
+            </div>
+          `).join("")}</div>
+        `;
+        document.getElementById("btnGenSys").onclick = () => generateStarSystem(document.getElementById("starSelect").value);
+        document.getElementById("starSelect").onchange = (e) => generateStarSystem(e.target.value);
+        document.getElementById("btnToggleOrbit").onclick = (e) => {
+          orbitPaused = !orbitPaused;
+          e.target.textContent = orbitPaused ? "公转: 暂停" : "公转: 运行";
+        };
+        updateSystemRoutesHUD();
+      } else {
+        leftEl.innerHTML = `
+          <h2><span>${p.name}</span><span class="badge">${p.archetypeLabel}</span></h2>
+          <div class="row"><span>所属恒星</span><b style="color:${s.hex}">${s.code} ${s.name}</b></div>
+          <div class="row"><span>网格结构</span><b>${p.totalTiles - 12} 六边形 + 12 五边形</b></div>
+          <div class="row"><span>陆地 / 海洋占比</span><b>${p.landPct}% / ${100 - p.landPct}%</b></div>
+          <div class="row"><span>表面重力</span><b>${p.gravity} g (起飞耗油 ${p.launchMult}x)</b></div>
+          <div class="row"><span>大气层</span><b>${p.atmos}</b></div>
+          <div class="row"><span>自转周期</span><b>${p.tidallyLocked ? "潮汐锁定 (永昼/永夜)" : `${p.rotHours} 小时/圈`}</b></div>
+          <div class="row"><span>公转周期 / 轴倾角</span><b>${p.orbDays} 天 / ${p.tiltDeg}°</b></div>
+          <div class="row"><span>全局矿物丰度</span><b>${p.mineralRich}x</b></div>
+          <h3>星球显示与网格精度</h3>
+          <div class="controls">
+            <select id="subdivSelect">
+              <option value="3" ${currentSubdiv===3?"selected":""}>细分3级 (92格)</option>
+              <option value="4" ${currentSubdiv===4?"selected":""}>细分4级 (162格)</option>
+              <option value="5" ${currentSubdiv===5?"selected":""}>细分5级 (252格)</option>
+              <option value="6" ${currentSubdiv===6?"selected":""}>细分6级 (362格)</option>
+            </select>
+            <button class="ctrl" id="btnToggleSpin">${autoSpin ? "自转: 开启" : "自转: 暂停"}</button>
+            <button class="ctrl" id="btnToggleBorders">${showBorders ? "网格线: 显示" : "网格线: 隐藏"}</button>
+            <button class="ctrl" onclick="setViewMode('system')">← 返回星图</button>
+          </div>
+          <h3>群系图例</h3>
+          <div class="legend">${Object.values(BIOMES).map(b => `<div class="leg-item"><span class="swatch" style="background:#${b.color.toString(16).padStart(6,"0")}"></span>${b.name}</div>`).join("")}</div>
+        `;
+        document.getElementById("subdivSelect").onchange = (e) => {
+          currentSubdiv = Number(e.target.value);
+          buildPlanetMesh(currentSystem.planets[selectedPlanetIdx]);
+          renderUI();
+        };
+        document.getElementById("btnToggleSpin").onclick = (e) => {
+          autoSpin = !autoSpin;
+          e.target.textContent = autoSpin ? "自转: 开启" : "自转: 暂停";
+        };
+        document.getElementById("btnToggleBorders").onclick = (e) => {
+          showBorders = !showBorders;
+          if (plBorderLines) plBorderLines.visible = showBorders;
+          e.target.textContent = showBorders ? "网格线: 显示" : "网格线: 隐藏";
+        };
+
+        rightEl.innerHTML = `
+          <h2><span>选中地块详情</span><span class="badge" id="tShape">未选中</span></h2>
+          <div id="tileInfo"><div style="color:#8b949e; padding:12px 0;">点击星球表面任意六边形或金色五边形查看地理、光照与产业加成。</div></div>
+        `;
+        if (selectedTileMesh) updateSelectedTileHUD();
+      }
+    }
+
+    function updateSystemRoutesHUD() {
+      if (viewMode !== "system" || !currentSystem) return;
+      const p = currentSystem.planets[selectedPlanetIdx];
+      const dayEl = document.getElementById("sysDayHud");
+      if (dayEl) dayEl.textContent = `Day ${Math.floor(simDays)}`;
+
+      const pPos = new THREE.Vector3(Math.cos(p.angle) * p.radius, 0, Math.sin(p.angle) * p.radius);
+      let rows = "";
+      for (const other of currentSystem.planets) {
+        if (other.index === p.index) continue;
+        const oPos = new THREE.Vector3(Math.cos(other.angle) * other.radius, 0, Math.sin(other.angle) * other.radius);
+        const dist = pPos.distanceTo(oPos);
+        const ticks = Math.max(2, Math.round(dist * 6));
+        const fuel = Math.max(1, Math.round(dist * 3.5));
+        rows += `<div class="row"><span>到 ${other.name}</span><b>${dist.toFixed(2)} AU (${ticks}T · ${fuel}油)</b></div>`;
+      }
+
+      document.getElementById("rightPanel").innerHTML = `
+        <h2><span>${p.name}</span><span class="badge">${p.archetypeLabel}</span></h2>
+        <div class="row"><span>公转半径 / 周期</span><b>${p.radius.toFixed(2)} AU / ${p.orbDays} 天</b></div>
+        <div class="row"><span>重力 / 起飞耗油</span><b>${p.gravity} g / ${p.launchMult}x</b></div>
+        <div class="row"><span>自转 / 轴倾角</span><b>${p.tidallyLocked ? "潮汐锁定" : p.rotHours + "h"} / ${p.tiltDeg}°</b></div>
+        <div class="row"><span>矿物丰度</span><b>${p.mineralRich}x</b></div>
+        <h3>实时公转航线距离 (随公转动态变化)</h3>
+        <div id="routeRows">${rows}</div>
+        <button class="primary" style="width:100%; margin-top:10px; padding:8px; border-radius:6px; cursor:pointer; background:#1f6feb; border:1px solid #388bfd; color:#fff; font-weight:600;" onclick="setViewMode('planet', ${p.index})">进入该行星 3D 地块视图 →</button>
+      `;
+    }
+
+    function selectPlanetOnMap(idx) {
+      selectedPlanetIdx = idx;
+      buildPlanetMesh(currentSystem.planets[idx]);
+      renderUI();
+    }
+
+    function updateSelectedTileHUD() {
+      if (!selectedTileMesh || viewMode !== "planet") return;
+      const d = selectedTileMesh.userData;
+      const worldNormal = d.center.clone().applyQuaternion(planetGroup.quaternion).normalize();
+      const sunDir = plSunLight.position.clone().normalize();
+      const solarPct = Math.max(0, Math.round(worldNormal.dot(sunDir) * 100));
+      document.getElementById("tShape").textContent = d.isPentagon ? `五边形奇点 #${d.id}` : `六边形 #${d.id}`;
+      document.getElementById("tileInfo").innerHTML = `
+        <div class="row"><span>群系地形</span><b>${d.biome.name}</b></div>
+        <div class="row"><span>是否可建厂</span><b>${d.biome.buildable ? "可开发陆地" : "海洋(需平台)"}</b></div>
+        <div class="row"><span>相对海拔</span><b>${d.elev}</b></div>
+        <div class="row"><span>地表温度 / 湿度</span><b>${d.tempC}°C / ${d.moist}%</b></div>
+        <div class="row"><span>当前太阳光照</span><b style="color:${solarPct > 0 ? "#f2cc60" : "#8b949e"}">${solarPct > 0 ? `白天 ${solarPct}%` : "黑夜 0%"}</b></div>
+        <h3>资源与产业效率预估</h3>
+        <div class="row"><span>铁矿开采加成</span><b>${d.ironRich}x</b></div>
+        <div class="row"><span>光伏发电加成</span><b>${d.solarRich}x</b></div>
+        <div class="row"><span>农业农场加成</span><b>${d.farmRich}x</b></div>
+      `;
+    }
+
+    // --- Pointer Picking for Both Views ---
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let downPos = { x: 0, y: 0 };
+
+    renderer.domElement.addEventListener("pointerdown", (e) => { downPos = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener("pointerup", (e) => {
+      if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 5) return;
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      if (viewMode === "system") {
+        raycaster.setFromCamera(pointer, sysCam);
+        const hits = raycaster.intersectObjects(sysPlanetMeshes, false);
+        if (hits.length > 0) {
+          selectPlanetOnMap(hits[0].object.userData.planetIndex);
+        }
+      } else {
+        raycaster.setFromCamera(pointer, plCam);
+        const hits = raycaster.intersectObjects(plTileMeshes, false);
+        if (hits.length > 0) {
+          selectedTileMesh = hits[0].object;
+          const d = selectedTileMesh.userData;
+          if (plHighlightRing) {
+            planetGroup.remove(plHighlightRing);
+            plHighlightRing.geometry.dispose();
+          }
+          const pts = [];
+          for (let i = 0; i < d.rim.length; i++) {
+            const p1 = d.rim[i], p2 = d.rim[(i + 1) % d.rim.length];
+            pts.push(p1.x * 1.008, p1.y * 1.008, p1.z * 1.008, p2.x * 1.008, p2.y * 1.008, p2.z * 1.008);
+          }
+          const hGeo = new THREE.BufferGeometry();
+          hGeo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+          plHighlightRing = new THREE.LineSegments(hGeo, new THREE.LineBasicMaterial({ color: 0xffffff }));
+          planetGroup.add(plHighlightRing);
+          updateSelectedTileHUD();
+        }
+      }
+    });
+
+    document.getElementById("btnViewSystem").onclick = () => setViewMode("system");
+    document.getElementById("btnViewPlanet").onclick = () => setViewMode("planet");
+
+    window.addEventListener("resize", () => {
+      const aspect = window.innerWidth / window.innerHeight;
+      sysCam.aspect = aspect; sysCam.updateProjectionMatrix();
+      plCam.aspect = aspect; plCam.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    generateStarSystem("G");
+
+    let frame = 0;
+    function animate() {
+      requestAnimationFrame(animate);
+      frame++;
+
+      if (!orbitPaused && currentSystem) {
+        const dtDays = 0.25;
+        simDays += dtDays;
+        for (let i = 0; i < currentSystem.planets.length; i++) {
+          const pl = currentSystem.planets[i];
+          pl.angle += (Math.PI * 2 * dtDays) / pl.orbDays;
+          sysPlanetMeshes[i].position.set(Math.cos(pl.angle) * pl.radius, 0, Math.sin(pl.angle) * pl.radius);
+        }
+        // Update live route lines from selected planet to others
+        if (sysRouteLines) {
+          const sPos = sysPlanetMeshes[selectedPlanetIdx].position;
+          const pts = [];
+          for (let i = 0; i < sysPlanetMeshes.length; i++) {
+            if (i === selectedPlanetIdx) continue;
+            pts.push(sPos.clone(), sysPlanetMeshes[i].position.clone());
+          }
+          sysRouteLines.geometry.setFromPoints(pts);
+        }
+        if (viewMode === "system" && frame % 12 === 0) updateSystemRoutesHUD();
+      }
+
+      if (viewMode === "planet") {
+        const pl = currentSystem.planets[selectedPlanetIdx];
+        if (autoSpin && pl && !pl.tidallyLocked) {
+          planetGroup.rotation.y += 0.08 / Math.max(10, pl.rotHours);
+        }
+        if (selectedTileMesh && frame % 12 === 0) updateSelectedTileHUD();
+        plCtrl.update();
+        renderer.render(plScene, plCam);
+      } else {
+        sysCtrl.update();
+        renderer.render(sysScene, sysCam);
+      }
+    }
+    animate();
+  </script>
+</body>
+</html>

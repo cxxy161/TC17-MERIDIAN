@@ -1,0 +1,7 @@
+[package]
+name = "meridian-sandbox"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meridian-core = { path = "../meridian-core" }

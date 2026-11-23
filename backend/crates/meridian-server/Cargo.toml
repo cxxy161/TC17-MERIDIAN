@@ -1,0 +1,8 @@
+[package]
+name = "meridian-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meridian-core = { path = "../meridian-core" }
+meridian-sandbox = { path = "../meridian-sandbox" }

@@ -1,0 +1,27 @@
+# Rust
+/backend/target/
+backend/**/*.rs.bk
+
+# Frontend (Node / Vite)
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+
+# Python prototype & caches
+**/__pycache__/
+*.py[cod]
+/sim/logs/
+
+# Runtime SQLite & local data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.jsonl
+
+# Env & Editor
+.env
+.env.local
+.DS_Store
+.vscode/
+.idea/

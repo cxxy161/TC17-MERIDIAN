@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Meridian 实时经济监控</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117; color: #c9d1d9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+      padding: 16px;
+    }
+    header {
+      display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;
+      padding: 12px 16px; background: #161b22; border: 1px solid #30363d;
+      border-radius: 8px; margin-bottom: 16px;
+    }
+    .stats {
+      display: flex; gap: 8px; font-size: 12px; flex-wrap: wrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-pill {
+      display: inline-flex; align-items: center; justify-content: space-between; gap: 6px;
+      background: #0d1117; border: 1px solid #21262d; border-radius: 6px;
+      padding: 4px 10px; min-width: 128px;
+    }
+    .stat-pill span { color: #8b949e; }
+    .stat-pill b { color: #58a6ff; text-align: right; }
+    .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tabs button, .chart-actions button {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+    .tabs button.active { background: #1f6feb; border-color: #388bfd; color: #fff; }
+    .chart-actions button:hover { background: #30363d; }
+    .grid { display: grid; grid-template-columns: 1.15fr 1.45fr; gap: 16px; align-items: start; margin-bottom: 16px; }
+    .card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px;
+    }
+    .chart-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 8px; gap: 12px;
+    }
+    .chart-title { font-size: 14px; color: #8b949e; font-variant-numeric: tabular-nums; }
+    .chart-title b { color: #e6edf3; }
+    .ohlc-bar { font-size: 12px; color: #8b949e; margin-bottom: 8px; min-height: 18px; font-variant-numeric: tabular-nums; }
+    .ohlc-bar span { margin-right: 12px; }
+    .up { color: #3fb950; }
+    .down { color: #f85149; }
+    #chart { width: 100%; height: 460px; }
+    .npc-table-wrap { max-height: 520px; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+    thead th { position: sticky; top: 0; background: #161b22; color: #8b949e; z-index: 1; }
+    .debt { color: #f85149; }
+    .sav { color: #3fb950; }
+    .nw { color: #f2cc60; font-weight: bold; }
+    .act { color: #79c0ff; }
+    .fac { color: #d2a8ff; max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+
+    /* Bottom 5 Macro Charts Grid */
+    .macro-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .macro-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; }
+    .macro-card h4 { font-size: 13px; color: #8b949e; margin-bottom: 6px; display: flex; justify-content: space-between; }
+    .macro-legend { font-size: 11px; margin-bottom: 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .macro-box { width: 100%; height: 200px; }
+    .dist-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+    .dist-label { width: 88px; color: #c9d1d9; }
+    .dist-bar-bg { flex: 1; background: #0d1117; height: 12px; border-radius: 4px; overflow: hidden; }
+    .dist-bar-fill { height: 100%; background: #388bfd; }
+    .dist-val { width: 32px; text-align: right; font-variant-numeric: tabular-nums; color: #8b949e; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="stats">
+      <div class="stat-pill"><span>Tick</span><b id="tick">0</b></div>
+      <div class="stat-pill"><span>时间</span><b id="gameTime">D1 00:00</b></div>
+      <div class="stat-pill"><span>人口</span><b id="pop">-</b></div>
+      <div class="stat-pill"><span>国库</span><b id="wealth">-</b></div>
+      <div class="stat-pill"><span>繁荣度</span><b id="prosp">-</b></div>
+      <div class="stat-pill"><span>消费等级</span><b id="tier">T1</b></div>
+      <div class="stat-pill"><span>利率</span><b id="bankRate">-</b></div>
+      <div class="stat-pill"><span>企业数</span><b id="npcCount">-</b></div>
+      <div class="stat-pill"><span>余地/地价</span><b id="landInfo">-</b></div>
+      <div class="stat-pill" style="min-width:170px;"><span>破产/新创/地交易</span><b id="lifecycle">-</b></div>
+    </div>
+    <div class="tabs" id="tabs">
+      <button data-item="food" class="active">粮食T1</button>
+      <button data-item="steel">钢铁T2</button>
+      <button data-item="mat">建材T3</button>
+      <button data-item="alloy">合金T4</button>
+      <button data-item="parts">机械T5</button>
+      <button data-item="precision">精密T6</button>
+      <button data-item="electronics">电子T7</button>
+      <button data-item="robotics">机器人T8</button>
+      <button data-item="biomed">医药T9</button>
+      <button data-item="quantum">量子T10</button>
+      <button data-item="power">电力</button>
+      <button data-item="fuel">燃油</button>
+      <button data-item="iron">铁矿</button>
+      <button data-item="repair_parts">维修件</button>
+      <button data-item="ship_small">小飞船</button>
+      <button data-item="ship_medium">中货船</button>
+      <button data-item="ship_large">大货轮</button>
+      <button data-item="bank_rate">利率%</button>
+    </div>
+    <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+      <span style="color:#8b949e;">速度:</span>
+      <div class="tabs" id="speedBtns">
+        <button data-spd="1">1/s</button>
+        <button data-spd="10" class="active">10/s</button>
+        <button data-spd="50">50/s</button>
+        <button data-spd="200">200/s</button>
+        <button data-spd="1000">1000/s</button>
+      </div>
+      <input id="speedSlider" type="range" min="1" max="1000" value="10" style="width:110px; cursor:pointer;" />
+      <b id="speedVal" style="color:#58a6ff; min-width:52px; font-variant-numeric:tabular-nums;">10/s</b>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div class="chart-header">
+        <div class="chart-title">
+          K 线 (<span id="tfLabel">5小时</span>) — <span id="chartTitle">粮食</span>: <b id="curPrice">-</b>
+        </div>
+        <div class="chart-actions" style="display:flex; gap:6px; align-items:center;">
+          <div class="tabs" id="tfTabs" style="margin-right:8px;">
+            <button data-tf="1">1T(时)</button>
+            <button data-tf="5" class="active">5T</button>
+            <button data-tf="24">24T(日)</button>
+            <button data-tf="168">168T(周)</button>
+          </div>
+          <button id="btnFit">自适应全览</button>
+          <button id="btnLatest">回到最新</button>
+        </div>
+      </div>
+      <div class="ohlc-bar" id="ohlcBar">等待行情数据...</div>
+      <div id="chart"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-size:14px; color:#8b949e; margin-bottom:10px;">NPC 实时资产预估与行动状态 (按净资产排序)</h3>
+      <div class="npc-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>地块地形</th><th>演化画像</th><th>船队(耐久)</th><th>资产预估</th><th>现金</th><th>储蓄</th><th>债务</th><th>拥有工厂</th><th>最新行动</th>
+            </tr>
+          </thead>
+          <tbody id="npcBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="macro-grid">
+    <div class="macro-card">
+      <h4><span>1. 人口 & 繁荣度</span></h4>
+      <div class="macro-legend"><span style="color:#58a6ff;">■ 人口(左)</span><span style="color:#3fb950;">■ 繁荣度(右)</span></div>
+      <div class="macro-box" id="cPopProsp"></div>
+    </div>
+    <div class="macro-card">
+      <h4><span>2. 银行信贷 & 国库</span></h4>
+      <div class="macro-legend"><span style="color:#f85149;">■ 总贷款</span><span style="color:#3fb950;">■ 总存款</span><span style="color:#f2cc60;">■ 星球国库</span></div>
+      <div class="macro-box" id="cBank"></div>
+    </div>
+    <div class="macro-card">
+      <h4><span>3. 企业新陈代谢</span></h4>
+      <div class="macro-legend"><span style="color:#58a6ff;">■ 存活企业(左)</span><span style="color:#f85149;">■ 破产(右)</span><span style="color:#3fb950;">■ 新创(右)</span></div>
+      <div class="macro-box" id="cLifecycle"></div>
+    </div>
+    <div class="macro-card">
+      <h4><span>4. 地价 & 剩余地块</span></h4>
+      <div class="macro-legend"><span style="color:#d2a8ff;">■ 一手地价(左)</span><span style="color:#8b949e;">■ 剩余地块(右)</span></div>
+      <div class="macro-box" id="cLand"></div>
+    </div>
+    <div class="macro-card" style="grid-column: span 2;">
+      <h4><span>5. 产业结构 & 全服基因进化均值</span></h4>
+      <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:16px; margin-top:8px;">
+        <div id="distFactories" style="max-height:190px; overflow-y:auto;"></div>
+        <div id="distGenomes"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentItem = "food";
+    let currentTf = 5;
+    let loadedItem = null;
+    let loadedTf = null;
+    let lastBarTick = null;
+    let lastMacroTick = -1;
+    let lastTick = 0;
+    let latestBar = null;
+    let fetching = false;
+
+    const TF_NAMES = { 1: "1小时", 5: "5小时", 24: "1天(24T)", 168: "1周(168T)" };
+
+    const formatGameTime = (t) => {
+      const day = Math.floor(t / 24) + 1;
+      const hour = String(t % 24).padStart(2, "0");
+      return `D${day} ${hour}:00`;
+    };
+
+    const baseChartOpts = (el, height) => ({
+      autoSize: true,
+      height,
+      layout: { background: { color: "#161b22" }, textColor: "#8b949e" },
+      grid: { vertLines: { color: "#21262d" }, horzLines: { color: "#21262d" } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      localization: { timeFormatter: (t) => `${formatGameTime(t)} (T${t})` },
+      timeScale: {
+        borderColor: "#30363d", timeVisible: true, secondsVisible: false,
+        rightOffset: 4, barSpacing: 10, minBarSpacing: 2,
+        tickMarkFormatter: (t) => `D${Math.floor(t / 24) + 1}`,
+      },
+      rightPriceScale: { borderColor: "#30363d", autoScale: true },
+    });
+
+    // Main K-Line chart (4 decimals)
+    const chartEl = document.getElementById("chart");
+    const chart = LightweightCharts.createChart(chartEl, {
+      ...baseChartOpts(chartEl, 460),
+      localization: {
+        timeFormatter: (t) => `${formatGameTime(t)} (T${t})`,
+        priceFormatter: (p) => p.toFixed(4),
+      },
+      rightPriceScale: {
+        borderColor: "#30363d", autoScale: true,
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      },
+    });
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: "#3fb950", downColor: "#f85149",
+      borderVisible: false, wickUpColor: "#3fb950", wickDownColor: "#f85149",
+      priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+    });
+
+    // 4 Bottom Macro Line Charts
+    const mkLineChart = (id, dualAxis = false) => {
+      const el = document.getElementById(id);
+      const opts = baseChartOpts(el, 200);
+      if (dualAxis) opts.leftPriceScale = { visible: true, borderColor: "#30363d" };
+      return LightweightCharts.createChart(el, opts);
+    };
+
+    const chPopProsp = mkLineChart("cPopProsp", true);
+    const sPop = chPopProsp.addLineSeries({ color: "#58a6ff", lineWidth: 2, priceScaleId: "left" });
+    const sProsp = chPopProsp.addLineSeries({ color: "#3fb950", lineWidth: 2, priceScaleId: "right" });
+
+    const chBank = mkLineChart("cBank", false);
+    const sLoans = chBank.addLineSeries({ color: "#f85149", lineWidth: 2 });
+    const sDeps = chBank.addLineSeries({ color: "#3fb950", lineWidth: 2 });
+    const sWealth = chBank.addLineSeries({ color: "#f2cc60", lineWidth: 2 });
+
+    const chLife = mkLineChart("cLifecycle", true);
+    const sNpcs = chLife.addLineSeries({ color: "#58a6ff", lineWidth: 2, priceScaleId: "left" });
+    const sBankrupt = chLife.addLineSeries({ color: "#f85149", lineWidth: 2, priceScaleId: "right" });
+    const sStartups = chLife.addLineSeries({ color: "#3fb950", lineWidth: 2, priceScaleId: "right" });
+
+    const chLand = mkLineChart("cLand", true);
+    const sLandP = chLand.addLineSeries({ color: "#d2a8ff", lineWidth: 2, priceScaleId: "left" });
+    const sLandA = chLand.addLineSeries({ color: "#8b949e", lineWidth: 2, priceScaleId: "right" });
+
+    function showOhlc(bar) {
+      if (!bar) return;
+      const cls = bar.close >= bar.open ? "up" : "down";
+      const pct = bar.open > 0 ? (((bar.close - bar.open) / bar.open) * 100).toFixed(2) : "0.00";
+      document.getElementById("ohlcBar").innerHTML =
+        `<span><b>${formatGameTime(bar.time)}</b> (T${bar.time})</span>` +
+        `<span>开 <b class="${cls}">${bar.open.toFixed(4)}</b></span>` +
+        `<span>高 <b class="${cls}">${bar.high.toFixed(4)}</b></span>` +
+        `<span>低 <b class="${cls}">${bar.low.toFixed(4)}</b></span>` +
+        `<span>收 <b class="${cls}">${bar.close.toFixed(4)}</b> (${pct >= 0 ? "+" : ""}${pct}%)</span>`;
+    }
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param || !param.time) { showOhlc(latestBar); return; }
+      const d = param.seriesData.get(candleSeries);
+      if (d) showOhlc(d);
+    });
+
+    document.getElementById("btnFit").addEventListener("click", () => chart.timeScale().fitContent());
+    document.getElementById("btnLatest").addEventListener("click", () => chart.timeScale().scrollToRealTime());
+
+    document.getElementById("tabs").addEventListener("click", (e) => {
+      if (e.target.tagName !== "BUTTON") return;
+      currentItem = e.target.dataset.item;
+      loadedItem = null;
+      lastBarTick = null;
+      document.querySelectorAll("#tabs button").forEach(b => b.classList.remove("active"));
+      e.target.classList.add("active");
+      poll();
+    });
+
+    document.getElementById("tfTabs").addEventListener("click", (e) => {
+      if (e.target.tagName !== "BUTTON") return;
+      currentTf = Number(e.target.dataset.tf);
+      loadedTf = null;
+      lastBarTick = null;
+      document.querySelectorAll("#tfTabs button").forEach(b => b.classList.remove("active"));
+      e.target.classList.add("active");
+      poll();
+    });
+
+    async function setSpeed(v) {
+      const spd = Math.max(1, Math.min(1000, Number(v) || 10));
+      document.getElementById("speedSlider").value = spd;
+      document.getElementById("speedVal").textContent = `${spd}/s`;
+      document.querySelectorAll("#speedBtns button").forEach(b => {
+        b.classList.toggle("active", Number(b.dataset.spd) === spd);
+      });
+      try { await fetch(`/api/speed?v=${spd}`); } catch (err) {}
+    }
+
+    document.getElementById("speedBtns").addEventListener("click", (e) => {
+      if (e.target.tagName === "BUTTON") setSpeed(e.target.dataset.spd);
+    });
+    document.getElementById("speedSlider").addEventListener("input", (e) => {
+      setSpeed(e.target.value);
+    });
+
+    function renderBarsHtml(containerId, obj, color) {
+      const entries = Object.entries(obj || {});
+      const maxV = Math.max(1, ...entries.map(([, v]) => v));
+      document.getElementById(containerId).innerHTML = entries.map(([k, v]) => `
+        <div class="dist-row">
+          <div class="dist-label">${k}</div>
+          <div class="dist-bar-bg"><div class="dist-bar-fill" style="width:${(v / maxV) * 100}%; background:${color};"></div></div>
+          <div class="dist-val">${v}</div>
+        </div>
+      `).join("");
+    }
+
+    function render(data) {
+      document.getElementById("tick").textContent = data.tick;
+      if (data.speed !== undefined) {
+        document.getElementById("speedVal").textContent = `${data.speed}/s`;
+      }
+      document.getElementById("gameTime").textContent = formatGameTime(data.tick);
+      document.getElementById("pop").textContent = Number(data.planet.population).toFixed(1);
+      document.getElementById("wealth").textContent = Number(data.planet.wealth).toFixed(1);
+      document.getElementById("prosp").textContent = Number(data.planet.prosperity).toFixed(2);
+      document.getElementById("tier").textContent = `T${data.planet.unlocked_tier || 1}`;
+      document.getElementById("bankRate").textContent = `${Number(data.bank.rate).toFixed(2)}%`;
+      document.getElementById("npcCount").textContent = data.lifecycle.npc_count;
+      document.getElementById("landInfo").textContent = `${data.planet.land_avail}块 / ${Number(data.planet.land_price).toFixed(1)}`;
+      document.getElementById("lifecycle").textContent = `${data.lifecycle.bankruptcies} / ${data.lifecycle.startups} / ${data.lifecycle.land_trades}`;
+      document.getElementById("tfLabel").textContent = TF_NAMES[data.tf] || `${data.tf}T`;
+      document.getElementById("chartTitle").textContent = data.item_cn || data.item;
+      const curP = data.prices[data.item];
+      document.getElementById("curPrice").textContent = curP !== undefined ? Number(curP).toFixed(4) : "-";
+
+      const bars = (data.bars || []).map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c }));
+      const isReset = loadedItem !== data.item || loadedTf !== data.tf || lastBarTick === null || data.tick < lastTick;
+
+      if (bars.length > 0) {
+        if (isReset) {
+          candleSeries.setData(bars);
+          loadedItem = data.item;
+          loadedTf = data.tf;
+          if (bars.length > 20) chart.timeScale().fitContent();
+          else {
+            chart.timeScale().applyOptions({ barSpacing: 12, rightOffset: 6 });
+            chart.timeScale().scrollToRealTime();
+          }
+        } else {
+          for (const bar of bars) {
+            if (bar.time >= lastBarTick) candleSeries.update(bar);
+          }
+        }
+        lastBarTick = bars[bars.length - 1].time;
+        latestBar = bars[bars.length - 1];
+        showOhlc(latestBar);
+      }
+
+      // Update 4 macro line charts incrementally
+      const macros = data.macros || [];
+      const macroReset = lastMacroTick < 0 || data.tick < lastTick;
+      if (macros.length > 0) {
+        if (macroReset) {
+          sPop.setData(macros.map(m => ({ time: m.t, value: m.pop })));
+          sProsp.setData(macros.map(m => ({ time: m.t, value: m.prosp })));
+          sLoans.setData(macros.map(m => ({ time: m.t, value: m.loans })));
+          sDeps.setData(macros.map(m => ({ time: m.t, value: m.deps })));
+          sWealth.setData(macros.map(m => ({ time: m.t, value: m.wealth })));
+          sNpcs.setData(macros.map(m => ({ time: m.t, value: m.npcs })));
+          sBankrupt.setData(macros.map(m => ({ time: m.t, value: m.bankrupt })));
+          sStartups.setData(macros.map(m => ({ time: m.t, value: m.startups })));
+          sLandP.setData(macros.map(m => ({ time: m.t, value: m.land_p })));
+          sLandA.setData(macros.map(m => ({ time: m.t, value: m.land_avail })));
+          [chPopProsp, chBank, chLife, chLand].forEach(c => c.timeScale().fitContent());
+        } else {
+          for (const m of macros) {
+            sPop.update({ time: m.t, value: m.pop });
+            sProsp.update({ time: m.t, value: m.prosp });
+            sLoans.update({ time: m.t, value: m.loans });
+            sDeps.update({ time: m.t, value: m.deps });
+            sWealth.update({ time: m.t, value: m.wealth });
+            sNpcs.update({ time: m.t, value: m.npcs });
+            sBankrupt.update({ time: m.t, value: m.bankrupt });
+            sStartups.update({ time: m.t, value: m.startups });
+            sLandP.update({ time: m.t, value: m.land_p });
+            sLandA.update({ time: m.t, value: m.land_avail });
+          }
+        }
+        lastMacroTick = macros[macros.length - 1].t;
+      }
+
+      lastTick = data.tick;
+
+      if (data.dist) {
+        renderBarsHtml("distFactories", data.dist.factories, "#d2a8ff");
+        renderBarsHtml("distGenomes", data.dist.genomes, "#3fb950");
+      }
+
+      document.getElementById("npcBody").innerHTML = (data.npcs || []).map(n =>
+        `<tr>
+          <td>${n.id}</td>
+          <td>${n.plots_count}块(${n.terrains})</td>
+          <td>${n.profile}</td>
+          <td>${n.fleet}</td>
+          <td class="nw">${Number(n.net_worth).toFixed(1)}</td>
+          <td>${Number(n.cash).toFixed(1)}</td>
+          <td class="sav">${Number(n.savings).toFixed(1)}</td>
+          <td class="debt">${Number(n.debt).toFixed(1)}</td>
+          <td class="fac" title="${n.factories}">(${n.slots}) ${n.factories}</td>
+          <td class="act">${n.action}</td>
+        </tr>`
+      ).join("");
+    }
+
+    async function poll() {
+      if (fetching) return;
+      fetching = true;
+      try {
+        const sinceParam = loadedItem === currentItem && loadedTf === currentTf && lastBarTick !== null ? `&since=${lastBarTick}` : "";
+        const macroParam = lastMacroTick >= 0 ? `&macro_since=${lastMacroTick}` : "";
+        const res = await fetch(`/api/state?item=${encodeURIComponent(currentItem)}&tf=${currentTf}${sinceParam}${macroParam}`);
+        const data = await res.json();
+        render(data);
+      } catch (err) {
+      } finally {
+        fetching = false;
+      }
+    }
+
+    poll();
+    setInterval(poll, 100);
+  </script>
+</body>
+</html>

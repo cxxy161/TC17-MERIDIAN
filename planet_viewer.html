@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Meridian · 3D 测地线星球生成器</title>
+  <script src="https://unpkg.com/three@0.146.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.146.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #05070c; color: #c9d1d9; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+    }
+    #canvasWrap { position: fixed; inset: 0; }
+    .panel {
+      position: fixed; background: rgba(13, 17, 23, 0.86);
+      backdrop-filter: blur(8px); border: 1px solid #30363d;
+      border-radius: 10px; padding: 14px; font-size: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    }
+    #leftPanel { top: 16px; left: 16px; width: 310px; max-height: calc(100vh - 32px); overflow-y: auto; }
+    #rightPanel { top: 16px; right: 16px; width: 290px; }
+    h2 { font-size: 15px; color: #f0f6fc; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+    h3 { font-size: 12px; color: #8b949e; margin: 12px 0 6px; border-top: 1px solid #21262d; padding-top: 8px; }
+    .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+    .row span { color: #8b949e; }
+    .row b { color: #58a6ff; font-variant-numeric: tabular-nums; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+    select, button {
+      background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+      padding: 6px 8px; border-radius: 6px; font-size: 12px; cursor: pointer;
+    }
+    button:hover { background: #30363d; }
+    button.primary { background: #1f6feb; border-color: #388bfd; color: #fff; grid-column: span 2; font-weight: 600; }
+    button.primary:hover { background: #388bfd; }
+    .legend { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 6px; }
+    .leg-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b949e; }
+    .swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+    .badge {
+      display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+      background: #21262d; color: #f2cc60; border: 1px solid #30363d;
+    }
+    #hint {
+      position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+      background: rgba(13, 17, 23, 0.8); border: 1px solid #30363d;
+      padding: 6px 14px; border-radius: 20px; font-size: 12px; color: #8b949e;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvasWrap"></div>
+
+  <div class="panel" id="leftPanel">
+    <h2>
+      <span>星球物理参数</span>
+      <span class="badge" id="pTypeBadge">类地行星</span>
+    </h2>
+    <div class="row"><span>名称 / 种子</span><b id="pName">-</b></div>
+    <div class="row"><span>网格结构</span><b id="pMesh">-</b></div>
+    <div class="row"><span>陆地 / 海洋占比</span><b id="pLandRatio">-</b></div>
+    <div class="row"><span>表面重力</span><b id="pGravity">-</b></div>
+    <div class="row"><span>起飞能耗倍率</span><b id="pLaunchCost">-</b></div>
+    <div class="row"><span>大气层</span><b id="pAtmos">-</b></div>
+    <div class="row"><span>自转周期 (昼夜)</span><b id="pRotation">-</b></div>
+    <div class="row"><span>公转周期 / 轴倾角</span><b id="pOrbit">-</b></div>
+    <div class="row"><span>全局矿物丰度</span><b id="pMinerals">-</b></div>
+
+    <h3>生成与物理控制</h3>
+    <div class="controls">
+      <select id="archetype">
+        <option value="random">随机星球类型</option>
+        <option value="terran">标准类地星</option>
+        <option value="mineral">高重力矿星</option>
+        <option value="oceanic">海洋水世界</option>
+        <option value="desert">荒漠强光星</option>
+        <option value="ice">极地冰封星</option>
+      </select>
+      <select id="subdiv">
+        <option value="3">细分3级 (92格)</option>
+        <option value="4" selected>细分4级 (162格)</option>
+        <option value="5">细分5级 (252格)</option>
+        <option value="6">细分6级 (362格)</option>
+        <option value="8">细分8级 (642格)</option>
+      </select>
+      <button id="btnToggleSpin">自转: 开启</button>
+      <button id="btnToggleBorders">网格线: 显示</button>
+      <button class="primary" id="btnRegen">生成新星球</button>
+    </div>
+
+    <h3>群系图例</h3>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="panel" id="rightPanel">
+    <h2>
+      <span>选中地块详情</span>
+      <span class="badge" id="tShape">未选中</span>
+    </h2>
+    <div id="tileInfo">
+      <div style="color:#8b949e; padding: 12px 0;">点击星球表面任意六边形或五边形地块查看地理、光照与产业加成。</div>
+    </div>
+  </div>
+
+  <div id="hint">左键拖拽旋转 · 滚轮缩放 · 点击任意地块查看详情（整颗球固定含 12 个金色五边形奇点）</div>
+
+  <script>
+    // --- Seeded PRNG & 3D Value Noise ---
+    function mulberry32(a) {
+      return function () {
+        let t = (a += 0x6d2b79f5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function makeNoise3D(seed) {
+      const rand = mulberry32(seed);
+      const perm = new Uint8Array(512);
+      const p = new Uint8Array(256);
+      for (let i = 0; i < 256; i++) p[i] = i;
+      for (let i = 255; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        const tmp = p[i]; p[i] = p[j]; p[j] = tmp;
+      }
+      for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+
+      const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+      const lerp = (a, b, t) => a + t * (b - a);
+      const grad = (hash, x, y, z) => {
+        const h = hash & 15;
+        const u = h < 8 ? x : y;
+        const v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+        return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
+      };
+
+      function noise(x, y, z) {
+        const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+        x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+        const u = fade(x), v = fade(y), w = fade(z);
+        const A = perm[X] + Y, AA = perm[A] + Z, AB = perm[A + 1] + Z;
+        const B = perm[X + 1] + Y, BA = perm[B] + Z, BB = perm[B + 1] + Z;
+        return lerp(
+          lerp(
+            lerp(grad(perm[AA], x, y, z), grad(perm[BA], x - 1, y, z), u),
+            lerp(grad(perm[AB], x, y - 1, z), grad(perm[BB], x - 1, y - 1, z), u),
+            v
+          ),
+          lerp(
+            lerp(grad(perm[AA + 1], x, y, z - 1), grad(perm[BA + 1], x - 1, y, z - 1), u),
+            lerp(grad(perm[AB + 1], x, y - 1, z - 1), grad(perm[BB + 1], x - 1, y - 1, z - 1), u),
+            v
+          ),
+          w
+        );
+      }
+
+      return function fbm(x, y, z, octaves = 4) {
+        let sum = 0, amp = 0.5, freq = 1.0, norm = 0;
+        for (let i = 0; i < octaves; i++) {
+          sum += amp * noise(x * freq, y * freq, z * freq);
+          norm += amp;
+          amp *= 0.5;
+          freq *= 2.05;
+        }
+        return sum / norm; // approx [-0.7, 0.7]
+      };
+    }
+
+    // --- Geodesic Dual (Goldberg Polyhedron: 12 Pentagons + Hexagons) ---
+    function buildGoldbergSphere(N) {
+      const phi = (1 + Math.sqrt(5)) / 2;
+      const rawVerts = [
+        [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+        [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+        [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+      ].map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize());
+
+      const icoFaces = [
+        [0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
+        [1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
+        [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
+        [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1],
+      ];
+
+      const vertMap = new Map();
+      const verts = [];
+      const vertToTris = [];
+
+      function getVert(v) {
+        const key = `${Math.round(v.x * 1e4)},${Math.round(v.y * 1e4)},${Math.round(v.z * 1e4)}`;
+        if (vertMap.has(key)) return vertMap.get(key);
+        const idx = verts.length;
+        verts.push(v.clone().normalize());
+        vertToTris.push([]);
+        vertMap.set(key, idx);
+        return idx;
+      }
+
+      const triCentroids = [];
+      for (const [ia, ib, ic] of icoFaces) {
+        const va = rawVerts[ia], vb = rawVerts[ib], vc = rawVerts[ic];
+        const grid = [];
+        for (let i = 0; i <= N; i++) {
+          grid[i] = [];
+          for (let j = 0; j <= N - i; j++) {
+            const k = N - i - j;
+            const p = new THREE.Vector3()
+              .addScaledVector(va, k / N)
+              .addScaledVector(vb, i / N)
+              .addScaledVector(vc, j / N)
+              .normalize();
+            grid[i][j] = getVert(p);
+          }
+        }
+        for (let i = 0; i < N; i++) {
+          for (let j = 0; j < N - i; j++) {
+            const addTri = (v1, v2, v3) => {
+              const tIdx = triCentroids.length;
+              const c = new THREE.Vector3()
+                .add(verts[v1]).add(verts[v2]).add(verts[v3])
+                .divideScalar(3).normalize();
+              triCentroids.push(c);
+              vertToTris[v1].push(tIdx);
+              vertToTris[v2].push(tIdx);
+              vertToTris[v3].push(tIdx);
+            };
+            addTri(grid[i][j], grid[i + 1][j], grid[i][j + 1]);
+            if (i + j + 1 < N) {
+              addTri(grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1]);
+            }
+          }
+        }
+      }
+
+      // Build dual tiles sorted CCW around each vertex normal
+      const tiles = [];
+      const refUp = new THREE.Vector3(0, 1, 0);
+      const refAlt = new THREE.Vector3(1, 0, 0);
+
+      for (let vIdx = 0; vIdx < verts.length; vIdx++) {
+        const center = verts[vIdx];
+        const ref = Math.abs(center.dot(refUp)) > 0.9 ? refAlt : refUp;
+        const t1 = new THREE.Vector3().crossVectors(ref, center).normalize();
+        const t2 = new THREE.Vector3().crossVectors(center, t1).normalize();
+
+        const corners = vertToTris[vIdx].map((tIdx) => {
+          const c = triCentroids[tIdx];
+          const d = c.clone().sub(center);
+          return { vec: c, angle: Math.atan2(d.dot(t2), d.dot(t1)) };
+        });
+        corners.sort((a, b) => a.angle - b.angle);
+        tiles.push({
+          id: vIdx + 1,
+          center,
+          corners: corners.map((c) => c.vec),
+          isPentagon: corners.length === 5,
+        });
+      }
+      return tiles;
+    }
+
+    // --- Planet Archetypes & Biomes ---
+    const BIOMES = {
+      deep_ocean: { name: "深海", color: 0x0f3b66, buildable: false },
+      shallow_sea: { name: "浅海/大陆架", color: 0x1d6ea3, buildable: false },
+      rainforest: { name: "热带雨林", color: 0x1f7a3e, buildable: true },
+      plains: { name: "温带平原", color: 0x5aa44f, buildable: true },
+      desert: { name: "荒漠戈壁", color: 0xd4a359, buildable: true },
+      tundra: { name: "冻土冰原", color: 0x9bb7c9, buildable: true },
+      mountain: { name: "高山矿脉", color: 0x6e6a64, buildable: true },
+      snow_peak: { name: "雪峰极巅", color: 0xe6edf3, buildable: true },
+    };
+
+    const ARCHETYPES = {
+      terran: { label: "标准类地星", seaOffset: 0.0, tempBias: 0.0, moistBias: 0.0, grav: [0.8, 1.3], atmos: "标准氮氧 (1.0 atm)", rot: [18, 36], orb: [280, 460], mineral: [0.8, 1.3] },
+      mineral: { label: "高重力矿星", seaOffset: -0.25, tempBias: -0.1, moistBias: -0.35, grav: [1.4, 2.2], atmos: "稀薄CO₂ (0.3 atm)", rot: [30, 80], orb: [400, 720], mineral: [1.4, 2.1] },
+      oceanic: { label: "海洋水世界", seaOffset: 0.22, tempBias: 0.1, moistBias: 0.35, grav: [0.7, 1.1], atmos: "湿润高压 (1.5 atm)", rot: [14, 28], orb: [240, 380], mineral: [0.5, 0.9] },
+      desert: { label: "荒漠强光星", seaOffset: -0.18, tempBias: 0.35, moistBias: -0.45, grav: [0.6, 1.2], atmos: "干燥稀薄 (0.6 atm)", rot: [40, 110], orb: [180, 300], mineral: [0.9, 1.5] },
+      ice: { label: "极地冰封星", seaOffset: 0.05, tempBias: -0.45, moistBias: 0.0, grav: [0.5, 1.0], atmos: "寒冷稀薄 (0.4 atm)", rot: [22, 50], orb: [500, 900], mineral: [0.8, 1.4] },
+    };
+
+    const legendEl = document.getElementById("legend");
+    for (const b of Object.values(BIOMES)) {
+      const hex = `#${b.color.toString(16).padStart(6, "0")}`;
+      legendEl.innerHTML += `<div class="leg-item"><span class="swatch" style="background:${hex}"></span>${b.name}</div>`;
+    }
+
+    // --- Three.js Scene ---
+    const wrap = document.getElementById("canvasWrap");
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1.2, 3.6);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    wrap.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.minDistance = 1.6;
+    controls.maxDistance = 8.0;
+
+    // Starfield background
+    const starGeo = new THREE.BufferGeometry();
+    const starPos = [];
+    for (let i = 0; i < 1200; i++) {
+      const r = 20 + Math.random() * 20;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      starPos.push(r * Math.sin(phi) * Math.cos(theta), r * Math.sin(phi) * Math.sin(theta), r * Math.cos(phi));
+    }
+    starGeo.setAttribute("position", new THREE.Float32BufferAttribute(starPos, 3));
+    scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0x8b949e, size: 0.06 })));
+
+    // Lighting (Sunlight + faint ambient starlight for night side)
+    const sunLight = new THREE.DirectionalLight(0xfff5e4, 1.65);
+    sunLight.position.set(6, 2.5, 5);
+    scene.add(sunLight);
+    scene.add(new THREE.AmbientLight(0x263248, 0.55));
+
+    const planetGroup = new THREE.Group();
+    scene.add(planetGroup);
+
+    let tileMeshes = [];
+    let borderLines = null;
+    let selectedMesh = null;
+    let highlightRing = null;
+    let showBorders = true;
+    let autoSpin = true;
+    let currentPlanet = null;
+
+    function generatePlanet() {
+      // Cleanup old meshes
+      while (planetGroup.children.length > 0) {
+        const obj = planetGroup.children.pop();
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) obj.material.dispose();
+      }
+      tileMeshes = [];
+      selectedMesh = null;
+      highlightRing = null;
+
+      const seed = Math.floor(Math.random() * 1e8);
+      const rand = mulberry32(seed);
+      let archKey = document.getElementById("archetype").value;
+      if (archKey === "random") {
+        const keys = Object.keys(ARCHETYPES);
+        archKey = keys[Math.floor(rand() * keys.length)];
+      }
+      const arch = ARCHETYPES[archKey];
+      const N = Number(document.getElementById("subdiv").value);
+
+      const gravity = +(arch.grav[0] + rand() * (arch.grav[1] - arch.grav[0])).toFixed(2);
+      const rotHours = Math.round(arch.rot[0] + rand() * (arch.rot[1] - arch.rot[0]));
+      const orbDays = Math.round(arch.orb[0] + rand() * (arch.orb[1] - arch.orb[0]));
+      const tiltDeg = Math.round(rand() * 32);
+      const mineralRich = +(arch.mineral[0] + rand() * (arch.mineral[1] - arch.mineral[0])).toFixed(2);
+      const launchMult = +(0.6 + gravity * 0.85).toFixed(2);
+
+      const elevNoise = makeNoise3D(seed);
+      const moistNoise = makeNoise3D(seed + 1013);
+      const ridgeNoise = makeNoise3D(seed + 4099);
+
+      const rawTiles = buildGoldbergSphere(N);
+      const borderPositions = [];
+      let landCount = 0;
+
+      for (const tile of rawTiles) {
+        const { x, y, z } = tile.center;
+        // Continent + tectonic ridge elevation
+        const cont = elevNoise(x * 1.4, y * 1.4, z * 1.4, 4);
+        const ridge = 1.0 - Math.abs(ridgeNoise(x * 2.4, y * 2.4, z * 2.4, 3));
+        const elev = cont + (ridge - 0.55) * 0.28 - arch.seaOffset;
+
+        const lat = Math.abs(y); // 0 equator -> 1 pole
+        // Subtropical dry belt around lat ~ 0.38
+        const dryBelt = Math.exp(-Math.pow((lat - 0.38) / 0.16, 2)) * 0.28;
+        const moist = moistNoise(x * 2.0, y * 2.0, z * 2.0, 3) + 0.5 - dryBelt + arch.moistBias;
+        const tempC = Math.round((28 - lat * 52 - Math.max(0, elev) * 35 + arch.tempBias * 35));
+
+        let biomeKey;
+        if (elev < -0.06) biomeKey = "deep_ocean";
+        else if (elev < 0.0) biomeKey = "shallow_sea";
+        else if (elev > 0.36 || (elev > 0.25 && tempC < -5)) biomeKey = tempC < -8 ? "snow_peak" : "mountain";
+        else if (tempC < -6) biomeKey = "tundra";
+        else if (moist < 0.30) biomeKey = "desert";
+        else if (tempC > 16 && moist > 0.58) biomeKey = "rainforest";
+        else biomeKey = "plains";
+
+        const biome = BIOMES[biomeKey];
+        if (biome.buildable) landCount++;
+
+        // Radius extrusion for 3D terrain relief
+        const r = biome.buildable ? 1.0 + Math.max(0.008, elev * 0.14) : 1.0;
+
+        // Build convex fan geometry (center + corners)
+        const geo = new THREE.BufferGeometry();
+        const verts = [];
+        const centerPos = tile.center.clone().multiplyScalar(r);
+        const rim = tile.corners.map((c) => c.clone().multiplyScalar(r));
+
+        for (let i = 0; i < rim.length; i++) {
+          const p1 = rim[i];
+          const p2 = rim[(i + 1) % rim.length];
+          verts.push(centerPos.x, centerPos.y, centerPos.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+
+          // Subtle raised edge lines
+          const edgeScale = tile.isPentagon ? 1.003 : 1.0015;
+          borderPositions.push(
+            p1.x * edgeScale, p1.y * edgeScale, p1.z * edgeScale,
+            p2.x * edgeScale, p2.y * edgeScale, p2.z * edgeScale
+          );
+        }
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+        geo.computeVertexNormals();
+
+        const mat = new THREE.MeshStandardMaterial({
+          color: biome.color,
+          roughness: biome.buildable ? 0.85 : 0.28,
+          metalness: biome.buildable ? 0.05 : 0.25,
+          flatShading: true,
+        });
+
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.userData = {
+          id: tile.id,
+          isPentagon: tile.isPentagon,
+          biomeKey,
+          biome,
+          elev: +elev.toFixed(2),
+          tempC,
+          moist: Math.max(0, Math.min(100, Math.round(moist * 100))),
+          ironRich: +(mineralRich * (biomeKey === "mountain" ? 1.55 : biomeKey === "plains" ? 0.7 : 1.0) * (0.8 + rand() * 0.4)).toFixed(2),
+          solarRich: +(Math.max(0.2, (1.15 - lat * 0.6) * (biomeKey === "desert" ? 1.45 : biomeKey === "rainforest" ? 0.75 : 1.0))).toFixed(2),
+          farmRich: +(biome.buildable ? Math.max(0.2, (biomeKey === "plains" ? 1.35 : biomeKey === "rainforest" ? 1.25 : biomeKey === "desert" ? 0.3 : 0.6)) : 0).toFixed(2),
+          radius: r,
+          center: tile.center.clone(),
+          rim,
+        };
+        planetGroup.add(mesh);
+        tileMeshes.push(mesh);
+      }
+
+      // Unified line segments for all tile borders
+      const lineGeo = new THREE.BufferGeometry();
+      lineGeo.setAttribute("position", new THREE.Float32BufferAttribute(borderPositions, 3));
+      borderLines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: 0x0d1117, transparent: true, opacity: 0.45 }));
+      borderLines.visible = showBorders;
+      planetGroup.add(borderLines);
+
+      // Highlight the 12 special pentagons with crisp gold outlines
+      const pentPositions = [];
+      for (const m of tileMeshes) {
+        if (!m.userData.isPentagon) continue;
+        const rim = m.userData.rim;
+        for (let i = 0; i < rim.length; i++) {
+          const p1 = rim[i], p2 = rim[(i + 1) % rim.length];
+          pentPositions.push(p1.x * 1.004, p1.y * 1.004, p1.z * 1.004, p2.x * 1.004, p2.y * 1.004, p2.z * 1.004);
+        }
+      }
+      const pentGeo = new THREE.BufferGeometry();
+      pentGeo.setAttribute("position", new THREE.Float32BufferAttribute(pentPositions, 3));
+      planetGroup.add(new THREE.LineSegments(pentGeo, new THREE.LineBasicMaterial({ color: 0xf2cc60, opacity: 0.9, transparent: true })));
+
+      // Thin atmosphere halo
+      const atmoGeo = new THREE.SphereGeometry(1.09, 48, 32);
+      const atmoColor = archKey === "desert" ? 0xd4a359 : archKey === "ice" ? 0x9bb7c9 : 0x388bfd;
+      const atmoMat = new THREE.MeshBasicMaterial({ color: atmoColor, transparent: true, opacity: 0.08, side: THREE.BackSide });
+      planetGroup.add(new THREE.Mesh(atmoGeo, atmoMat));
+
+      // Axial tilt
+      planetGroup.rotation.z = THREE.MathUtils.degToRad(tiltDeg);
+
+      currentPlanet = { rotHours, tiltDeg, total: rawTiles.length, landCount };
+
+      // Update left HUD
+      const names = ["开普勒-IV", "新伊甸-B", "特拉诺瓦", "赫利俄斯-3", "奥林匹斯", "阿卡迪亚", "塔图因-VII"];
+      document.getElementById("pTypeBadge").textContent = arch.label;
+      document.getElementById("pName").textContent = `${names[seed % names.length]} (#${seed % 10000})`;
+      document.getElementById("pMesh").textContent = `${rawTiles.length - 12} 六边形 + 12 五边形`;
+      const landPct = Math.round((landCount / rawTiles.length) * 100);
+      document.getElementById("pLandRatio").textContent = `${landPct}% / ${100 - landPct}%`;
+      document.getElementById("pGravity").textContent = `${gravity} g`;
+      document.getElementById("pLaunchCost").textContent = `${launchMult}x`;
+      document.getElementById("pAtmos").textContent = arch.atmos;
+      document.getElementById("pRotation").textContent = `${rotHours} 小时/圈`;
+      document.getElementById("pOrbit").textContent = `${orbDays} 天 / ${tiltDeg}°`;
+      document.getElementById("pMinerals").textContent = `${mineralRich}x`;
+
+      document.getElementById("tShape").textContent = "未选中";
+      document.getElementById("tileInfo").innerHTML =
+        `<div style="color:#8b949e; padding: 12px 0;">点击星球表面任意六边形或五边形地块查看地理、光照与产业加成。</div>`;
+    }
+
+    // --- Tile Picking ---
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    let downPos = { x: 0, y: 0 };
+
+    renderer.domElement.addEventListener("pointerdown", (e) => { downPos = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener("pointerup", (e) => {
+      if (Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 5) return; // Ignore drags
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(tileMeshes, false);
+      if (hits.length === 0) return;
+
+      const mesh = hits[0].object;
+      selectedMesh = mesh;
+      const d = mesh.userData;
+
+      if (highlightRing) {
+        planetGroup.remove(highlightRing);
+        highlightRing.geometry.dispose();
+      }
+      const pts = [];
+      for (let i = 0; i < d.rim.length; i++) {
+        const p1 = d.rim[i], p2 = d.rim[(i + 1) % d.rim.length];
+        pts.push(p1.x * 1.008, p1.y * 1.008, p1.z * 1.008, p2.x * 1.008, p2.y * 1.008, p2.z * 1.008);
+      }
+      const hGeo = new THREE.BufferGeometry();
+      hGeo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      highlightRing = new THREE.LineSegments(hGeo, new THREE.LineBasicMaterial({ color: 0xffffff }));
+      planetGroup.add(highlightRing);
+
+      updateSelectedTileHUD();
+    });
+
+    function updateSelectedTileHUD() {
+      if (!selectedMesh) return;
+      const d = selectedMesh.userData;
+      // Live solar exposure based on current world-space normal vs sun direction
+      const worldNormal = d.center.clone().applyQuaternion(planetGroup.quaternion).normalize();
+      const sunDir = sunLight.position.clone().normalize();
+      const solarPct = Math.max(0, Math.round(worldNormal.dot(sunDir) * 100));
+
+      document.getElementById("tShape").textContent = d.isPentagon ? `五边形奇点 #${d.id}` : `六边形 #${d.id}`;
+      document.getElementById("tileInfo").innerHTML = `
+        <div class="row"><span>群系地形</span><b>${d.biome.name}</b></div>
+        <div class="row"><span>是否可建厂</span><b>${d.biome.buildable ? "可开发陆地" : "海洋(需平台)"}</b></div>
+        <div class="row"><span>相对海拔</span><b>${d.elev}</b></div>
+        <div class="row"><span>地表温度 / 湿度</span><b>${d.tempC}°C / ${d.moist}%</b></div>
+        <div class="row"><span>当前太阳光照(昼夜)</span><b style="color:${solarPct > 0 ? "#f2cc60" : "#8b949e"}">${solarPct > 0 ? `白天 ${solarPct}%` : "黑夜 0%"}</b></div>
+        <h3>资源与产业效率预估</h3>
+        <div class="row"><span>铁矿开采加成</span><b>${d.ironRich}x</b></div>
+        <div class="row"><span>光伏发电加成</span><b>${d.solarRich}x</b></div>
+        <div class="row"><span>农业农场加成</span><b>${d.farmRich}x</b></div>
+      `;
+    }
+
+    document.getElementById("btnRegen").addEventListener("click", generatePlanet);
+    document.getElementById("archetype").addEventListener("change", generatePlanet);
+    document.getElementById("subdiv").addEventListener("change", generatePlanet);
+    document.getElementById("btnToggleSpin").addEventListener("click", (e) => {
+      autoSpin = !autoSpin;
+      e.target.textContent = `自转: ${autoSpin ? "开启" : "暂停"}`;
+    });
+    document.getElementById("btnToggleBorders").addEventListener("click", (e) => {
+      showBorders = !showBorders;
+      if (borderLines) borderLines.visible = showBorders;
+      e.target.textContent = `网格线: ${showBorders ? "显示" : "隐藏"}`;
+    });
+
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    generatePlanet();
+
+    let frame = 0;
+    function animate() {
+      requestAnimationFrame(animate);
+      if (autoSpin && currentPlanet) {
+        // Faster rotation for shorter rotation hours
+        planetGroup.rotation.y += 0.08 / Math.max(10, currentPlanet.rotHours);
+      }
+      frame++;
+      if (selectedMesh && frame % 12 === 0) updateSelectedTileHUD();
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
