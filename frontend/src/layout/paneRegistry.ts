@@ -3,6 +3,7 @@ import { STATION_NAMES } from '../types/meridian';
 export type PaneKind =
   | 'orbit'
   | 'planet'
+  | 'demand'
   | 'factory'
   | 'cargo'
   | 'fleet'
@@ -56,7 +57,8 @@ export interface PaneMeta {
 
 export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'orbit', label: '星系轨道雷达', description: '观察行星实时公转与中心枢纽相对位置' },
-  { kind: 'planet', label: '行星遥测', description: '查看星球资源修正、人口需求与土地挂牌', defaultParams: { planetId: 'P2' } },
+  { kind: 'planet', label: '行星遥测', description: '查看星球信息、环境储备与 3D 球体地貌', defaultParams: { planetId: 'P2' } },
+  { kind: 'demand', label: '城市需求', description: '查看星球本回合城市消费挂单需求与本地报价', defaultParams: { planetId: 'P2' } },
   { kind: 'factory', label: '工厂产线', description: '管理地块槽位、建筑建造与热切配方', defaultParams: { planetId: 'P1' } },
   { kind: 'cargo', label: '仓库库存', description: '查看地表、行星轨道站或中心枢纽库存', defaultParams: { locationId: 'P1' } },
   { kind: 'fleet', label: '舰队调度', description: '飞船状态、混装派船运输与修船' },
@@ -83,6 +85,10 @@ export function formatPaneTitle(kind: PaneKind, params: PaneParams): string {
     case 'planet': {
       const pid = params.planetId || 'P2';
       return `行星 · ${planetLabels[pid] ?? pid}`;
+    }
+    case 'demand': {
+      const pid = params.planetId || 'P2';
+      return `消费需求 · ${planetLabels[pid] ?? pid}`;
     }
     case 'factory': {
       const pid = params.planetId || 'P1';

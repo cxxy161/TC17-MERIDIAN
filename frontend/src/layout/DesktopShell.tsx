@@ -16,6 +16,7 @@ import {
   Plus,
   Rocket,
   RotateCcw,
+  ShoppingBag,
   SkipForward,
   Terminal,
   Trophy,
@@ -46,6 +47,7 @@ import { CommandPalette } from './CommandPalette';
 const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode; params?: PaneParams }> = [
   { kind: 'orbit', label: '星图', icon: <Compass className="w-4 h-4" /> },
   { kind: 'planet', label: '行星', icon: <Globe2 className="w-4 h-4" />, params: { planetId: 'P2' } },
+  { kind: 'demand', label: '需求', icon: <ShoppingBag className="w-4 h-4" />, params: { planetId: 'P2' } },
   { kind: 'factory', label: '产线', icon: <Factory className="w-4 h-4" />, params: { planetId: 'P1' } },
   { kind: 'cargo', label: '仓库', icon: <Box className="w-4 h-4" />, params: { locationId: 'P1' } },
   { kind: 'fleet', label: '舰队', icon: <Rocket className="w-4 h-4" /> },

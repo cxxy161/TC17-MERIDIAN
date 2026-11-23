@@ -11,6 +11,7 @@ import { useGameStore } from '../store/useGameStore';
 
 import { OrbitPanel } from '../panels/OrbitPanel';
 import { PlanetPanel } from '../panels/PlanetPanel';
+import { DemandPanel } from '../panels/DemandPanel';
 import { FactoryPanel } from '../panels/FactoryPanel';
 import { CargoPanel } from '../panels/CargoPanel';
 import { FleetPanel } from '../panels/FleetPanel';
@@ -27,6 +28,7 @@ import { MemoryPanel } from '../panels/MemoryPanel';
 const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   orbit: OrbitPanel,
   planet: PlanetPanel,
+  demand: DemandPanel,
   factory: FactoryPanel,
   cargo: CargoPanel,
   fleet: FleetPanel,
@@ -76,8 +78,14 @@ export const EmptyTilePane: React.FC<EmptyTilePaneProps> = ({ onSelect }) => {
       list.push({
         id: `pl-${pl.id}`,
         label: `行星 · ${pl.name}`,
-        sub: '行星遥测与需求',
+        sub: '行星遥测与 3D 地貌',
         content: { kind: 'planet', params: { planetId: pl.id } },
+      });
+      list.push({
+        id: `dm-${pl.id}`,
+        label: `消费需求 · ${pl.name}`,
+        sub: '本回合城市居民消费挂单需求',
+        content: { kind: 'demand', params: { planetId: pl.id } },
       });
       list.push({
         id: `fac-${pl.id}`,

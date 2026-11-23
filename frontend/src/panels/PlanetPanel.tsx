@@ -1,17 +1,72 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 import { moneyToCredits, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
+import { Planet3DCanvas } from '../components/Planet3DCanvas';
+
+/** 3-segment indicator gauge inspired by Prosperous Universe environment bars */
+const ScaleGauge: React.FC<{ ratio: number; tone?: 'green' | 'amber' | 'sky' }> = ({
+  ratio,
+  tone = 'green',
+}) => {
+  const clamped = Math.max(0.05, Math.min(0.95, ratio));
+  const barColor =
+    tone === 'amber' ? 'bg-amber-400' : tone === 'sky' ? 'bg-sky-400' : 'bg-emerald-400';
+
+  return (
+    <div className="relative w-20 h-2 bg-[#151a22] border border-slate-600/80 grid grid-cols-3 divide-x divide-slate-600/70 shrink-0">
+      <div />
+      <div />
+      <div />
+      <span
+        style={{ left: `calc(${(clamped * 100).toFixed(1)}% - 2px)` }}
+        className={`absolute top-0 bottom-0 w-1 ${barColor}`}
+      />
+    </div>
+  );
+};
+
+const StatBarRow: React.FC<{
+  badge: string;
+  badgeColor: string;
+  label: string;
+  value: string;
+  fillRatio: number;
+  barClass: string;
+}> = ({ badge, badgeColor, label, value, fillRatio, barClass }) => (
+  <div className="flex items-center justify-end gap-1.5 min-w-0">
+    <span
+      className={`w-4 h-4 flex items-center justify-center text-[9px] font-bold rounded-[1px] shrink-0 ${badgeColor}`}
+    >
+      {badge}
+    </span>
+    <span className="text-[10px] text-slate-300 truncate">{label}</span>
+    <div className="w-10 h-2 bg-[#151a22] border border-slate-700 overflow-hidden shrink-0">
+      <div
+        style={{ width: `${Math.max(4, Math.min(100, fillRatio * 100))}%` }}
+        className={`h-full ${barClass}`}
+      />
+    </div>
+    <span className="mono text-[10.5px] text-slate-200 min-w-[54px] text-right shrink-0">
+      {value}
+    </span>
+  </div>
+);
 
 export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
-  const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
 
   const [planetId, setPlanetId] = useState<string>(params.planetId || 'P2');
+
+  useEffect(() => {
+    if (params.planetId) setPlanetId(params.planetId);
+  }, [params.planetId]);
+
   const planets = state?.planets ?? [];
   const pSum = planets.find((p) => p.id === planetId) ?? planets[0];
   const pView = pSum ? state?.player_snapshot?.planets[pSum.id] : undefined;
+  const routes = state?.player_snapshot?.routes ?? {};
 
   const switchPlanet = (pid: string) => {
     setPlanetId(pid);
@@ -23,14 +78,16 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
     return <div className="p-4 text-slate-500">正在同步行星遥测数据...</div>;
   }
 
-  const itemNames = new Map((catalog?.items ?? []).map((it) => [it.id, it.name]));
   const landPrice = moneyToCredits(pView?.primary_land_price);
-  const demandEntries = Object.entries(pSum.demands ?? {});
+  const gravity = pView?.gravity ?? 1.0;
+  const rCost = routes[pSum.id]?.[`ST:${pSum.id}`];
+  const demandCount = Object.keys(pSum.demands ?? {}).length;
 
   return (
-    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
-        <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
+      {/* Planet Selector Header */}
+      <div className="px-2.5 py-1 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+        <div className="flex items-center gap-1 flex-wrap">
           {planets.map((p) => (
             <button
               key={p.id}
@@ -41,135 +98,184 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1 shrink-0">
+        {!READ_ONLY_OBSERVATION_MODE && (
           <button
-            onClick={() => openTemp('factory', { planetId: pSum.id })}
-            className="pill-btn py-0 text-[10px] whitespace-nowrap"
+            disabled={pSum.unclaimed_plots <= 0}
+            onClick={() => void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: null } })}
+            className="cta-blue text-[10px] py-0 px-2 disabled:opacity-40"
           >
-            打开产线
+            购置新地块
           </button>
-          <button
-            onClick={() => openTemp('cargo', { locationId: pSum.id })}
-            className="pill-btn py-0 text-[10px] whitespace-nowrap"
-          >
-            地面仓库
-          </button>
-        </div>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {/* Header telemetry */}
-        <div className="flex items-center gap-3 pb-2.5 border-b border-slate-800/80">
-          <svg viewBox="0 0 80 80" className="w-14 h-14 text-sky-400 shrink-0">
-            <circle cx="40" cy="40" r="32" fill="rgba(16,185,129,0.06)" stroke="#38bdf8" strokeWidth="1" />
-            <ellipse cx="40" cy="40" rx="16" ry="32" fill="none" stroke="#34d399" strokeOpacity="0.5" strokeWidth="0.9" />
-            <ellipse cx="40" cy="40" rx="32" ry="12" fill="none" stroke="#38bdf8" strokeOpacity="0.35" strokeWidth="0.9" />
-            <line x1="8" y1="40" x2="72" y2="40" stroke="#38bdf8" strokeOpacity="0.3" strokeWidth="0.8" />
-            <circle cx="52" cy="28" r="2.5" fill="#10b981" />
-          </svg>
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] text-slate-400">
-              {pSum.archetype} · 重力 {(pView?.gravity ?? 1).toFixed(2)}g
+      {/* Tabular Info + Full-Fit 3D Globe */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+        <div className="divide-y divide-slate-700/60 border-b border-slate-700/70 text-[10.5px] shrink-0">
+          <div className="flex">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
+              名称 / 编号
             </div>
-            <div className="text-[13px] font-semibold text-slate-100 mt-0.5 mono">
-              {pSum.population > 0
-                ? `人口 ${Math.round(pSum.population).toLocaleString()} · 财富等级 ${pSum.wealth_tier}`
-                : '无人工业资源星'}
+            <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200 truncate">
+              {pSum.name} <span className="text-sky-300 mono">({pSum.id})</span>
             </div>
-            <div className="flex items-center justify-between mt-1.5">
-              <span className="text-[10px] text-slate-500 mono">
-                剩余未开发地块 {pSum.unclaimed_plots} · 一手价 {landPrice > 0 ? landPrice.toFixed(1) : '--'}
+          </div>
+
+          <div className="flex">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
+              类型 / 轨道
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200 truncate">
+              {pSum.archetype} · <span className="mono">{pSum.orbit_radius.toFixed(2)} AU</span>
+            </div>
+          </div>
+
+          <div className="flex">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
+              人口 / 繁荣
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono truncate">
+              <span className="text-sky-300">
+                {pSum.population > 0 ? Math.round(pSum.population).toLocaleString() : '0'}
               </span>
-              {!READ_ONLY_OBSERVATION_MODE && (
-                <button
-                  disabled={pSum.unclaimed_plots <= 0}
-                  onClick={() => void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: null } })}
-                  className="cta-blue text-[10px] py-0.5 px-2 disabled:opacity-40"
-                >
-                  购置新地块
-                </button>
-              )}
+              <span className="text-slate-500 mx-1">·</span>
+              <span className="text-emerald-300">
+                {pSum.prosperity.toFixed(2)}x ({pSum.wealth_tier}级)
+              </span>
             </div>
           </div>
-        </div>
 
-        {/* KPI Grid */}
-        <div className="grid grid-cols-2 gap-1.5">
-          <div className="metric-card">
-            <div className="text-[10px] text-slate-500">繁荣指数</div>
-            <div className="mono text-[13px] font-semibold text-emerald-400 mt-0.5">
-              {pSum.prosperity.toFixed(2)}x
+          <div className="flex">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
+              可用地块
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
+              {pSum.unclaimed_plots} 剩余{landPrice > 0 ? ` · 一手 ${landPrice.toFixed(1)}` : ''}
             </div>
           </div>
-          <div className="metric-card">
-            <div className="text-[10px] text-slate-500">星球金库</div>
-            <div className="mono text-[13px] font-semibold text-sky-300 mt-0.5">
-              {pSum.treasury.toLocaleString(undefined, { maximumFractionDigits: 1 })}
-            </div>
-          </div>
-          <div className="metric-card">
-            <div className="text-[10px] text-slate-500">央行准备金 / 年化</div>
-            <div className="mono text-[12px] font-semibold text-slate-200 mt-0.5">
-              {Math.round(pSum.bank_reserves).toLocaleString()} · {(pSum.bank_rate_bps / 100).toFixed(1)}%
-            </div>
-          </div>
-          <div className="metric-card">
-            <div className="text-[10px] text-slate-500">城市废料积压</div>
-            <div className="mono text-[13px] font-semibold text-cyan-300 mt-0.5">
-              {pSum.waste_backlog} 单位
-            </div>
-          </div>
-        </div>
 
-        {/* Secondary Land Listings */}
-        {pView && pView.land_listings.length > 0 && (
-          <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
-            <div className="text-[10px] text-slate-400">二手转让地块</div>
-            {pView.land_listings.map((l) => (
-              <div key={l.listing_id} className="metric-card flex items-center justify-between text-[11px]">
-                <span className="mono">地块 #{l.plot_id}</span>
-                <div className="flex items-center gap-2">
-                  <span className="mono text-emerald-400">{moneyToCredits(l.ask_price).toFixed(1)}</span>
-                  {!READ_ONLY_OBSERVATION_MODE && (
-                    <button
-                      onClick={() =>
-                        void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: l.listing_id } })
-                      }
-                      className="cta-green text-[10px] py-0 px-2"
-                    >
-                      收购
-                    </button>
-                  )}
-                </div>
+          <div className="flex items-stretch">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
+              环境
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-1 space-y-0.5">
+              <div className="flex items-center justify-end gap-1.5">
+                <span className="text-slate-400">重力</span>
+                <span className="mono text-slate-200 w-10 text-right">{gravity.toFixed(2)}g</span>
+                <ScaleGauge ratio={gravity / 2.0} tone="green" />
               </div>
-            ))}
+              <div className="flex items-center justify-end gap-1.5">
+                <span className="text-slate-400">登轨</span>
+                <span className="mono text-slate-200 w-10 text-right">
+                  {rCost ? `${rCost[0]}T` : '--'}
+                </span>
+                <ScaleGauge ratio={rCost ? rCost[0] / 24 : 0.4} tone="sky" />
+              </div>
+              <div className="flex items-center justify-end gap-1.5">
+                <span className="text-slate-400">废料</span>
+                <span className="mono text-slate-200 w-10 text-right">{pSum.waste_backlog}</span>
+                <ScaleGauge
+                  ratio={Math.min(1, pSum.waste_backlog / 300)}
+                  tone={pSum.waste_backlog > 150 ? 'amber' : 'green'}
+                />
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* City Demands */}
-        <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
-          <div className="flex items-center justify-between text-[10px] text-slate-400">
-            <span>本回合城市消费挂单需求</span>
-            <span>{demandEntries.length} 项</span>
+          <div className="flex items-stretch">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
+              金融与储备
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-1 space-y-0.5">
+              <StatBarRow
+                badge="库"
+                badgeColor="bg-sky-800/80 text-sky-200"
+                label="星球金库"
+                value={Math.round(pSum.treasury).toLocaleString()}
+                fillRatio={pSum.treasury / 1000000}
+                barClass="bg-sky-400"
+              />
+              <StatBarRow
+                badge="银"
+                badgeColor="bg-emerald-800/80 text-emerald-200"
+                label="央行准备"
+                value={Math.round(pSum.bank_reserves).toLocaleString()}
+                fillRatio={pSum.bank_reserves / 100000}
+                barClass="bg-emerald-400"
+              />
+              <StatBarRow
+                badge="利"
+                badgeColor="bg-amber-800/80 text-amber-200"
+                label="年化利率"
+                value={`${(pSum.bank_rate_bps / 100).toFixed(2)}%`}
+                fillRatio={pSum.bank_rate_bps / 2000}
+                barClass="bg-amber-400"
+              />
+            </div>
           </div>
-          {demandEntries.length === 0 ? (
-            <div className="text-[11px] text-slate-500 py-2">本星球暂无城市居民采购需求</div>
-          ) : (
-            <div className="grid grid-cols-2 gap-1.5">
-              {demandEntries.map(([itemId, qty]) => (
-                <div
-                  key={itemId}
-                  onClick={() =>
-                    openTemp('chart', { stationId: `ST:${pSum.id}`, itemId })
-                  }
-                  className="metric-card flex items-center justify-between cursor-pointer hover:border-sky-400/50"
-                >
-                  <span className="text-slate-300">{itemNames.get(itemId) ?? itemId}</span>
-                  <span className="mono text-sky-400 font-semibold">{qty}</span>
-                </div>
-              ))}
+
+          <div className="flex items-stretch">
+            <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
+              行星项目
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-1 flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
+              <button
+                onClick={() => openTemp('cargo', { locationId: pSum.id })}
+                className="text-sky-300 hover:text-sky-200 hover:underline"
+              >
+                地面仓库
+              </button>
+              <button
+                onClick={() => openTemp('cargo', { locationId: `ST:${pSum.id}` })}
+                className="text-sky-300 hover:text-sky-200 hover:underline"
+              >
+                轨道站
+              </button>
+              <button
+                onClick={() => openTemp('factory', { planetId: pSum.id })}
+                className="text-sky-300 hover:text-sky-200 hover:underline"
+              >
+                工业产线
+              </button>
+              <button
+                onClick={() => openTemp('demand', { planetId: pSum.id })}
+                className="text-emerald-300 hover:text-emerald-200 hover:underline"
+              >
+                消费需求({demandCount})
+              </button>
+            </div>
+          </div>
+
+          {pView && pView.land_listings.length > 0 && (
+            <div className="flex items-stretch">
+              <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
+                二手地块
+              </div>
+              <div className="flex-1 min-w-0 px-2 py-0.5 space-y-0.5">
+                {pView.land_listings.map((l) => (
+                  <div key={l.listing_id} className="flex items-center justify-end gap-2 mono">
+                    <span className="text-slate-400">#{l.plot_id}</span>
+                    <span className="text-emerald-400">{moneyToCredits(l.ask_price).toFixed(1)}</span>
+                    {!READ_ONLY_OBSERVATION_MODE && (
+                      <button
+                        onClick={() =>
+                          void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: l.listing_id } })
+                        }
+                        className="cta-green text-[10px] py-0 px-1.5"
+                      >
+                        收购
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
+        </div>
+
+        {/* 3D Interactive Planet Globe */}
+        <div className="flex-1 min-h-[190px]">
+          <Planet3DCanvas planetId={pSum.id} />
         </div>
       </div>
     </div>
