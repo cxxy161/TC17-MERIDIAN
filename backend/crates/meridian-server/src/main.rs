@@ -43,7 +43,7 @@ async fn main() {
         &["frontend/dist", "../frontend/dist"],
         "frontend/dist",
     );
-    let bind_addr = std::env::var("MERIDIAN_ADDR").unwrap_or_else(|_| "0.0.0.0:3080".to_string());
+    let bind_addr = std::env::var("MERIDIAN_ADDR").unwrap_or_else(|_| "0.0.0.0:18420".to_string());
     let tick_ms: u64 = std::env::var("MERIDIAN_TICK_MS")
         .ok()
         .and_then(|s| s.parse().ok())
