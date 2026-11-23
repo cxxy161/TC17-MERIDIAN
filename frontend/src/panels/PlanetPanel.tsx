@@ -2,29 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 import { moneyToCredits, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
-import { Planet3DCanvas } from '../components/Planet3DCanvas';
-
-/** 3-segment indicator gauge inspired by Prosperous Universe environment bars */
-const ScaleGauge: React.FC<{ ratio: number; tone?: 'green' | 'amber' | 'sky' }> = ({
-  ratio,
-  tone = 'green',
-}) => {
-  const clamped = Math.max(0.05, Math.min(0.95, ratio));
-  const barColor =
-    tone === 'amber' ? 'bg-amber-400' : tone === 'sky' ? 'bg-sky-400' : 'bg-emerald-400';
-
-  return (
-    <div className="relative w-20 h-2 bg-[#151a22] border border-slate-600/80 grid grid-cols-3 divide-x divide-slate-600/70 shrink-0">
-      <div />
-      <div />
-      <div />
-      <span
-        style={{ left: `calc(${(clamped * 100).toFixed(1)}% - 2px)` }}
-        className={`absolute top-0 bottom-0 w-1 ${barColor}`}
-      />
-    </div>
-  );
-};
+import { PLANET_ROTATION_DAYS, Planet3DCanvas } from '../components/Planet3DCanvas';
 
 const StatBarRow: React.FC<{
   badge: string;
@@ -55,6 +33,7 @@ const StatBarRow: React.FC<{
 
 export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
+  const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
 
   const [planetId, setPlanetId] = useState<string>(params.planetId || 'P2');
@@ -82,6 +61,9 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
   const gravity = pView?.gravity ?? 1.0;
   const rCost = routes[pSum.id]?.[`ST:${pSum.id}`];
   const demandCount = Object.keys(pSum.demands ?? {}).length;
+  const ticksPerDay = catalog?.meta.ticks_per_day || 24;
+  const rotDays = PLANET_ROTATION_DAYS[pSum.id] ?? 1.0;
+  const rotHours = Math.round(rotDays * ticksPerDay);
 
   return (
     <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
@@ -156,28 +138,28 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
 
           <div className="flex items-stretch">
             <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
-              环境
+              环境与物理
             </div>
-            <div className="flex-1 min-w-0 px-2 py-1 space-y-0.5">
-              <div className="flex items-center justify-end gap-1.5">
-                <span className="text-slate-400">重力</span>
-                <span className="mono text-slate-200 w-10 text-right">{gravity.toFixed(2)}g</span>
-                <ScaleGauge ratio={gravity / 2.0} tone="green" />
-              </div>
-              <div className="flex items-center justify-end gap-1.5">
-                <span className="text-slate-400">登轨</span>
-                <span className="mono text-slate-200 w-10 text-right">
-                  {rCost ? `${rCost[0]}T` : '--'}
+            <div className="flex-1 min-w-0 px-2 py-1 space-y-0.5 mono text-right">
+              <div className="flex items-center justify-end gap-3 text-slate-200">
+                <span>
+                  <span className="text-slate-400 mr-1">重力</span>
+                  {gravity.toFixed(2)}g
                 </span>
-                <ScaleGauge ratio={rCost ? rCost[0] / 24 : 0.4} tone="sky" />
+                <span>
+                  <span className="text-slate-400 mr-1">自转</span>
+                  {rotHours}回合/圈
+                </span>
               </div>
-              <div className="flex items-center justify-end gap-1.5">
-                <span className="text-slate-400">废料</span>
-                <span className="mono text-slate-200 w-10 text-right">{pSum.waste_backlog}</span>
-                <ScaleGauge
-                  ratio={Math.min(1, pSum.waste_backlog / 300)}
-                  tone={pSum.waste_backlog > 150 ? 'amber' : 'green'}
-                />
+              <div className="flex items-center justify-end gap-3 text-slate-200">
+                <span>
+                  <span className="text-slate-400 mr-1">登轨</span>
+                  {rCost ? `${rCost[0]}回合 / ${rCost[1]}油` : '--'}
+                </span>
+                <span>
+                  <span className="text-slate-400 mr-1">废料</span>
+                  {pSum.waste_backlog}
+                </span>
               </div>
             </div>
           </div>
@@ -273,9 +255,15 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
           )}
         </div>
 
-        {/* 3D Interactive Planet Globe */}
-        <div className="flex-1 min-h-[190px]">
-          <Planet3DCanvas planetId={pSum.id} />
+        {/* 3D Interactive Planet Globe synced to simulation tick/speed/paused */}
+        <div className="flex-1 min-h-[200px]">
+          <Planet3DCanvas
+            planetId={pSum.id}
+            tick={state?.tick ?? 0}
+            paused={state?.paused ?? false}
+            tickMs={state?.tick_ms ?? 2000}
+            ticksPerDay={ticksPerDay}
+          />
         </div>
       </div>
     </div>

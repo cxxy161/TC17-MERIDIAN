@@ -24,9 +24,16 @@ interface PlanetProfile {
   tempBias: number;
   moistBias: number;
   tiltDeg: number;
+  rotDays: number;
   atmoColor: string;
   mode: 'volcanic' | 'terrestrial' | 'icy';
 }
+
+export const PLANET_ROTATION_DAYS: Record<string, number> = {
+  P1: 2.0,
+  P2: 1.0,
+  P3: 0.75,
+};
 
 const PROFILES: Record<string, PlanetProfile> = {
   P1: {
@@ -35,6 +42,7 @@ const PROFILES: Record<string, PlanetProfile> = {
     tempBias: 0.45,
     moistBias: -0.45,
     tiltDeg: 10,
+    rotDays: PLANET_ROTATION_DAYS.P1,
     atmoColor: 'rgba(234, 120, 62, 0.22)',
     mode: 'volcanic',
   },
@@ -44,6 +52,7 @@ const PROFILES: Record<string, PlanetProfile> = {
     tempBias: 0.03,
     moistBias: 0.14,
     tiltDeg: 22,
+    rotDays: PLANET_ROTATION_DAYS.P2,
     atmoColor: 'rgba(56, 189, 248, 0.25)',
     mode: 'terrestrial',
   },
@@ -53,6 +62,7 @@ const PROFILES: Record<string, PlanetProfile> = {
     tempBias: -0.45,
     moistBias: -0.1,
     tiltDeg: 17,
+    rotDays: PLANET_ROTATION_DAYS.P3,
     atmoColor: 'rgba(125, 211, 252, 0.22)',
     mode: 'icy',
   },
@@ -370,13 +380,51 @@ function rotatePoint(p: Vec3, yaw: number, pitch: number, tiltRad: number): Vec3
   };
 }
 
-export const Planet3DCanvas: React.FC<{ planetId: string }> = ({ planetId }) => {
+export interface Planet3DCanvasProps {
+  planetId: string;
+  tick: number;
+  paused: boolean;
+  tickMs: number;
+  ticksPerDay: number;
+}
+
+export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
+  planetId,
+  tick,
+  paused,
+  tickMs,
+  ticksPerDay,
+}) => {
   const profile = PROFILES[planetId] ?? PROFILES.P2;
   const facets = useMemo(() => buildGoldbergFacets(4, profile), [profile]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const yawRef = useRef<number>(0.6);
+  const userYawOffsetRef = useRef<number>(0.6);
   const pitchRef = useRef<number>(0.28);
+  const simRef = useRef<{
+    tick: number;
+    paused: boolean;
+    tickMs: number;
+    ticksPerDay: number;
+    tickAtMs: number;
+  }>({
+    tick,
+    paused,
+    tickMs: Math.max(100, tickMs || 2000),
+    ticksPerDay: Math.max(1, ticksPerDay || 24),
+    tickAtMs: performance.now(),
+  });
+
+  useEffect(() => {
+    simRef.current = {
+      tick,
+      paused,
+      tickMs: Math.max(100, tickMs || 2000),
+      ticksPerDay: Math.max(1, ticksPerDay || 24),
+      tickAtMs: performance.now(),
+    };
+  }, [tick, paused, tickMs, ticksPerDay]);
+
   const draggingRef = useRef<{ active: boolean; x: number; y: number; moved: number }>({
     active: false,
     x: 0,
@@ -414,22 +462,26 @@ export const Planet3DCanvas: React.FC<{ planetId: string }> = ({ planetId }) => 
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.clearRect(0, 0, w, h);
 
-          if (!draggingRef.current.active) {
-            yawRef.current += 0.0045;
-          }
+          // Sync rotation angle to planet rotation period, ticks_per_day, tick_ms, and paused state
+          const sim = simRef.current;
+          const frac = sim.paused
+            ? 0
+            : Math.min(1, Math.max(0, (performance.now() - sim.tickAtMs) / sim.tickMs));
+          const rotTicks = Math.max(1, sim.ticksPerDay * profile.rotDays);
+          const spinYaw = (((sim.tick + frac) / rotTicks) * Math.PI * 2) % (Math.PI * 2);
 
           const cx = w / 2;
           const cy = h / 2 + 2;
-          const radius = Math.min(w, h) * 0.34;
+          const radius = Math.min(w, h) * 0.36;
           const tiltRad = (profile.tiltDeg * Math.PI) / 180;
-          const yaw = yawRef.current;
+          const yaw = spinYaw + userYawOffsetRef.current;
           const pitch = pitchRef.current;
           const sunDir = norm3({ x: 0.72, y: 0.42, z: 0.55 });
 
-          // Subtle polar axis spine (like Prosperous Universe globe)
-          const northPole = rotatePoint({ x: 0, y: 1.24, z: 0 }, yaw, pitch, tiltRad);
-          const southPole = rotatePoint({ x: 0, y: -1.24, z: 0 }, yaw, pitch, tiltRad);
-          ctx.strokeStyle = 'rgba(203, 213, 225, 0.35)';
+          // Subtle polar axis spine
+          const northPole = rotatePoint({ x: 0, y: 1.2, z: 0 }, yaw, pitch, tiltRad);
+          const southPole = rotatePoint({ x: 0, y: -1.2, z: 0 }, yaw, pitch, tiltRad);
+          ctx.strokeStyle = 'rgba(203, 213, 225, 0.28)';
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.moveTo(cx + southPole.x * radius, cy - southPole.y * radius);
@@ -452,48 +504,6 @@ export const Planet3DCanvas: React.FC<{ planetId: string }> = ({ planetId }) => 
           ctx.beginPath();
           ctx.arc(cx, cy, radius * 1.18, 0, Math.PI * 2);
           ctx.fill();
-
-          // Back-half orbital station rings
-          const drawRingPass = (frontHalf: boolean) => {
-            const rings = [
-              { r: 1.22, tiltX: 0.36, rotZ: 0.18, alpha: 0.45 },
-              { r: 1.32, tiltX: -0.28, rotZ: -0.22, alpha: 0.3 },
-            ];
-            for (const ring of rings) {
-              ctx.strokeStyle = `rgba(203, 213, 225, ${frontHalf ? ring.alpha : ring.alpha * 0.3})`;
-              ctx.lineWidth = 1;
-              ctx.beginPath();
-              let started = false;
-              const segs = 72;
-              for (let i = 0; i <= segs; i++) {
-                const a = (i / segs) * Math.PI * 2;
-                const rx = Math.cos(a) * ring.r;
-                const rz = Math.sin(a) * ring.r;
-                const pTilt: Vec3 = {
-                  x: rx * Math.cos(ring.rotZ) - rz * Math.sin(ring.tiltX) * Math.sin(ring.rotZ),
-                  y: rz * Math.sin(ring.tiltX) * Math.cos(ring.rotZ) + rx * Math.sin(ring.rotZ) * 0.4,
-                  z: rz * Math.cos(ring.tiltX),
-                };
-                const rp = rotatePoint(pTilt, 0, pitch * 0.6, 0);
-                const isFront = rp.z >= 0;
-                if (isFront === frontHalf) {
-                  const sx = cx + rp.x * radius;
-                  const sy = cy - rp.y * radius;
-                  if (!started) {
-                    ctx.moveTo(sx, sy);
-                    started = true;
-                  } else {
-                    ctx.lineTo(sx, sy);
-                  }
-                } else {
-                  started = false;
-                }
-              }
-              ctx.stroke();
-            }
-          };
-
-          drawRingPass(false);
 
           // Project visible Goldberg facets & sort back-to-front
           const visible: Array<{
@@ -548,34 +558,6 @@ export const Planet3DCanvas: React.FC<{ planetId: string }> = ({ planetId }) => 
             }
             ctx.stroke();
           }
-
-          drawRingPass(true);
-
-          // Orbiting local station badge on front ring
-          const stAngle = yaw * 1.4 + 0.8;
-          const stP = rotatePoint(
-            { x: Math.cos(stAngle) * 1.22, y: Math.sin(stAngle) * 0.42, z: Math.sin(stAngle) * 1.22 },
-            0,
-            pitch * 0.6,
-            0,
-          );
-          if (stP.z >= -0.2) {
-            const sx = cx + stP.x * radius;
-            const sy = cy - stP.y * radius;
-            ctx.fillStyle = '#202732';
-            ctx.strokeStyle = '#e2e8f0';
-            ctx.lineWidth = 1.2;
-            ctx.beginPath();
-            ctx.arc(sx, sy, 5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(sx - 3, sy);
-            ctx.lineTo(sx + 3, sy);
-            ctx.moveTo(sx, sy - 3);
-            ctx.lineTo(sx, sy + 3);
-            ctx.stroke();
-          }
         }
       }
       raf = window.requestAnimationFrame(renderFrame);
@@ -623,7 +605,7 @@ export const Planet3DCanvas: React.FC<{ planetId: string }> = ({ planetId }) => 
           draggingRef.current.moved += Math.hypot(dx, dy);
           draggingRef.current.x = e.clientX;
           draggingRef.current.y = e.clientY;
-          yawRef.current += dx * 0.012;
+          userYawOffsetRef.current += dx * 0.012;
           pitchRef.current = Math.max(-1.25, Math.min(1.25, pitchRef.current + dy * 0.012));
         }}
         onPointerUp={(e) => {
