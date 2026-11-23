@@ -21,6 +21,8 @@ import { TreasuryPanel } from '../panels/TreasuryPanel';
 import { RankingPanel } from '../panels/RankingPanel';
 import { ScriptIdePanel } from '../panels/ScriptIdePanel';
 import { ConsolePanel } from '../panels/ConsolePanel';
+import { FileExplorerPanel } from '../panels/FileExplorerPanel';
+import { MemoryPanel } from '../panels/MemoryPanel';
 
 const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   orbit: OrbitPanel,
@@ -33,7 +35,9 @@ const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   orderbook: OrderBookPanel,
   treasury: TreasuryPanel,
   ranking: RankingPanel,
+  files: FileExplorerPanel,
   script: ScriptIdePanel,
+  memory: MemoryPanel,
   console: ConsolePanel,
 };
 

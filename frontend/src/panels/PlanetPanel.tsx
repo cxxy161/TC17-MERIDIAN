@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { moneyToCredits } from '../types/meridian';
+import { moneyToCredits, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
 
 export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
@@ -80,13 +80,15 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
               <span className="text-[10px] text-slate-500 mono">
                 剩余未开发地块 {pSum.unclaimed_plots} · 一手价 {landPrice > 0 ? landPrice.toFixed(1) : '--'}
               </span>
-              <button
-                disabled={pSum.unclaimed_plots <= 0}
-                onClick={() => void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: null } })}
-                className="cta-blue text-[10px] py-0.5 px-2 disabled:opacity-40"
-              >
-                购置新地块
-              </button>
+              {!READ_ONLY_OBSERVATION_MODE && (
+                <button
+                  disabled={pSum.unclaimed_plots <= 0}
+                  onClick={() => void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: null } })}
+                  className="cta-blue text-[10px] py-0.5 px-2 disabled:opacity-40"
+                >
+                  购置新地块
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -128,14 +130,16 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp })
                 <span className="mono">地块 #{l.plot_id}</span>
                 <div className="flex items-center gap-2">
                   <span className="mono text-emerald-400">{moneyToCredits(l.ask_price).toFixed(1)}</span>
-                  <button
-                    onClick={() =>
-                      void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: l.listing_id } })
-                    }
-                    className="cta-green text-[10px] py-0 px-2"
-                  >
-                    收购
-                  </button>
+                  {!READ_ONLY_OBSERVATION_MODE && (
+                    <button
+                      onClick={() =>
+                        void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: l.listing_id } })
+                      }
+                      className="cta-green text-[10px] py-0 px-2"
+                    >
+                      收购
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

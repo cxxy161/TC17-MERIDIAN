@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { creditsToMoney, moneyToCredits } from '../types/meridian';
+import { creditsToMoney, moneyToCredits, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
 
 export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
   const state = useGameStore((s) => s.state);
@@ -50,36 +50,38 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
           </div>
         </div>
 
-        <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2.5">
-          <div className="flex items-center justify-between text-[11px]">
-            <span className="text-slate-300">母星央行柜台（仅可在母星办理存贷）</span>
-            <select
-              value={planetId}
-              onChange={(e) => setPlanetId(e.target.value)}
-              className="bg-[#27303e] border border-slate-700 px-2 py-0.5 rounded-sm"
-            >
-              {planets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} ({(p.bank_rate_bps / 100).toFixed(1)}%)
-                </option>
-              ))}
-            </select>
-          </div>
+        {!READ_ONLY_OBSERVATION_MODE && (
+          <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-slate-300">母星央行柜台（仅可在母星办理存贷）</span>
+              <select
+                value={planetId}
+                onChange={(e) => setPlanetId(e.target.value)}
+                className="bg-[#27303e] border border-slate-700 px-2 py-0.5 rounded-sm"
+              >
+                {planets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({(p.bank_rate_bps / 100).toFixed(1)}%)
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min="1"
-              value={amountStr}
-              onChange={(e) => setAmountStr(e.target.value)}
-              className="w-32 bg-[#191f27] border border-slate-700 px-2 py-1 mono text-right rounded-sm"
-            />
-            <button onClick={() => execBank('deposit')} className="cta-blue">存入</button>
-            <button onClick={() => execBank('withdraw')} className="pill-btn">取出</button>
-            <button onClick={() => execBank('borrow')} className="cta-green">借款</button>
-            <button onClick={() => execBank('repay')} className="pill-btn">还款</button>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="1"
+                value={amountStr}
+                onChange={(e) => setAmountStr(e.target.value)}
+                className="w-32 bg-[#191f27] border border-slate-700 px-2 py-1 mono text-right rounded-sm"
+              />
+              <button onClick={() => execBank('deposit')} className="cta-blue">存入</button>
+              <button onClick={() => execBank('withdraw')} className="pill-btn">取出</button>
+              <button onClick={() => execBank('borrow')} className="cta-green">借款</button>
+              <button onClick={() => execBank('repay')} className="pill-btn">还款</button>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="space-y-1.5">
           <div className="text-[10px] text-slate-400">全星系各行星金库与央行准备金</div>

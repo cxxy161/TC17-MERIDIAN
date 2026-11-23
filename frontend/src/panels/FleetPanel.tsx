@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { locationLabel } from '../types/meridian';
+import { locationLabel, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
 
 const SHIP_SIZE_NAMES: Record<string, string> = {
   small: '小型货船',
@@ -99,7 +99,7 @@ export const FleetPanel: React.FC<PaneProps> = () => {
                     耐久 {ship.durability.toFixed(0)}% · 载重 {ship.capacity}
                   </span>
                 </div>
-                {ship.durability < 95 && !ship.is_busy && (
+                {!READ_ONLY_OBSERVATION_MODE && ship.durability < 95 && !ship.is_busy && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -115,8 +115,32 @@ export const FleetPanel: React.FC<PaneProps> = () => {
           })}
         </div>
 
-        {/* Dispatch Builder */}
-        {activeShip && (
+        {/* Cargo Telemetry or Dispatch Builder */}
+        {activeShip && READ_ONLY_OBSERVATION_MODE && (
+          <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2">
+            <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800">
+              <span className="font-semibold text-slate-100">
+                飞船详情 · {SHIP_SIZE_NAMES[activeShip.size]}-{activeShip.id}
+              </span>
+              <span className="mono text-[10px] text-sky-300">
+                当前：{locationLabel(activeShip.location, planets)}
+              </span>
+            </div>
+            {Object.keys(activeShip.cargo ?? {}).length === 0 ? (
+              <div className="text-[11px] text-slate-500">当前货舱空载（通过脚本 `ship.dispatch(...)` 调度）</div>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {Object.entries(activeShip.cargo).map(([it, qty]) => (
+                  <div key={it} className="metric-card flex justify-between text-[11px]">
+                    <span>{itemMap.get(it)?.name ?? it}</span>
+                    <span className="mono text-emerald-400">{qty}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {activeShip && !READ_ONLY_OBSERVATION_MODE && (
           <div className="border border-sky-500/20 bg-[#1b212b] p-3 rounded-sm space-y-2.5">
             <div className="flex items-center justify-between text-[11px] pb-1.5 border-b border-slate-800">
               <span className="font-semibold text-slate-100">

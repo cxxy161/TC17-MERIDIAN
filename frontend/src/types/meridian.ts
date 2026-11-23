@@ -1,5 +1,11 @@
 export const MONEY_SCALE = 10_000;
 
+/**
+ * Pure-code play mode: hides manual intent forms/buttons in observation panels while
+ * preserving manual intent handlers cleanly for potential future re-enable.
+ */
+export const READ_ONLY_OBSERVATION_MODE = true;
+
 export function moneyToCredits(m: number | null | undefined): number {
   if (m === null || m === undefined || !Number.isFinite(m)) return 0;
   return m / MONEY_SCALE;

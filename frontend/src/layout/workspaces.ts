@@ -6,8 +6,8 @@ export interface WorkspaceEntry {
   tree: SplitNode;
 }
 
-const STORAGE_KEY = 'meridian.split_workspaces.v2';
-const ACTIVE_KEY = 'meridian.active_split_workspace.v2';
+const STORAGE_KEY = 'meridian.split_workspaces.v3';
+const ACTIVE_KEY = 'meridian.active_split_workspace.v3';
 
 export function buildPresetTree(wsId: string): SplitNode {
   if (wsId === 'ws-market') {
@@ -37,18 +37,18 @@ export function buildPresetTree(wsId: string): SplitNode {
   if (wsId === 'ws-script') {
     return makeSplit(
       'vertical',
-      0.62,
+      0.18,
+      makeLeaf({ kind: 'files', params: {} }),
       makeSplit(
-        'horizontal',
+        'vertical',
         0.65,
-        makeLeaf({ kind: 'script', params: {} }),
-        makeLeaf({ kind: 'console', params: {} }),
-      ),
-      makeSplit(
-        'horizontal',
-        0.55,
-        makeLeaf({ kind: 'ticker', params: { stationId: 'ST:HUB' } }),
-        makeLeaf({ kind: 'fleet', params: {} }),
+        makeSplit(
+          'horizontal',
+          0.66,
+          makeLeaf({ kind: 'script', params: {} }),
+          makeLeaf({ kind: 'console', params: {} }),
+        ),
+        makeLeaf({ kind: 'memory', params: {} }),
       ),
     );
   }

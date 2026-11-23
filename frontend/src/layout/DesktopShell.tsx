@@ -5,7 +5,9 @@ import {
   CandlestickChart,
   Code2,
   Compass,
+  Database,
   Factory,
+  FolderTree,
   Globe2,
   Landmark,
   Layers,
@@ -52,8 +54,10 @@ const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode
   { kind: 'orderbook', label: '盘口', icon: <Layers className="w-4 h-4" />, params: { stationId: 'ST:HUB', itemId: 'steel' } },
   { kind: 'treasury', label: '银行', icon: <Landmark className="w-4 h-4" />, params: { planetId: 'P1' } },
   { kind: 'ranking', label: '排行', icon: <Trophy className="w-4 h-4" /> },
+  { kind: 'files', label: '文件', icon: <FolderTree className="w-4 h-4" /> },
   { kind: 'script', label: '脚本', icon: <Code2 className="w-4 h-4" /> },
-  { kind: 'console', label: '终端', icon: <Terminal className="w-4 h-4" /> },
+  { kind: 'memory', label: '内存', icon: <Database className="w-4 h-4" /> },
+  { kind: 'console', label: '控制台', icon: <Terminal className="w-4 h-4" /> },
 ];
 
 export const DesktopShell: React.FC = () => {
@@ -70,6 +74,9 @@ export const DesktopShell: React.FC = () => {
   const [floatingWindows, setFloatingWindows] = useState<FloatingWindowItem[]>([]);
   const [dropTargetTileId, setDropTargetTileId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [addingWs, setAddingWs] = useState(false);
+  const [newWsName, setNewWsName] = useState('');
+  const [confirmingReset, setConfirmingReset] = useState(false);
 
   const topZRef = useRef(40);
   const floatSeqRef = useRef(1);
@@ -167,19 +174,29 @@ export const DesktopShell: React.FC = () => {
     persistWorkspaces(workspaces, nextId);
   };
 
-  const addWorkspace = () => {
-    const name = window.prompt('输入新工作区名称：', `工作区 ${workspaces.length + 1}`);
-    if (!name) return;
+  const openAddWorkspace = () => {
+    setNewWsName(`工作区 ${workspaces.length + 1}`);
+    setAddingWs(true);
+  };
+
+  const commitAddWorkspace = () => {
+    const trimmed = newWsName.trim();
+    if (!trimmed) {
+      setAddingWs(false);
+      return;
+    }
     const newId = `ws-${Date.now()}`;
     const entry: WorkspaceEntry = {
       id: newId,
-      name: name.trim(),
+      name: trimmed,
       tree: makeLeaf(null),
     };
     const next = [...workspaces, entry];
     setWorkspaces(next);
     setActiveWsId(newId);
     persistWorkspaces(next, newId);
+    setAddingWs(false);
+    setNewWsName('');
   };
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWsId) ?? workspaces[0];
@@ -213,9 +230,41 @@ export const DesktopShell: React.FC = () => {
                 {w.name}
               </button>
             ))}
-            <button onClick={addWorkspace} className="pill-btn px-1.5 shrink-0" title="新建空白自定义工作区">
-              <Plus className="w-3.5 h-3.5" />
-            </button>
+            {addingWs ? (
+              <div className="flex items-center gap-1 shrink-0 bg-[#1b212b] border border-sky-500/40 rounded px-1.5 py-0.5">
+                <input
+                  autoFocus
+                  value={newWsName}
+                  onChange={(e) => setNewWsName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      commitAddWorkspace();
+                    } else if (e.key === 'Escape') {
+                      setAddingWs(false);
+                    }
+                  }}
+                  placeholder="工作区名称"
+                  className="bg-transparent text-[11px] text-slate-100 outline-none w-24"
+                />
+                <button
+                  onClick={commitAddWorkspace}
+                  className="text-[10px] text-emerald-300 hover:text-emerald-200 px-1"
+                >
+                  创建
+                </button>
+                <button
+                  onClick={() => setAddingWs(false)}
+                  className="text-[10px] text-slate-400 hover:text-slate-200 px-0.5"
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button onClick={openAddWorkspace} className="pill-btn px-1.5 shrink-0" title="新建空白自定义工作区">
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -268,17 +317,34 @@ export const DesktopShell: React.FC = () => {
               <option value={2000}>标准 2.0s</option>
               <option value={5000}>慢速 5.0s</option>
             </select>
-            <button
-              onClick={() => {
-                if (window.confirm('确认重置星系并清空当前档位交易与历史？')) {
-                  void simControl('reset');
-                }
-              }}
-              className="pill-btn text-slate-400 hover:text-rose-300"
-              title="重置星系"
-            >
-              <RotateCcw className="w-3 h-3" />
-            </button>
+            {confirmingReset ? (
+              <div className="flex items-center gap-1 bg-rose-950/50 border border-rose-500/40 rounded px-1.5 py-0.5 text-[10px] shrink-0">
+                <span className="text-rose-200">确认重置星系?</span>
+                <button
+                  onClick={() => {
+                    setConfirmingReset(false);
+                    void simControl('reset');
+                  }}
+                  className="px-1.5 py-0.5 rounded bg-rose-500/30 hover:bg-rose-500/45 text-rose-100"
+                >
+                  确定
+                </button>
+                <button
+                  onClick={() => setConfirmingReset(false)}
+                  className="px-1 py-0.5 text-slate-300 hover:text-slate-100"
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmingReset(true)}
+                className="pill-btn text-slate-400 hover:text-rose-300"
+                title="重置星系"
+              >
+                <RotateCcw className="w-3 h-3" />
+              </button>
+            )}
             <button onClick={() => setPaletteOpen(true)} className="cta-blue whitespace-nowrap">
               ⌘K 临时窗口
             </button>

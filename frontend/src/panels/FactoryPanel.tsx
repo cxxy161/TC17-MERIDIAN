@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
+import { READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
 
 export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
   const state = useGameStore((s) => s.state);
@@ -37,31 +38,35 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1.5">
-          <select
-            value={buildType}
-            onChange={(e) => setBuildType(e.target.value)}
-            className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
-          >
-            {(catalog?.buildings ?? []).map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-          <button
-            disabled={plots.length === 0}
-            onClick={() => {
-              const target = plots.find((pl) => pl.used_slots < pl.capacity) ?? plots[0];
-              if (target) {
-                void sendIntent({ BuildFacility: { plot_id: target.id, building_type: buildType } });
-              }
-            }}
-            className="cta-blue text-[10px] py-0.5 px-2 disabled:opacity-40"
-          >
-            建造设施
-          </button>
-        </div>
+        {!READ_ONLY_OBSERVATION_MODE ? (
+          <div className="flex items-center gap-1.5">
+            <select
+              value={buildType}
+              onChange={(e) => setBuildType(e.target.value)}
+              className="bg-[#27303e] border border-slate-700 text-[11px] px-1.5 py-0.5 rounded-sm"
+            >
+              {(catalog?.buildings ?? []).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={plots.length === 0}
+              onClick={() => {
+                const target = plots.find((pl) => pl.used_slots < pl.capacity) ?? plots[0];
+                if (target) {
+                  void sendIntent({ BuildFacility: { plot_id: target.id, building_type: buildType } });
+                }
+              }}
+              className="cta-blue text-[10px] py-0.5 px-2 disabled:opacity-40"
+            >
+              建造设施
+            </button>
+          </div>
+        ) : (
+          <span className="text-[10px] text-slate-400 whitespace-nowrap">代码脚本控制模式</span>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
@@ -105,45 +110,56 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
                                 {bDef?.name ?? b.building_type} #{b.id}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <select
-                                value={b.recipe_id}
-                                onChange={(e) =>
-                                  void sendIntent({
-                                    SetRecipe: { building_id: b.id, recipe_id: e.target.value },
-                                  })
-                                }
-                                className="bg-[#222935] border border-sky-500/30 text-sky-300 text-[10px] px-1.5 py-0.5 rounded-sm"
-                              >
-                                {validRecipes.map((vr) => (
-                                  <option key={vr.id} value={vr.id}>
-                                    {vr.name}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                onClick={() =>
-                                  void sendIntent({
-                                    ToggleBuilding: { building_id: b.id, active: !b.active },
-                                  })
-                                }
-                                className={`pill-btn py-0 text-[10px] ${
-                                  b.active ? 'text-emerald-400 border-emerald-500/40' : 'text-slate-400'
-                                }`}
-                              >
-                                {b.active ? '运行中' : '已待机'}
-                              </button>
-                              <button
-                                onClick={() =>
-                                  void sendIntent({
-                                    DemolishFacility: { plot_id: pl.id, building_id: b.id },
-                                  })
-                                }
-                                className="pill-btn py-0 text-[10px] text-rose-400 hover:border-rose-400"
-                              >
-                                拆除
-                              </button>
-                            </div>
+                            {!READ_ONLY_OBSERVATION_MODE ? (
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <select
+                                  value={b.recipe_id}
+                                  onChange={(e) =>
+                                    void sendIntent({
+                                      SetRecipe: { building_id: b.id, recipe_id: e.target.value },
+                                    })
+                                  }
+                                  className="bg-[#222935] border border-sky-500/30 text-sky-300 text-[10px] px-1.5 py-0.5 rounded-sm"
+                                >
+                                  {validRecipes.map((vr) => (
+                                    <option key={vr.id} value={vr.id}>
+                                      {vr.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  onClick={() =>
+                                    void sendIntent({
+                                      ToggleBuilding: { building_id: b.id, active: !b.active },
+                                    })
+                                  }
+                                  className={`pill-btn py-0 text-[10px] ${
+                                    b.active ? 'text-emerald-400 border-emerald-500/40' : 'text-slate-400'
+                                  }`}
+                                >
+                                  {b.active ? '运行中' : '已待机'}
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    void sendIntent({
+                                      DemolishFacility: { plot_id: pl.id, building_id: b.id },
+                                    })
+                                  }
+                                  className="pill-btn py-0 text-[10px] text-rose-400 hover:border-rose-400"
+                                >
+                                  拆除
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 shrink-0 text-[10px]">
+                                <span className="px-1.5 py-0.5 bg-[#222935] border border-sky-500/25 text-sky-300">
+                                  {rDef?.name ?? b.recipe_id}
+                                </span>
+                                <span className={b.active ? 'text-emerald-400' : 'text-slate-500'}>
+                                  {b.active ? '运行中' : '已待机'}
+                                </span>
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex justify-between text-[10px] text-slate-400 mono">

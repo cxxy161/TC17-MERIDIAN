@@ -44,33 +44,23 @@ const SCREEPS_COMPLETIONS = [
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
 ];
 
-export const ScriptIdePanel: React.FC<PaneProps> = () => {
+export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
   const scripts = useGameStore((s) => s.scripts);
   const catalog = useGameStore((s) => s.catalog);
-  const saveScripts = useGameStore((s) => s.saveScripts);
-  const saveMemory = useGameStore((s) => s.saveMemory);
+  const draftModules = useGameStore((s) => s.draftModules);
+  const activeMod = useGameStore((s) => s.activeScriptModule);
+  const dirty = useGameStore((s) => s.scriptDirty);
+  const setActiveMod = useGameStore((s) => s.setActiveScriptModule);
+  const updateDraftModule = useGameStore((s) => s.updateDraftModule);
+  const createDraftModule = useGameStore((s) => s.createDraftModule);
+  const saveDraftScripts = useGameStore((s) => s.saveDraftScripts);
 
-  const [draftModules, setDraftModules] = useState<Record<string, string>>({});
-  const [activeMod, setActiveMod] = useState<string>('main');
-  const [showMemory, setShowMemory] = useState<boolean>(false);
-  const [memoryDraft, setMemoryDraft] = useState<string>('{}');
-  const [dirty, setDirty] = useState<boolean>(false);
-  const [saveNote, setSaveNote] = useState<string>('');
+  const [addingFile, setAddingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
+  const [saveNote, setSaveNote] = useState('');
 
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
-
-  useEffect(() => {
-    if (scripts?.modules && !dirty) {
-      setDraftModules(scripts.modules);
-      if (!scripts.modules[activeMod] && scripts.modules.main) {
-        setActiveMod('main');
-      }
-    }
-    if (scripts?.memory_json && !showMemory) {
-      setMemoryDraft(scripts.memory_json);
-    }
-  }, [scripts, dirty, activeMod, showMemory]);
 
   const dynamicResourceCompletions = useMemo(() => {
     const items = (catalog?.items ?? []).map((it) => ({
@@ -106,15 +96,40 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
         autocompletion({ override: [screepsSource] }),
         EditorView.updateListener.of((upd) => {
           if (upd.docChanged) {
-            const val = upd.state.doc.toString();
-            setDraftModules((prev) => ({ ...prev, [activeMod]: val }));
-            setDirty(true);
+            updateDraftModule(activeMod, upd.state.doc.toString());
           }
         }),
-        EditorView.theme({
-          '&': { height: '100%', backgroundColor: '#191f27', fontSize: '12px' },
-          '.cm-gutters': { backgroundColor: '#1f2630', borderRight: '1px solid rgba(56,189,248,0.12)' },
-        }),
+        EditorView.theme(
+          {
+            '&': {
+              height: '100%',
+              backgroundColor: '#1b212b',
+              color: '#dbe4f0',
+              fontSize: '12px',
+            },
+            '.cm-scroller': {
+              backgroundColor: '#1b212b',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            },
+            '.cm-content': {
+              backgroundColor: '#1b212b',
+              caretColor: '#38bdf8',
+            },
+            '.cm-gutters': {
+              backgroundColor: '#181e27',
+              color: '#64748b',
+              borderRight: '1px solid rgba(56, 189, 248, 0.14)',
+            },
+            '.cm-activeLine': {
+              backgroundColor: 'rgba(56, 189, 248, 0.06)',
+            },
+            '.cm-activeLineGutter': {
+              backgroundColor: '#222a36',
+              color: '#94a3b8',
+            },
+          },
+          { dark: true },
+        ),
       ],
     });
 
@@ -125,102 +140,98 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
       view.destroy();
       viewRef.current = null;
     };
-  }, [activeMod, dynamicResourceCompletions]);
+  }, [activeMod, dynamicResourceCompletions, updateDraftModule]);
 
-  // Sync external module resets into active editor when not dirty
+  // Sync content when active file is updated externally (e.g., reset or initial load)
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || dirty) return;
-    const expected = scripts?.modules[activeMod] ?? '';
-    if (view.state.doc.toString() !== expected) {
+    if (!view) return;
+    const expected = draftModules[activeMod] ?? scripts?.modules[activeMod] ?? '';
+    if (view.state.doc.toString() !== expected && !dirty) {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: expected },
       });
     }
-  }, [scripts, activeMod, dirty]);
+  }, [draftModules, scripts, activeMod, dirty]);
 
-  const moduleNames = Object.keys(draftModules).length > 0 ? Object.keys(draftModules) : Object.keys(scripts?.modules ?? { main: '' });
+  const moduleNames = Object.keys(draftModules).length > 0
+    ? Object.keys(draftModules)
+    : Object.keys(scripts?.modules ?? { main: '' });
 
   const handleSave = async () => {
-    const toSave = Object.keys(draftModules).length > 0 ? draftModules : (scripts?.modules ?? {});
-    await saveScripts(toSave, scripts?.enabled ?? true);
-    setDirty(false);
+    await saveDraftScripts();
     setSaveNote('已热重载部署');
     window.setTimeout(() => setSaveNote(''), 2000);
   };
 
-  const handleAddModule = () => {
-    const raw = window.prompt('输入新模块名称（如 market 或 logistics）：');
-    if (!raw) return;
-    const clean = raw.trim().replace(/\.js$/, '');
-    if (!clean) return;
-    setDraftModules((prev) => ({
-      ...prev,
-      [clean]: prev[clean] ?? `// 模块 ${clean}\nexports.run = function () {\n  \n};\n`,
-    }));
-    setActiveMod(clean);
-    setDirty(true);
+  const submitNewFile = () => {
+    const clean = newFileName.trim().replace(/\.js$/, '');
+    if (clean) {
+      createDraftModule(clean);
+    }
+    setNewFileName('');
+    setAddingFile(false);
   };
 
   const cpuMs = scripts?.last_output?.cpu_used_ms ?? 0;
 
   return (
-    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
+    <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
       <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
-        <div className="flex items-center gap-1 flex-wrap">
+        <div className="flex items-center gap-1 flex-wrap min-w-0">
           {moduleNames.map((m) => (
             <button
               key={m}
               onClick={() => setActiveMod(m)}
-              className={`pill-btn py-0 text-[10px] mono ${activeMod === m ? 'active' : ''}`}
+              className={`pill-btn py-0 text-[10px] mono whitespace-nowrap ${activeMod === m ? 'active' : ''}`}
             >
               {m}.js
             </button>
           ))}
-          <button onClick={handleAddModule} className="pill-btn py-0 text-[10px]">
-            + 模块
-          </button>
+          {addingFile ? (
+            <div className="flex items-center gap-1">
+              <input
+                autoFocus
+                value={newFileName}
+                onChange={(e) => setNewFileName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') submitNewFile();
+                  if (e.key === 'Escape') {
+                    setAddingFile(false);
+                    setNewFileName('');
+                  }
+                }}
+                placeholder="如 market/arb"
+                className="w-28 bg-[#191f27] border border-sky-400/50 px-1.5 py-0 text-[10px] mono outline-none rounded-sm"
+              />
+              <button onClick={submitNewFile} className="cta-blue py-0 px-1.5 text-[10px]">
+                确定
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setAddingFile(true)} className="pill-btn py-0 text-[10px] whitespace-nowrap">
+              + 文件
+            </button>
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="mono text-[10px] text-emerald-400">
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
             耗时 {cpuMs.toFixed(2)} / 5.00 ms
           </span>
           <button
-            onClick={() => {
-              setMemoryDraft(scripts?.memory_json ?? '{}');
-              setShowMemory((v) => !v);
-            }}
-            className={`pill-btn py-0 text-[10px] ${showMemory ? 'active' : ''}`}
+            onClick={() => openTemp('memory', {})}
+            className="pill-btn py-0 text-[10px] whitespace-nowrap"
           >
-            {showMemory ? '返回代码' : '查看 Memory'}
+            打开 Memory 窗
           </button>
-          <button onClick={() => void handleSave()} className="cta-green text-[10px] py-0.5">
+          <button onClick={() => void handleSave()} className="cta-green text-[10px] py-0.5 whitespace-nowrap">
             {dirty ? '保存并热重载 *' : saveNote || '保存热重载'}
           </button>
         </div>
       </div>
 
-      {showMemory ? (
-        <div className="flex-1 flex flex-col p-3 gap-2 min-h-0">
-          <div className="flex items-center justify-between text-[11px] text-slate-400">
-            <span>持久化 Memory JSON（上限 128 KB）</span>
-            <button
-              onClick={() => void saveMemory(memoryDraft)}
-              className="cta-blue text-[10px] py-0.5"
-            >
-              写入 Memory
-            </button>
-          </div>
-          <textarea
-            value={memoryDraft}
-            onChange={(e) => setMemoryDraft(e.target.value)}
-            className="flex-1 bg-[#1b212b] border border-slate-800 p-3 mono text-[12px] text-emerald-300 outline-none resize-none"
-          />
-        </div>
-      ) : (
-        <div ref={editorHostRef} className="flex-1 min-h-0 overflow-hidden" />
-      )}
+      <div ref={editorHostRef} className="flex-1 min-h-0 overflow-hidden" />
     </div>
   );
 };

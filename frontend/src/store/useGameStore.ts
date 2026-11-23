@@ -10,14 +10,41 @@ import type {
 
 export interface LogHistoryLine {
   tick: number;
-  level: 'log' | 'warn' | 'error' | 'system';
+  level: 'log' | 'warn' | 'error' | 'system' | 'input' | 'result';
   message: string;
+}
+
+const FOLDERS_STORAGE_KEY = 'meridian.script_folders.v1';
+
+function loadFolders(): string[] {
+  try {
+    const raw = window.localStorage.getItem(FOLDERS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter((x) => typeof x === 'string');
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function saveFolders(folders: string[]): void {
+  try {
+    window.localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+  } catch {
+    // ignore
+  }
 }
 
 interface GameStore {
   catalog: ProductionPack | null;
   state: StateResponse | null;
   scripts: ScriptsResp | null;
+  draftModules: Record<string, string>;
+  activeScriptModule: string;
+  scriptDirty: boolean;
+  scriptFolders: string[];
   books: Record<string, MarketBookResp>;
   watchedBooks: Record<string, { stationId: string; itemId: string; refs: number }>;
   companyId: string;
@@ -33,7 +60,17 @@ interface GameStore {
   sendIntent: (intent: IntentPayload) => Promise<void>;
   simControl: (action: 'pause' | 'resume' | 'step' | 'speed' | 'reset', tickMs?: number) => Promise<void>;
   saveScripts: (modules: Record<string, string>, enabled?: boolean) => Promise<void>;
+  saveDraftScripts: () => Promise<void>;
   saveMemory: (memoryJson: string) => Promise<void>;
+  setActiveScriptModule: (name: string) => void;
+  updateDraftModule: (name: string, code: string) => void;
+  createDraftModule: (name: string, code?: string) => void;
+  renameDraftModule: (oldName: string, newName: string) => void;
+  deleteDraftModule: (name: string) => void;
+  createScriptFolder: (folderPath: string) => void;
+  renameScriptFolder: (oldPath: string, newPath: string) => void;
+  deleteScriptFolder: (folderPath: string) => void;
+  appendConsoleLines: (lines: LogHistoryLine[]) => void;
   clearConsole: () => void;
   setCompanyId: (cid: string) => void;
   clearError: () => void;
@@ -46,6 +83,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   catalog: null,
   state: null,
   scripts: null,
+  draftModules: {},
+  activeScriptModule: 'main',
+  scriptDirty: false,
+  scriptFolders: loadFolders(),
   books: {},
   watchedBooks: {},
   companyId: 'player1',
@@ -60,12 +101,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
         api.getState(get().companyId),
         api.getScripts(get().companyId).catch(() => null),
       ]);
-      set({ catalog, state, scripts, lastError: null });
+      const mods = scripts?.modules ?? {};
+      set((prev) => ({
+        catalog,
+        state,
+        scripts,
+        draftModules: prev.scriptDirty ? prev.draftModules : mods,
+        activeScriptModule: mods[prev.activeScriptModule] !== undefined ? prev.activeScriptModule : (mods.main !== undefined ? 'main' : Object.keys(mods)[0] ?? 'main'),
+        lastError: null,
+      }));
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
 
-    // Connect live WebSocket
     const connectWs = () => {
       if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -116,11 +164,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
             if (additions.length > 0) {
               set((prev) => ({
-                consoleHistory: [...prev.consoleHistory, ...additions].slice(-400),
+                consoleHistory: [...prev.consoleHistory, ...additions].slice(-500),
               }));
             }
 
-            // Refresh full snapshot + watched orderbooks cleanly
             await get().refreshState();
             const watched = Object.values(get().watchedBooks);
             await Promise.all(watched.map((w) => get().fetchBook(w.stationId, w.itemId)));
@@ -137,7 +184,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   refreshState: async () => {
     try {
       const state = await api.getState(get().companyId);
-      set({ state });
+      set((prev) => ({
+        state,
+        scripts:
+          prev.scripts && state.last_player_output
+            ? {
+                ...prev.scripts,
+                memory_json: state.last_player_output.memory_json,
+                last_output: state.last_player_output,
+              }
+            : prev.scripts,
+      }));
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
@@ -146,7 +203,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
   refreshScripts: async () => {
     try {
       const scripts = await api.getScripts(get().companyId);
-      set({ scripts });
+      set((prev) => ({
+        scripts,
+        draftModules: prev.scriptDirty ? prev.draftModules : scripts.modules,
+      }));
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
@@ -197,16 +257,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
   sendIntent: async (intent) => {
     try {
       await api.sendIntent(get().companyId, intent);
-      set((prev) => ({
-        consoleHistory: [
-          ...prev.consoleHistory,
-          {
-            tick: prev.state?.tick ?? 0,
-            level: 'system' as const,
-            message: `已提交手动指令，将在下一回合执行`,
-          },
-        ].slice(-400),
-      }));
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
@@ -217,8 +267,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       await api.simControl(action, tickMs);
       await get().refreshState();
       if (action === 'reset') {
+        set({ scriptDirty: false, consoleHistory: [], books: {} });
         await get().refreshScripts();
-        set({ consoleHistory: [], books: {} });
       }
       const watched = Object.values(get().watchedBooks);
       await Promise.all(watched.map((w) => get().fetchBook(w.stationId, w.itemId)));
@@ -230,10 +280,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
   saveScripts: async (modules, enabled) => {
     try {
       await api.saveScripts(get().companyId, modules, enabled);
+      set({ scriptDirty: false, draftModules: modules });
       await get().refreshScripts();
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
+  },
+
+  saveDraftScripts: async () => {
+    const { draftModules, scripts } = get();
+    const toSave = Object.keys(draftModules).length > 0 ? draftModules : (scripts?.modules ?? {});
+    await get().saveScripts(toSave, scripts?.enabled ?? true);
   },
 
   saveMemory: async (memoryJson) => {
@@ -244,6 +301,138 @@ export const useGameStore = create<GameStore>((set, get) => ({
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
   },
+
+  setActiveScriptModule: (name) => set({ activeScriptModule: name }),
+
+  updateDraftModule: (name, code) =>
+    set((prev) => ({
+      draftModules: { ...prev.draftModules, [name]: code },
+      scriptDirty: true,
+    })),
+
+  createDraftModule: (name, code) => {
+    const clean = name.trim().replace(/^\/+|\/+$/g, '').replace(/\.js$/, '');
+    if (!clean) return;
+    set((prev) => ({
+      draftModules: {
+        ...prev.draftModules,
+        [clean]: prev.draftModules[clean] ?? code ?? `// 模块 ${clean}.js\nexports.run = function () {\n  \n};\n`,
+      },
+      activeScriptModule: clean,
+      scriptDirty: true,
+    }));
+  },
+
+  renameDraftModule: (oldName, newName) => {
+    const clean = newName.trim().replace(/^\/+|\/+$/g, '').replace(/\.js$/, '');
+    if (!clean || clean === oldName) return;
+    set((prev) => {
+      if (!(oldName in prev.draftModules)) return prev;
+      const next = { ...prev.draftModules };
+      next[clean] = next[oldName];
+      delete next[oldName];
+      return {
+        draftModules: next,
+        activeScriptModule: prev.activeScriptModule === oldName ? clean : prev.activeScriptModule,
+        scriptDirty: true,
+      };
+    });
+  },
+
+  deleteDraftModule: (name) => {
+    if (name === 'main') return;
+    set((prev) => {
+      const next = { ...prev.draftModules };
+      delete next[name];
+      const nextActive =
+        prev.activeScriptModule === name
+          ? (next.main !== undefined ? 'main' : Object.keys(next)[0] ?? 'main')
+          : prev.activeScriptModule;
+      return {
+        draftModules: next,
+        activeScriptModule: nextActive,
+        scriptDirty: true,
+      };
+    });
+  },
+
+  createScriptFolder: (folderPath) => {
+    const clean = folderPath.trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) return;
+    set((prev) => {
+      if (prev.scriptFolders.includes(clean)) return prev;
+      const next = [...prev.scriptFolders, clean];
+      saveFolders(next);
+      return { scriptFolders: next };
+    });
+  },
+
+  renameScriptFolder: (oldPath, newPath) => {
+    const cleanOld = oldPath.trim().replace(/^\/+|\/+$/g, '');
+    const cleanNew = newPath.trim().replace(/^\/+|\/+$/g, '');
+    if (!cleanOld || !cleanNew || cleanOld === cleanNew) return;
+    set((prev) => {
+      const nextMods: Record<string, string> = {};
+      const prefix = `${cleanOld}/`;
+      let changed = false;
+      for (const [k, v] of Object.entries(prev.draftModules)) {
+        if (k.startsWith(prefix)) {
+          nextMods[`${cleanNew}/${k.slice(prefix.length)}`] = v;
+          changed = true;
+        } else {
+          nextMods[k] = v;
+        }
+      }
+      const nextFolders = prev.scriptFolders.map((f) => {
+        if (f === cleanOld) return cleanNew;
+        if (f.startsWith(prefix)) return `${cleanNew}/${f.slice(prefix.length)}`;
+        return f;
+      });
+      saveFolders(nextFolders);
+      const nextActive = prev.activeScriptModule.startsWith(prefix)
+        ? `${cleanNew}/${prev.activeScriptModule.slice(prefix.length)}`
+        : prev.activeScriptModule;
+      return {
+        draftModules: nextMods,
+        scriptFolders: nextFolders,
+        activeScriptModule: nextActive,
+        scriptDirty: prev.scriptDirty || changed,
+      };
+    });
+  },
+
+  deleteScriptFolder: (folderPath) => {
+    const clean = folderPath.trim().replace(/^\/+|\/+$/g, '');
+    if (!clean) return;
+    set((prev) => {
+      const prefix = `${clean}/`;
+      const nextMods: Record<string, string> = {};
+      let changed = false;
+      for (const [k, v] of Object.entries(prev.draftModules)) {
+        if (k.startsWith(prefix)) {
+          changed = true;
+        } else {
+          nextMods[k] = v;
+        }
+      }
+      const nextFolders = prev.scriptFolders.filter((f) => f !== clean && !f.startsWith(prefix));
+      saveFolders(nextFolders);
+      const nextActive = prev.activeScriptModule.startsWith(prefix)
+        ? (nextMods.main !== undefined ? 'main' : Object.keys(nextMods)[0] ?? 'main')
+        : prev.activeScriptModule;
+      return {
+        draftModules: nextMods,
+        scriptFolders: nextFolders,
+        activeScriptModule: nextActive,
+        scriptDirty: prev.scriptDirty || changed,
+      };
+    });
+  },
+
+  appendConsoleLines: (lines) =>
+    set((prev) => ({
+      consoleHistory: [...prev.consoleHistory, ...lines].slice(-500),
+    })),
 
   clearConsole: () => set({ consoleHistory: [] }),
   setCompanyId: (cid) => {

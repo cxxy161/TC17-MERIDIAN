@@ -11,7 +11,9 @@ export type PaneKind =
   | 'orderbook'
   | 'treasury'
   | 'ranking'
+  | 'files'
   | 'script'
+  | 'memory'
   | 'console';
 
 export interface PaneParams {
@@ -63,8 +65,10 @@ export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'orderbook', label: '盘口深度', description: '实时买卖深度、成交流水与手工限价下单', defaultParams: { stationId: 'ST:HUB', itemId: 'steel' } },
   { kind: 'treasury', label: '央行与财务', description: '现金、储蓄、借贷与行星央行存贷操作', defaultParams: { planetId: 'P1' } },
   { kind: 'ranking', label: '势力排行', description: '玩家与演化 NPC 净资产排名及货币守恒审计' },
+  { kind: 'files', label: '代码文件', description: '类 VS Code 文件夹与脚本模块树管理' },
   { kind: 'script', label: '脚本编辑器', description: 'Screeps 风格多模块 JS 策略 IDE 与热重载' },
-  { kind: 'console', label: '遥测终端', description: '脚本 console 输出、CPU 耗时与撮合事件流' },
+  { kind: 'memory', label: 'Memory 内存', description: '独立查看、搜索与编辑 128KB 持久化 JSON' },
+  { kind: 'console', label: '控制台', description: 'F12 交互式 JS 命令行与沙盒实时日志流' },
 ];
 
 export function formatPaneTitle(kind: PaneKind, params: PaneParams): string {
@@ -110,9 +114,13 @@ export function formatPaneTitle(kind: PaneKind, params: PaneParams): string {
     }
     case 'ranking':
       return '势力排行';
+    case 'files':
+      return '代码文件';
     case 'script':
       return '脚本编辑器';
+    case 'memory':
+      return 'Memory 内存';
     case 'console':
-      return '遥测终端';
+      return '控制台';
   }
 }

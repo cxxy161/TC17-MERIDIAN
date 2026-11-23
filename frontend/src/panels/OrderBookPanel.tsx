@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { creditsToMoney, moneyToCredits, STATION_NAMES } from '../types/meridian';
+import { creditsToMoney, moneyToCredits, READ_ONLY_OBSERVATION_MODE, STATION_NAMES } from '../types/meridian';
 
 export const OrderBookPanel: React.FC<PaneProps> = ({
   params,
@@ -134,36 +134,38 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
         </div>
       </div>
 
-      {/* Manual Order Form */}
-      <div className="p-2 border-b border-slate-800/80 bg-[#1a2029] flex items-center gap-1.5 shrink-0">
-        <select
-          value={side}
-          onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-          className="bg-[#27303e] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
-        >
-          <option value="buy">买入</option>
-          <option value="sell">卖出</option>
-        </select>
-        <input
-          type="number"
-          step="0.05"
-          value={priceStr}
-          onChange={(e) => setPriceStr(e.target.value)}
-          placeholder="单价"
-          className="w-20 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
-        />
-        <input
-          type="number"
-          min="1"
-          value={qtyStr}
-          onChange={(e) => setQtyStr(e.target.value)}
-          placeholder="数量"
-          className="w-16 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
-        />
-        <button onClick={handleSubmit} className={side === 'buy' ? 'cta-green ml-auto' : 'cta-blue ml-auto'}>
-          提交限价单
-        </button>
-      </div>
+      {/* Manual Order Form (hidden in code-only observation mode) */}
+      {!READ_ONLY_OBSERVATION_MODE && (
+        <div className="p-2 border-b border-slate-800/80 bg-[#1a2029] flex items-center gap-1.5 shrink-0">
+          <select
+            value={side}
+            onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
+            className="bg-[#27303e] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
+          >
+            <option value="buy">买入</option>
+            <option value="sell">卖出</option>
+          </select>
+          <input
+            type="number"
+            step="0.05"
+            value={priceStr}
+            onChange={(e) => setPriceStr(e.target.value)}
+            placeholder="单价"
+            className="w-20 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+          />
+          <input
+            type="number"
+            min="1"
+            value={qtyStr}
+            onChange={(e) => setQtyStr(e.target.value)}
+            placeholder="数量"
+            className="w-16 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+          />
+          <button onClick={handleSubmit} className={side === 'buy' ? 'cta-green ml-auto' : 'cta-blue ml-auto'}>
+            提交限价单
+          </button>
+        </div>
+      )}
 
       {/* Own Active Orders & Recent Trades */}
       <div className="flex-1 overflow-y-auto p-2.5 space-y-3 text-[11px]">
@@ -178,12 +180,14 @@ export const OrderBookPanel: React.FC<PaneProps> = ({
                   <span className={o.side === 'buy' ? 'text-emerald-400' : 'text-rose-400'}>
                     {o.side === 'buy' ? '买' : '卖'} · {moneyToCredits(o.price).toFixed(2)} × {o.qty}
                   </span>
-                  <button
-                    onClick={() => void sendIntent({ CancelOrder: { order_id: o.order_id } })}
-                    className="pill-btn py-0 text-[10px]"
-                  >
-                    撤单
-                  </button>
+                  {!READ_ONLY_OBSERVATION_MODE && (
+                    <button
+                      onClick={() => void sendIntent({ CancelOrder: { order_id: o.order_id } })}
+                      className="pill-btn py-0 text-[10px]"
+                    >
+                      撤单
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
