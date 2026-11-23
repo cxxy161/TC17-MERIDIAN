@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { locationLabel } from '../types/meridian';
 
 const ROLE_META: Record<string, { label: string; color: string }> = {
@@ -12,7 +11,7 @@ const ROLE_META: Record<string, { label: string; color: string }> = {
   byproduct: { label: '环保副产', color: '#34d399' },
 };
 
-export const CargoPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, api, containerApi }) => {
+export const CargoPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const [loc, setLoc] = useState<string>(params.locationId || 'P1');
@@ -31,7 +30,7 @@ export const CargoPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, 
 
   const switchLoc = (next: string) => {
     setLoc(next);
-    api.setTitle(`仓库 · ${locationLabel(next, planets)}`);
+    setTitle(`仓库 · ${locationLabel(next, planets)}`);
   };
 
   const items = (catalog?.items ?? []).map((def) => ({
@@ -70,7 +69,7 @@ export const CargoPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, 
               return (
                 <div
                   key={def.id}
-                  onClick={() => openPane(containerApi, 'chart', { stationId: targetStation, itemId: def.id })}
+                  onClick={() => openTemp('chart', { stationId: targetStation, itemId: def.id })}
                   className="bg-[#0e1622] border border-slate-800 hover:border-emerald-400/50 rounded-sm px-2.5 py-2 flex items-center justify-between cursor-pointer"
                   style={{ borderLeft: `2px solid ${rm.color}` }}
                 >

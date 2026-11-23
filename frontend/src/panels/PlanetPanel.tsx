@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { moneyToCredits } from '../types/meridian';
 
-export const PlanetPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, api, containerApi }) => {
+export const PlanetPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
@@ -17,7 +16,7 @@ export const PlanetPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params,
   const switchPlanet = (pid: string) => {
     setPlanetId(pid);
     const found = planets.find((x) => x.id === pid);
-    api.setTitle(`行星 · ${found?.name ?? pid}`);
+    setTitle(`行星 · ${found?.name ?? pid}`);
   };
 
   if (!pSum) {
@@ -30,28 +29,28 @@ export const PlanetPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params,
 
   return (
     <div className="h-full flex flex-col bg-[#0b1119] text-slate-200 overflow-hidden">
-      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-1.5">
+      <div className="px-3 py-1.5 border-b border-sky-500/10 bg-[#0a111a] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {planets.map((p) => (
             <button
               key={p.id}
               onClick={() => switchPlanet(p.id)}
-              className={`pill-btn py-0 text-[10px] ${p.id === pSum.id ? 'active' : ''}`}
+              className={`pill-btn py-0 text-[10px] whitespace-nowrap ${p.id === pSum.id ? 'active' : ''}`}
             >
               {p.name}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           <button
-            onClick={() => openPane(containerApi, 'factory', { planetId: pSum.id })}
-            className="pill-btn py-0 text-[10px]"
+            onClick={() => openTemp('factory', { planetId: pSum.id })}
+            className="pill-btn py-0 text-[10px] whitespace-nowrap"
           >
             打开产线
           </button>
           <button
-            onClick={() => openPane(containerApi, 'cargo', { locationId: pSum.id })}
-            className="pill-btn py-0 text-[10px]"
+            onClick={() => openTemp('cargo', { locationId: pSum.id })}
+            className="pill-btn py-0 text-[10px] whitespace-nowrap"
           >
             地面仓库
           </button>
@@ -157,7 +156,7 @@ export const PlanetPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params,
                 <div
                   key={itemId}
                   onClick={() =>
-                    openPane(containerApi, 'chart', { stationId: `ST:${pSum.id}`, itemId })
+                    openTemp('chart', { stationId: `ST:${pSum.id}`, itemId })
                   }
                   className="metric-card flex items-center justify-between cursor-pointer hover:border-sky-400/50"
                 >

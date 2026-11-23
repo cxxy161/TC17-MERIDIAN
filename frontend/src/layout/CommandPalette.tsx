@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { DockviewApi } from 'dockview-react';
-import { PANE_CATALOG, openPane, type PaneKind, type PaneParams } from './paneRegistry';
+import { PANE_CATALOG, type PaneKind, type PaneParams } from './paneRegistry';
 import { useGameStore } from '../store/useGameStore';
 
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
-  dockApi: DockviewApi | null;
+  openTemp: (kind: PaneKind, params?: PaneParams) => void;
 }
 
 interface QuickPreset {
@@ -17,9 +16,8 @@ interface QuickPreset {
   params: PaneParams;
 }
 
-export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, dockApi }) => {
+export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, openTemp }) => {
   const [query, setQuery] = useState('');
-  const [floating, setFloating] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
@@ -39,7 +37,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
       label: p.label,
       sub: p.description,
       kind: p.kind,
-      params: {},
+      params: p.defaultParams ?? {},
     }));
     for (const pl of planets) {
       list.push({
@@ -71,11 +69,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
       kind: 'cargo',
       params: { locationId: 'ST:HUB' },
     });
-    for (const it of items.slice(0, 8)) {
+    for (const it of items.slice(0, 10)) {
       list.push({
         id: `ch-${it.id}`,
         label: `K线 · 中心枢纽 / ${it.name}`,
-        sub: `并排打开 ${it.name} 价格走势图`,
+        sub: `打开 ${it.name} 临时K线窗（可拖入网格固定）`,
         kind: 'chart',
         params: { stationId: 'ST:HUB', itemId: it.id },
       });
@@ -96,7 +94,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 bg-black/65 backdrop-blur-[1px] z-50 flex items-start justify-center pt-20"
+      className="fixed inset-0 bg-black/65 backdrop-blur-[1px] z-[9999] flex items-start justify-center pt-20"
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -108,18 +106,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索并新开任意窗格（支持多开行星、K线、仓库并排）..."
+            placeholder="搜索打开临时悬浮窗口（可拖入任意网格覆盖或填充空窗口）..."
             className="flex-1 bg-transparent outline-none text-slate-100 text-[12px]"
           />
-          <label className="flex items-center gap-1 text-[10px] text-slate-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={floating}
-              onChange={(e) => setFloating(e.target.checked)}
-              className="accent-sky-400"
-            />
-            悬浮打开
-          </label>
           <button onClick={onClose} className="pill-btn py-0 text-[10px]">
             关闭
           </button>
@@ -130,7 +119,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, d
             <button
               key={item.id}
               onClick={() => {
-                openPane(dockApi, item.kind, item.params, { floating });
+                openTemp(item.kind, item.params);
                 onClose();
               }}
               className="w-full text-left px-2.5 py-1.5 rounded-sm hover:bg-sky-500/15 flex items-center justify-between gap-3"

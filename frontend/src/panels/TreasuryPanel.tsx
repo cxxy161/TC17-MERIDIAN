@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { creditsToMoney, moneyToCredits } from '../types/meridian';
 
-export const TreasuryPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params }) => {
+export const TreasuryPanel: React.FC<PaneProps> = ({ params }) => {
   const state = useGameStore((s) => s.state);
   const sendIntent = useGameStore((s) => s.sendIntent);
   const comp = state?.player_snapshot?.company;

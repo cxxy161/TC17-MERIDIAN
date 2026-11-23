@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { STATION_NAMES } from '../types/meridian';
 
-export const TickerPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, api, containerApi }) => {
+export const TickerPanel: React.FC<PaneProps> = ({ params, setTitle, openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const [stationId, setStationId] = useState<string>(params.stationId || 'ST:HUB');
@@ -16,7 +15,7 @@ export const TickerPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params,
 
   const switchStation = (sid: string) => {
     setStationId(sid);
-    api.setTitle(`行情 · ${STATION_NAMES[sid] ?? sid}`);
+    setTitle(`行情 · ${STATION_NAMES[sid] ?? sid}`);
   };
 
   return (
@@ -66,13 +65,13 @@ export const TickerPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params,
                 <td className="px-2 py-1.5 text-right text-slate-400">{storeAtStation[r.item_id] ?? 0}</td>
                 <td className="px-3 py-1.5 text-right space-x-1">
                   <button
-                    onClick={() => openPane(containerApi, 'chart', { stationId, itemId: r.item_id })}
+                    onClick={() => openTemp('chart', { stationId, itemId: r.item_id })}
                     className="pill-btn py-0 text-[10px]"
                   >
                     K线
                   </button>
                   <button
-                    onClick={() => openPane(containerApi, 'orderbook', { stationId, itemId: r.item_id })}
+                    onClick={() => openTemp('orderbook', { stationId, itemId: r.item_id })}
                     className="pill-btn py-0 text-[10px] text-emerald-300"
                   >
                     盘口

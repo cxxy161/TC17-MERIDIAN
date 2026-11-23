@@ -1,9 +1,8 @@
 import React from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 
-export const OrbitPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ containerApi }) => {
+export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
   const state = useGameStore((s) => s.state);
   const planets = state?.planets ?? [];
   const ships = state?.player_snapshot?.company.ships ?? [];
@@ -28,8 +27,8 @@ export const OrbitPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ containe
           <strong className="text-emerald-400 mono">{ships.filter((s) => s.is_busy).length}</strong> 艘
         </span>
         <button
-          onClick={() => openPane(containerApi, 'fleet', {}, { floating: true })}
-          className="cta-green text-[10px] py-0.5 px-2"
+          onClick={() => openTemp('fleet', {})}
+          className="cta-green text-[10px] py-0.5 px-2 whitespace-nowrap shrink-0"
         >
           悬浮舰队调度
         </button>
@@ -66,7 +65,7 @@ export const OrbitPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ containe
             return (
               <g
                 className="cursor-pointer"
-                onClick={() => openPane(containerApi, 'cargo', { locationId: 'ST:HUB' })}
+                onClick={() => openTemp('cargo', { locationId: 'ST:HUB' })}
               >
                 <circle cx={cx} cy={cy} r={hr} fill="none" stroke="rgba(56,189,248,0.22)" strokeDasharray="4 4" />
                 <polygon
@@ -94,7 +93,7 @@ export const OrbitPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ containe
               <g
                 key={p.id}
                 className="cursor-pointer"
-                onClick={() => openPane(containerApi, 'planet', { planetId: p.id })}
+                onClick={() => openTemp('planet', { planetId: p.id })}
               >
                 <circle cx={cx} cy={cy} r={pr} fill="none" stroke="rgba(16,185,129,0.22)" />
                 <circle cx={px} cy={py} r={p.population > 0 ? 8 : 6} fill={col} stroke="#e2e8f0" strokeWidth="1.2" />

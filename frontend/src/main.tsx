@@ -1,6 +1,5 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import 'dockview-react/dist/styles/dockview.css';
 import './styles/index.css';
 import { App } from './App';
 

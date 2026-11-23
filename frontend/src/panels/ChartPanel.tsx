@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import {
   createChart,
   ColorType,
@@ -9,7 +8,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { STATION_NAMES, type CandleRow } from '../types/meridian';
 
 function aggregateCandles(candles: CandleRow[], period: number): CandleRow[] {
@@ -30,10 +29,10 @@ function aggregateCandles(candles: CandleRow[], period: number): CandleRow[] {
   return Array.from(buckets.values()).sort((a, b) => a.bucket_tick - b.bucket_tick);
 }
 
-export const ChartPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
+export const ChartPanel: React.FC<PaneProps> = ({
   params,
-  api,
-  containerApi,
+  setTitle,
+  openTemp,
 }) => {
   const catalog = useGameStore((s) => s.catalog);
   const watchBook = useGameStore((s) => s.watchBook);
@@ -59,7 +58,7 @@ export const ChartPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
   const updateTitle = (sid: string, iid: string) => {
     const itemName = itemMap.get(iid) ?? iid;
     const stName = sid === 'ST:HUB' ? '枢纽' : sid;
-    api.setTitle(`K线 · ${itemName} @ ${stName}`);
+    setTitle(`K线 · ${itemName} @ ${stName}`);
   };
 
   useEffect(() => {
@@ -215,7 +214,7 @@ export const ChartPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
             </button>
           ))}
           <button
-            onClick={() => openPane(containerApi, 'orderbook', { stationId, itemId })}
+            onClick={() => openTemp('orderbook', { stationId, itemId })}
             className="pill-btn py-0 text-[10px] text-emerald-300"
           >
             打开盘口

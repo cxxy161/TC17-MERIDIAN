@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import { openPane, type PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { creditsToMoney, moneyToCredits, STATION_NAMES } from '../types/meridian';
 
-export const OrderBookPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
+export const OrderBookPanel: React.FC<PaneProps> = ({
   params,
-  api,
-  containerApi,
+  setTitle,
+  openTemp,
 }) => {
   const catalog = useGameStore((s) => s.catalog);
   const state = useGameStore((s) => s.state);
@@ -33,7 +32,7 @@ export const OrderBookPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
   );
 
   const updateTitle = (sid: string, iid: string) => {
-    api.setTitle(`盘口 · ${itemNames.get(iid) ?? iid} @ ${sid === 'ST:HUB' ? '枢纽' : sid}`);
+    setTitle(`盘口 · ${itemNames.get(iid) ?? iid} @ ${sid === 'ST:HUB' ? '枢纽' : sid}`);
   };
 
   const handleSubmit = () => {
@@ -88,7 +87,7 @@ export const OrderBookPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({
         <div className="flex items-center gap-2">
           <span className="text-[10px] mono text-emerald-400">站费 0.50%</span>
           <button
-            onClick={() => openPane(containerApi, 'chart', { stationId, itemId })}
+            onClick={() => openTemp('chart', { stationId, itemId })}
             className="pill-btn py-0 text-[10px]"
           >
             看K线

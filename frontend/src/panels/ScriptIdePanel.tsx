@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -7,7 +6,7 @@ import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 
 const SCREEPS_COMPLETIONS = [
   { label: 'Game.time', type: 'property', detail: '当前回合数' },
@@ -45,7 +44,7 @@ const SCREEPS_COMPLETIONS = [
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
 ];
 
-export const ScriptIdePanel: React.FC<IDockviewPanelProps<PaneParams>> = () => {
+export const ScriptIdePanel: React.FC<PaneProps> = () => {
   const scripts = useGameStore((s) => s.scripts);
   const catalog = useGameStore((s) => s.catalog);
   const saveScripts = useGameStore((s) => s.saveScripts);

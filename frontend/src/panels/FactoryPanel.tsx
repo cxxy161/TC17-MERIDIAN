@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 
-export const FactoryPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params, api }) => {
+export const FactoryPanel: React.FC<PaneProps> = ({ params, setTitle }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
@@ -21,7 +20,7 @@ export const FactoryPanel: React.FC<IDockviewPanelProps<PaneParams>> = ({ params
   const switchPlanet = (pid: string) => {
     setPlanetId(pid);
     const p = planets.find((x) => x.id === pid);
-    api.setTitle(`产线 · ${p?.name ?? pid}`);
+    setTitle(`产线 · ${p?.name ?? pid}`);
   };
 
   return (

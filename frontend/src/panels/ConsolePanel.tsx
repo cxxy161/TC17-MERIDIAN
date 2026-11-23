@@ -1,9 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 
-export const ConsolePanel: React.FC<IDockviewPanelProps<PaneParams>> = () => {
+export const ConsolePanel: React.FC<PaneProps> = () => {
   const history = useGameStore((s) => s.consoleHistory);
   const lastOut = useGameStore((s) => s.state?.last_player_output);
   const clearConsole = useGameStore((s) => s.clearConsole);

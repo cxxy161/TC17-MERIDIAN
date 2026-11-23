@@ -1,9 +1,8 @@
 import React from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 
-export const RankingPanel: React.FC<IDockviewPanelProps<PaneParams>> = () => {
+export const RankingPanel: React.FC<PaneProps> = () => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const rows = state?.leaderboard ?? [];

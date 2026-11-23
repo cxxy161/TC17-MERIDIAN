@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import type { IDockviewPanelProps } from 'dockview-react';
 import { useGameStore } from '../store/useGameStore';
-import type { PaneParams } from '../layout/paneRegistry';
+import type { PaneProps } from '../layout/paneRegistry';
 import { locationLabel } from '../types/meridian';
 
 const SHIP_SIZE_NAMES: Record<string, string> = {
@@ -10,7 +9,7 @@ const SHIP_SIZE_NAMES: Record<string, string> = {
   large: '大型货船',
 };
 
-export const FleetPanel: React.FC<IDockviewPanelProps<PaneParams>> = () => {
+export const FleetPanel: React.FC<PaneProps> = () => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
