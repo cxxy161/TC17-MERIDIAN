@@ -259,6 +259,10 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert!(tiles_arr.len() >= 48);
         assert!(tiles_arr.iter().any(|t| t["is_mine"] == true));
         assert!(tiles_arr.iter().any(|t| t["status"] == "unclaimed" && t["slot_id"].is_number()));
+        for city in tiles_arr.iter().filter(|t| t["is_city"] == true) {
+            assert_eq!(city["capacity"], 0);
+            assert_eq!(city["building_mods"].as_object().unwrap().len(), 0);
+        }
         assert_eq!(book_res["item_id"], "steel");
 
         // 6b. Inspect admin overview & /admin page endpoints

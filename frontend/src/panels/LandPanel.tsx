@@ -281,22 +281,26 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                         </span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2.5 text-[9.5px] mono text-slate-400 mt-0.5 flex-wrap">
-                      <span>矿 <b className={modColor(mineM)}>{mineM.toFixed(2)}x</b></span>
-                      <span>能 <b className={modColor(pwM)}>{pwM.toFixed(2)}x</b></span>
-                      <span>农 <b className={modColor(bioM)}>{bioM.toFixed(2)}x</b></span>
+                    {!t.is_city && (
+                      <div className="flex items-center gap-2.5 text-[9.5px] mono text-slate-400 mt-0.5 flex-wrap">
+                        <span>矿 <b className={modColor(mineM)}>{mineM.toFixed(2)}x</b></span>
+                        <span>能 <b className={modColor(pwM)}>{pwM.toFixed(2)}x</b></span>
+                        <span>农 <b className={modColor(bioM)}>{bioM.toFixed(2)}x</b></span>
+                      </div>
+                    )}
+                  </div>
+                  {!t.is_city && (
+                    <div className="text-right mono shrink-0">
+                      {t.price !== null ? (
+                        <div className="text-emerald-300">{t.price.toFixed(1)}</div>
+                      ) : (
+                        <div className="text-slate-600">--</div>
+                      )}
+                      {t.listing_id !== null && (
+                        <div className="text-[9px] text-emerald-400/80">L#{t.listing_id}</div>
+                      )}
                     </div>
-                  </div>
-                  <div className="text-right mono shrink-0">
-                    {t.price !== null ? (
-                      <div className="text-emerald-300">{t.price.toFixed(1)}</div>
-                    ) : (
-                      <div className="text-slate-600">--</div>
-                    )}
-                    {t.listing_id !== null && (
-                      <div className="text-[9px] text-emerald-400/80">L#{t.listing_id}</div>
-                    )}
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -344,56 +348,69 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                 </div>
               </div>
 
-              <div className="flex">
-                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 shrink-0">
-                  槽位 / 价格
+              {selectedTile.is_city ? (
+                <div className="flex">
+                  <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 shrink-0">
+                    规划性质
+                  </div>
+                  <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-amber-200/90 truncate">
+                    原生城市规划区（非工业用地，不可购买或建造设施）
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
-                  <span>
-                    已用 <b className="text-sky-300">{selectedTile.used_slots}</b> / {selectedTile.capacity} 槽
-                  </span>
-                  <span className="text-slate-500 mx-1.5">·</span>
-                  <span>
-                    {selectedTile.price !== null ? (
-                      <>
-                        {selectedTile.status === 'listed' ? '挂牌价' : '一手地价'}{' '}
-                        <b className="text-emerald-300">{selectedTile.price.toFixed(1)}</b>
-                      </>
-                    ) : (
-                      <span className="text-slate-500">非挂牌状态</span>
-                    )}
-                  </span>
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="flex">
+                    <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 shrink-0">
+                      槽位 / 价格
+                    </div>
+                    <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
+                      <span>
+                        已用 <b className="text-sky-300">{selectedTile.used_slots}</b> / {selectedTile.capacity} 槽
+                      </span>
+                      <span className="text-slate-500 mx-1.5">·</span>
+                      <span>
+                        {selectedTile.price !== null ? (
+                          <>
+                            {selectedTile.status === 'listed' ? '挂牌价' : '一手地价'}{' '}
+                            <b className="text-emerald-300">{selectedTile.price.toFixed(1)}</b>
+                          </>
+                        ) : (
+                          <span className="text-slate-500">非挂牌状态</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
 
-              <div className="flex items-stretch">
-                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
-                  已有建筑
-                </div>
-                <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200">
-                  {selectedTile.buildings.length > 0 ? (
-                    <span className="mono text-sky-200">
-                      {selectedTile.buildings.map((b) => catalog.buildingName(b)).join(' · ')}
-                    </span>
-                  ) : (
-                    <span className="text-slate-500">暂无建筑</span>
-                  )}
-                </div>
-              </div>
+                  <div className="flex items-stretch">
+                    <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
+                      已有建筑
+                    </div>
+                    <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200">
+                      {selectedTile.buildings.length > 0 ? (
+                        <span className="mono text-sky-200">
+                          {selectedTile.buildings.map((b) => catalog.buildingName(b)).join(' · ')}
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">暂无建筑</span>
+                      )}
+                    </div>
+                  </div>
 
-              <div className="flex items-stretch">
-                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
-                  设施倍率
-                </div>
-                <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
-                  {selectedMods.map(([bid, m]) => (
-                    <span key={bid} className="text-slate-400">
-                      {catalog.buildingName(bid)}{' '}
-                      <b className={modColor(m)}>{m.toFixed(2)}x</b>
-                    </span>
-                  ))}
-                </div>
-              </div>
+                  <div className="flex items-stretch">
+                    <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
+                      设施倍率
+                    </div>
+                    <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
+                      {selectedMods.map(([bid, m]) => (
+                        <span key={bid} className="text-slate-400">
+                          {catalog.buildingName(bid)}{' '}
+                          <b className={modColor(m)}>{m.toFixed(2)}x</b>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}

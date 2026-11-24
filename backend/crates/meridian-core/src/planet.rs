@@ -266,7 +266,7 @@ impl Planet {
             let abs_lat = lat.abs();
 
             let (terrain_name, spec_mine, spec_pw, spec_bio, spec_cap) = if is_city {
-                ("城市规划区", 0.90, 1.05, 1.10, 4u32)
+                ("城市规划区", 0.0, 0.0, 0.0, 0u32)
             } else if self.solar_mult > 1.55 && self.ocean_ratio < 0.15 {
                 match h % 4 {
                     0 => ("玄武岩矿脉", 1.38, 0.95, 0.72, 4),
@@ -309,20 +309,22 @@ impl Planet {
             let jitter = 0.92 + u0 * 0.18;
             let lat_solar_factor = (1.12 - (abs_lat / 90.0) * 0.28).clamp(0.82, 1.14);
             let mut building_mods = HashMap::new();
-            for bid in catalog.buildings.keys() {
-                let raw_mult = match bid.as_str() {
-                    "power_water_station" => {
-                        let base = self.solar_mult.max(self.water_mult) * 0.88;
-                        base.max(0.85) * spec_pw * lat_solar_factor * jitter
-                    }
-                    "bio_greenhouse" | "consumer_workshop" => {
-                        let city_bonus = if self.city_count > 0 { 1.12 } else { 0.82 };
-                        city_bonus * spec_bio * jitter
-                    }
-                    "mine_smelter" => self.mineral_mult * spec_mine * jitter,
-                    _ => (0.94 + u1 * 0.22) * (if spec_cap >= 5 { 1.05 } else { 0.96 }),
-                };
-                building_mods.insert(bid.clone(), (raw_mult.clamp(0.65, 1.95) * 100.0).round() / 100.0);
+            if !is_city {
+                for bid in catalog.buildings.keys() {
+                    let raw_mult = match bid.as_str() {
+                        "power_water_station" => {
+                            let base = self.solar_mult.max(self.water_mult) * 0.88;
+                            base.max(0.85) * spec_pw * lat_solar_factor * jitter
+                        }
+                        "bio_greenhouse" | "consumer_workshop" => {
+                            let city_bonus = if self.city_count > 0 { 1.12 } else { 0.82 };
+                            city_bonus * spec_bio * jitter
+                        }
+                        "mine_smelter" => self.mineral_mult * spec_mine * jitter,
+                        _ => (0.94 + u1 * 0.22) * (if spec_cap >= 5 { 1.05 } else { 0.96 }),
+                    };
+                    building_mods.insert(bid.clone(), (raw_mult.clamp(0.65, 1.95) * 100.0).round() / 100.0);
+                }
             }
 
             let city_name = if is_city {

@@ -437,7 +437,7 @@ impl GameEngine {
         let cohort = Self::allocate_initial_npcs(world);
         for (i, (prof, planet)) in cohort.iter().enumerate() {
             let cid = format!("npc_{i:02}");
-            let name = format!("Autonomous-{prof}-{i:02}");
+            let name = Self::generate_npc_name(world, i as u64);
             world.spawn_company(&cid, name, false, prof, planet, 8_000.0)?;
             let genome = NpcGenome::from_seed(7000 + i as u64 * 97);
             store.save_npc_genome(&cid, &genome)?;
@@ -685,6 +685,58 @@ impl GameEngine {
         }
     }
 
+    fn generate_npc_name(world: &World, seq: u64) -> String {
+        const ONSETS: [&str; 20] = [
+            "b", "c", "d", "f", "g", "h", "j", "k", "l", "m",
+            "n", "p", "qu", "r", "s", "t", "v", "w", "x", "z",
+        ];
+        const VOWELS: [&str; 12] = [
+            "a", "e", "i", "o", "u", "ae", "io", "au", "ou", "ei", "ya", "ea",
+        ];
+        const SUFFIXES: [&str; 16] = [
+            "", "x", "n", "r", "s", "k", "v", "th", "ra", "on", "ix", "ar", "el", "or", "is", "um",
+        ];
+        // M = 20*12*20*12*20*12 = 13,824,000 = 2^11 * 3^3 * 5^3.
+        // Multiplier A = 5_743_121 has gcd(A, M) == 1 (coprime to 2, 3, 5), giving an exact
+        // 1-to-1 bijection over 13.82M 3-syllable English-like words.
+        const SPACE: u64 = 13_824_000;
+        const MULT: u64 = 5_743_121;
+        let seed_mix = (world.world_seed ^ 0x9E37_79B9_7F4A_7C15) % SPACE;
+
+        for attempt in 0u64..64 {
+            let v = seq.wrapping_add(attempt.wrapping_mul(1_048_573));
+            let epoch = v / SPACE;
+            let perm = ((v % SPACE).wrapping_mul(MULT).wrapping_add(seed_mix)) % SPACE;
+
+            let n = perm as usize;
+            let o1 = ONSETS[n % 20];
+            let v1 = VOWELS[(n / 20) % 12];
+            let o2 = ONSETS[(n / 240) % 20];
+            let v2 = VOWELS[(n / 4_800) % 12];
+            let o3 = ONSETS[(n / 57_600) % 20];
+            let v3 = VOWELS[(n / 1_152_000) % 12];
+            let suf = if epoch > 0 || attempt > 0 {
+                SUFFIXES[((epoch + attempt) as usize) % SUFFIXES.len()]
+            } else {
+                ""
+            };
+            let raw = format!("{o1}{v1}{o2}{v2}{o3}{v3}{suf}");
+            let mut chars = raw.chars();
+            let candidate = match chars.next() {
+                Some(c) => format!("{}{}", c.to_ascii_uppercase(), chars.as_str()),
+                None => "Veklari".to_string(),
+            };
+            if !world
+                .companies
+                .values()
+                .any(|c| c.name.eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+        }
+        format!("Vek{:x}", seq)
+    }
+
     fn spawn_evolved_company_on(
         &mut self,
         prof: &str,
@@ -697,9 +749,10 @@ impl GameEngine {
             return None;
         }
         let new_cid = format!("npc_evo_{seq}");
+        let name = Self::generate_npc_name(&self.world, seq);
         if self
             .world
-            .spawn_npc_startup(&new_cid, format!("Evo-{prof}-{seq}"), prof, planet, seed_credits)
+            .spawn_npc_startup(&new_cid, name, prof, planet, seed_credits)
             .is_err()
         {
             return None;
@@ -1462,3 +1515,31 @@ fn from_money_i128(v: i128) -> f64 {
 }
 
 pub type SharedEngine = Arc<Mutex<GameEngine>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_npc_names_15000_unique_english_nonsense() {
+        let data_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("data")
+            .join("production.json");
+        let cat = ProductionCatalog::load_from_file(&data_path).unwrap();
+        let world = World::new_generated(cat, 424242);
+        let mut seen = std::collections::HashSet::with_capacity(15_000);
+        for seq in 0u64..15_000 {
+            let name = GameEngine::generate_npc_name(&world, seq);
+            assert!(name.len() >= 4 && name.len() <= 14, "unexpected length: {name}");
+            assert!(
+                name.chars().all(|c| c.is_ascii_alphabetic()),
+                "expected pure English letters, got {name}"
+            );
+            assert!(seen.insert(name.to_lowercase()), "duplicate NPC name at seq {seq}: {name}");
+        }
+        assert_eq!(seen.len(), 15_000);
+    }
+}
