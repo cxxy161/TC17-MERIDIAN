@@ -153,25 +153,34 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
               人口 / 容量
             </div>
             <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono truncate">
-              {cityCount > 0 ? (
+              {cityCount > 0 || pSum.population > 0 ? (
                 <>
                   <span className="text-sky-300">{Math.round(pSum.population).toLocaleString()}</span>
-                  {cityCap > 0 && (
-                    <span className="text-slate-400">
-                      {' '}/ {Math.round(cityCap).toLocaleString()} (
-                      <span className={capPct >= 82 ? 'text-amber-300' : 'text-slate-300'}>
-                        {capPct}%
-                      </span>
-                      )
+                  <span className="text-slate-400">
+                    {' '}/ {cityCap > 0 ? Math.round(cityCap).toLocaleString() : '--'} (
+                    <span className={capPct >= 82 ? 'text-amber-300' : 'text-slate-300'}>
+                      {cityCap > 0 ? `${capPct}%` : '--%'}
                     </span>
-                  )}
-                  <span className="text-slate-500 mx-1.5">·</span>
-                  <span className="text-emerald-300">
-                    繁荣 {pSum.prosperity.toFixed(2)}x ({pSum.wealth_tier}级)
+                    )
                   </span>
                 </>
               ) : (
-                <span className="text-slate-400">0 / 0 (无常住人口)</span>
+                <span className="text-slate-400">0 / 0 (0%)</span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex">
+            <div className="w-[28%] min-w-[76px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
+              城市繁荣
+            </div>
+            <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono truncate">
+              {cityCount > 0 || pSum.population > 0 ? (
+                <span className="text-emerald-300">
+                  {pSum.prosperity.toFixed(2)}x ({pSum.wealth_tier}级)
+                </span>
+              ) : (
+                <span className="text-slate-400">-- (无原生城市)</span>
               )}
             </div>
           </div>
@@ -248,32 +257,6 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
               </button>
             </div>
           </div>
-
-          {pView && pView.land_listings.length > 0 && (
-            <div className="flex items-stretch">
-              <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
-                二手地块
-              </div>
-              <div className="flex-1 min-w-0 px-2 py-0.5 space-y-0.5">
-                {pView.land_listings.map((l) => (
-                  <div key={l.listing_id} className="flex items-center justify-end gap-2 mono">
-                    <span className="text-slate-400">#{l.plot_id}</span>
-                    <span className="text-emerald-400">{moneyToCredits(l.ask_price).toFixed(1)}</span>
-                    {!READ_ONLY_OBSERVATION_MODE && (
-                      <button
-                        onClick={() =>
-                          void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: l.listing_id } })
-                        }
-                        className="cta-green text-[10px] py-0 px-1.5"
-                      >
-                        收购
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 3D Interactive Planet Globe synced to simulation tick/speed/paused */}

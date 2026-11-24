@@ -189,8 +189,16 @@ export const DemandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
 
       <div className="px-3 py-1.5 bg-[#1b212b] border-b border-slate-800/80 flex items-center justify-between text-[11px] shrink-0 flex-wrap gap-1">
         <span className="text-slate-400">
-          居民 <strong className="text-sky-300 mono">{Math.round(planet.population).toLocaleString()}</strong> · 繁荣{' '}
-          <strong className="text-emerald-400 mono">{planet.prosperity.toFixed(2)}x</strong> · {planet.wealth_tier} 级
+          居民{' '}
+          <strong className="text-sky-300 mono">{Math.round(planet.population).toLocaleString()}</strong>
+          {(planet.city_capacity ?? 0) > 0 && (
+            <span className="mono text-slate-400">
+              {' '}/ {Math.round(planet.city_capacity ?? 0).toLocaleString()} (
+              {Math.round((planet.population / (planet.city_capacity ?? 1)) * 100)}%)
+            </span>
+          )}{' '}
+          · 繁荣 <strong className="text-emerald-400 mono">{planet.prosperity.toFixed(2)}x</strong> ·{' '}
+          {planet.wealth_tier} 级
         </span>
         <span className="text-slate-400">
           本回合需求合计 <strong className="text-sky-300 mono">{totals.qty}</strong> 单位 · 缺口{' '}
