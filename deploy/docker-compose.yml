@@ -1,0 +1,11 @@
+services:
+  meridian:
+    image: meridian:latest
+    container_name: meridian
+    env_file:
+      - .env
+    ports:
+      - "18420:18420"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
