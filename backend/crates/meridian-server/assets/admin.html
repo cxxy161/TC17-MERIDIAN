@@ -118,6 +118,31 @@
       background: rgba(248, 81, 73, 0.15); border: 1px solid rgba(248, 81, 73, 0.5);
       padding: 2px 6px; border-radius: 3px; font-size: 11px;
     }
+    .syslog-box {
+      background: #141920; border-top: 1px solid var(--border);
+      max-height: 220px; overflow: auto; padding: 6px 10px;
+      display: flex; flex-direction: column; gap: 3px; font-size: 11px;
+    }
+    .syslog-row { display: flex; gap: 8px; align-items: baseline; border-bottom: 1px dashed rgba(148, 163, 184, 0.06); padding: 2px 0; }
+    .syslog-tick { color: var(--muted); min-width: 56px; }
+    .modal-backdrop {
+      position: fixed; inset: 0; z-index: 60;
+      background: rgba(10, 14, 20, 0.82); backdrop-filter: blur(4px);
+      display: none; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .auth-card {
+      width: 100%; max-width: 380px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+    }
+    .auth-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+    .auth-field label { font-size: 11px; color: var(--muted); }
+    .auth-field input {
+      background: #141920; color: var(--text); border: 1px solid rgba(148, 163, 184, 0.28);
+      padding: 7px 9px; border-radius: 3px; font-size: 12px; outline: none;
+    }
+    .auth-field input:focus { border-color: var(--blue); }
   </style>
 </head>
 <body>
@@ -126,6 +151,8 @@
       <h1>子午线 · MERIDIAN 服务器管理后台</h1>
       <span class="badge-admin">ADMIN ONLY</span>
       <a href="/" class="nav-btn">玩家端前台 &rarr;</a>
+      <span id="adminUserBadge" class="pill mono" style="display:none;"></span>
+      <button id="btnAdminLogout" class="nav-btn" style="display:none;">退出登录</button>
     </div>
 
     <div class="stats-bar mono">
@@ -264,6 +291,52 @@
         </div>
       </div>
     </div>
+
+    <!-- System Engine Logs (Moved out of Player Console into Admin Backend) -->
+    <div class="card">
+      <div class="card-hd">
+        <span>系统引擎运行日志（全服撮合成交 / 货币守恒审计 Δ / NPC 破产重演 / 控制指令）</span>
+        <div class="tabs">
+          <span id="sysLogCount" class="mono muted">0 条</span>
+          <button id="btnClearSysLog">清空日志</button>
+        </div>
+      </div>
+      <div id="sysLogList" class="syslog-box mono">
+        <div class="muted">等待 Tick 推送系统日志...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Authentication Overlay (Fixes silent 401/403 blank state on new devices) -->
+  <div id="authModal" class="modal-backdrop">
+    <div class="auth-card">
+      <div class="card-hd">
+        <span>管理员后台鉴权登录</span>
+        <span class="badge-admin">ADMIN AUTH</span>
+      </div>
+      <form id="authForm" class="card-bd" style="padding: 14px;">
+        <div id="authNotice" class="muted" style="margin-bottom: 10px; font-size: 11px;">
+          更换设备或会话过期后，请先登录具备管理员权限（role=admin）的账号以同步实时数据与 WebSocket。
+        </div>
+        <div class="auth-field">
+          <label for="authEmail">管理员邮箱</label>
+          <input id="authEmail" type="email" autocomplete="username" required placeholder="admin@example.com" />
+        </div>
+        <div class="auth-field">
+          <label for="authPassword">密码</label>
+          <input id="authPassword" type="password" autocomplete="current-password" required placeholder="输入密码" />
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); margin-bottom:10px; cursor:pointer;">
+          <input id="authRemember" type="checkbox" checked />
+          保持登录 14 天
+        </label>
+        <div id="authError" class="red" style="font-size:11px; min-height:16px; margin-bottom:8px;"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+          <a href="/" class="nav-btn">返回玩家端</a>
+          <button id="authSubmitBtn" type="submit" class="primary">登录并同步数据</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <script>
@@ -280,18 +353,120 @@
     const fmt = (n, d = 1) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
     const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+    let authReady = false;
+    let wsInstance = null;
+    let wsRetryTimer = null;
+    const sysLogs = [];
+
+    function appendSysLog(tick, level, message) {
+      sysLogs.push({ tick, level, message });
+      if (sysLogs.length > 250) sysLogs.splice(0, sysLogs.length - 250);
+      renderSysLogs();
+    }
+
+    function renderSysLogs() {
+      const box = document.getElementById('sysLogList');
+      const cnt = document.getElementById('sysLogCount');
+      cnt.textContent = `${sysLogs.length} 条`;
+      if (sysLogs.length === 0) {
+        box.innerHTML = '<div class="muted">暂无系统日志，运行回合后将实时输出...</div>';
+        return;
+      }
+      box.innerHTML = sysLogs
+        .slice(-120)
+        .reverse()
+        .map((l) => {
+          const cls =
+            l.level === 'error'
+              ? 'red'
+              : l.level === 'warn'
+                ? 'amber'
+                : l.level === 'ctrl'
+                  ? 'green'
+                  : 'blue';
+          const tag =
+            l.level === 'error'
+              ? 'ERR'
+              : l.level === 'warn'
+                ? 'WARN'
+                : l.level === 'ctrl'
+                  ? 'CTRL'
+                  : 'SYS';
+          return `<div class="syslog-row">
+            <span class="syslog-tick">T${esc(l.tick)}</span>
+            <span class="${cls}" style="min-width:38px;">[${tag}]</span>
+            <span>${esc(l.message)}</span>
+          </div>`;
+        })
+        .join('');
+    }
+
+    function showAuthModal(noticeText, isErr = false) {
+      authReady = false;
+      const modal = document.getElementById('authModal');
+      const notice = document.getElementById('authNotice');
+      notice.textContent = noticeText;
+      notice.className = isErr ? 'amber' : 'muted';
+      modal.classList.add('open');
+      const badge = document.getElementById('wsBadge');
+      badge.textContent = '未鉴权（等待管理员登录）';
+      badge.className = 'amber';
+      if (wsInstance) {
+        try { wsInstance.close(); } catch (_) {}
+        wsInstance = null;
+      }
+      if (wsRetryTimer) {
+        clearTimeout(wsRetryTimer);
+        wsRetryTimer = null;
+      }
+    }
+
+    function hideAuthModal() {
+      document.getElementById('authModal').classList.remove('open');
+      document.getElementById('authError').textContent = '';
+    }
+
+    async function loadMe() {
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'same-origin' });
+        if (!res.ok) {
+          document.getElementById('adminUserBadge').style.display = 'none';
+          document.getElementById('btnAdminLogout').style.display = 'none';
+          return null;
+        }
+        const me = await res.json();
+        const badge = document.getElementById('adminUserBadge');
+        badge.textContent = `${me.nickname || me.email} (${me.role})`;
+        badge.style.display = 'inline-block';
+        document.getElementById('btnAdminLogout').style.display = 'inline-block';
+        return me;
+      } catch (_) {
+        return null;
+      }
+    }
+
     async function simCtrl(action, tickMs) {
-      await fetch('/api/sim/control', {
+      const res = await fetch('/api/sim/control', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(tickMs !== undefined ? { action, tick_ms: tickMs } : { action }),
       });
+      if (res.status === 401 || res.status === 403) {
+        showAuthModal('管理员会话已失效或权限不足，请重新登录管理员账号', true);
+        return;
+      }
+      appendSysLog(
+        overview?.tick ?? 0,
+        'ctrl',
+        tickMs !== undefined ? `管理指令: ${action} (${tickMs}ms)` : `管理指令: ${action}`,
+      );
       await refreshAll();
     }
 
     async function loadCatalog() {
       try {
-        const res = await fetch('/api/catalog');
+        const res = await fetch('/api/catalog', { credentials: 'same-origin' });
         if (!res.ok) return;
         catalog = await res.json();
         for (const it of catalog.items || []) ITEM_NAMES[it.id] = it.name;
@@ -307,8 +482,25 @@
       if (refreshInFlight) return;
       refreshInFlight = true;
       try {
-        const res = await fetch('/api/admin/overview');
+        const res = await fetch('/api/admin/overview', { credentials: 'same-origin' });
+        if (res.status === 401) {
+          showAuthModal('未检测到登录会话（更换设备访问时需先登录管理员账号，才能同步后台数据与实时推送）。');
+          return;
+        }
+        if (res.status === 403) {
+          const me = await loadMe();
+          const who = me ? `${me.nickname || me.email} [${me.role}]` : '当前账号';
+          showAuthModal(`${who} 没有管理员权限（需要 role=admin），请在下方切换为管理员账号登录。`, true);
+          return;
+        }
         if (!res.ok) return;
+        const wasReady = authReady;
+        authReady = true;
+        hideAuthModal();
+        if (!wasReady) {
+          await loadMe();
+          connectWs();
+        }
         overview = await res.json();
         lastRefreshAt = performance.now();
         renderAll();
@@ -602,23 +794,103 @@
       renderCompanies();
     };
 
+    document.getElementById('btnClearSysLog').onclick = () => {
+      sysLogs.length = 0;
+      renderSysLogs();
+    };
+    document.getElementById('btnAdminLogout').onclick = async () => {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      document.getElementById('adminUserBadge').style.display = 'none';
+      document.getElementById('btnAdminLogout').style.display = 'none';
+      showAuthModal('已退出当前会话，请重新登录管理员账号。');
+    };
+    document.getElementById('authForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const errEl = document.getElementById('authError');
+      const btn = document.getElementById('authSubmitBtn');
+      const email = document.getElementById('authEmail').value.trim();
+      const password = document.getElementById('authPassword').value;
+      const remember = document.getElementById('authRemember').checked;
+      errEl.textContent = '';
+      btn.disabled = true;
+      btn.textContent = '登录中...';
+      try {
+        // 先清掉可能存在的普通玩家 Cookie，确保新 Cookie  cleanly 生效
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, remember }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errEl.textContent = data.message || `登录失败 (${res.status})`;
+          return;
+        }
+        if (data.role !== 'admin') {
+          errEl.textContent = `账号 ${data.email || email} 不是管理员（role=${data.role || 'player'}），无法访问管理后台。`;
+          return;
+        }
+        await loadCatalog();
+        await refreshAll();
+      } catch (err) {
+        errEl.textContent = '网络请求失败，请检查服务器连接。';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '登录并同步数据';
+      }
+    };
+
     function connectWs() {
+      if (!authReady) return;
+      if (wsInstance && wsInstance.readyState <= WebSocket.OPEN) return;
+      if (wsRetryTimer) {
+        clearTimeout(wsRetryTimer);
+        wsRetryTimer = null;
+      }
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${proto}//${location.host}/ws`);
+      wsInstance = ws;
       const badge = document.getElementById('wsBadge');
       ws.onopen = () => { badge.textContent = 'WS 实时推送已连接'; badge.className = 'green'; };
       ws.onclose = () => {
+        if (wsInstance === ws) wsInstance = null;
+        if (!authReady) return;
         badge.textContent = 'WS 已断开，2秒后重连...';
         badge.className = 'red';
-        setTimeout(connectWs, 2000);
+        wsRetryTimer = setTimeout(connectWs, 2000);
       };
-      ws.onmessage = () => { scheduleRefresh(); };
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg && msg.kind === 'tick') {
+            if (msg.conservation_error !== 0) {
+              appendSysLog(
+                msg.tick,
+                'error',
+                `货币守恒异常！Δ=${msg.conservation_error} · 成交 ${msg.fills_count} 笔 · CPI ${Number(msg.cpi || 1).toFixed(3)}`,
+              );
+            } else if (msg.fills_count > 0 || msg.rejected_intents > 0) {
+              appendSysLog(
+                msg.tick,
+                'sys',
+                `本回合撮合成交 ${msg.fills_count} 笔 · 货币误差 Δ=${msg.conservation_error}${msg.rejected_intents > 0 ? ` · 拒绝意图 ${msg.rejected_intents}` : ''} · CPI ${Number(msg.cpi || 1).toFixed(3)}`,
+              );
+            }
+            if (Array.isArray(msg.bankruptcies) && msg.bankruptcies.length > 0) {
+              appendSysLog(msg.tick, 'warn', `NPC 破产清算：${msg.bankruptcies.join(', ')}`);
+            }
+          }
+        } catch (_) {}
+        scheduleRefresh();
+      };
     }
 
     renderResetBox();
+    loadMe();
     loadCatalog().then(refreshAll);
-    connectWs();
-    setInterval(refreshAll, 3000);
+    setInterval(() => { if (authReady) refreshAll(); }, 3000);
   </script>
 </body>
 </html>

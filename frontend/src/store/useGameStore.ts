@@ -215,20 +215,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
             if (playerOut?.error) {
               additions.push({ tick: msg.tick, level: 'error', message: playerOut.error });
             }
-            if (msg.fills_count > 0) {
-              additions.push({
-                tick: msg.tick,
-                level: 'system',
-                message: `本回合撮合成交 ${msg.fills_count} 笔 · 货币误差 Δ=${msg.conservation_error}`,
-              });
-            }
-            if (Array.isArray(msg.bankruptcies) && msg.bankruptcies.length > 0) {
-              additions.push({
-                tick: msg.tick,
-                level: 'warn',
-                message: `NPC 清算重演：${msg.bankruptcies.join(', ')}`,
-              });
-            }
 
             if (additions.length > 0) {
               set((prev) => ({
