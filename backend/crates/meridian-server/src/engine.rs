@@ -126,6 +126,10 @@ pub struct PlanetSummary {
     pub visual_seed: u32,
     #[serde(default)]
     pub city_count: u32,
+    #[serde(default)]
+    pub city_level: u32,
+    #[serde(default)]
+    pub city_capacity: f64,
     pub demands: HashMap<String, u32>,
 }
 
@@ -1088,6 +1092,8 @@ impl GameEngine {
                 rotation_days: p.rotation_days,
                 visual_seed: p.visual_seed,
                 city_count: p.city_count,
+                city_level: p.city_level,
+                city_capacity: p.city_capacity,
                 demands: p.last_demands.clone(),
             })
             .collect();

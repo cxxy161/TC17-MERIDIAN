@@ -125,6 +125,8 @@ export interface PlanetSummary {
   rotation_days?: number;
   visual_seed?: number;
   city_count?: number;
+  city_level?: number;
+  city_capacity?: number;
   demands: Record<string, number>;
 }
 
