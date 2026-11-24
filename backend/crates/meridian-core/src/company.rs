@@ -17,6 +17,8 @@ pub struct Company {
     pub cash: Money,
     pub savings: Money,
     pub debt: Money,
+    #[serde(default)]
+    pub debt_due_tick: Option<u64>,
     pub plots: Vec<PlotId>,
     pub ships: Vec<Ship>,
     pub ground_inv: HashMap<PlanetId, HashMap<ItemId, u32>>,
@@ -42,12 +44,17 @@ impl Company {
             cash,
             savings: 0,
             debt: 0,
+            debt_due_tick: None,
             plots: Vec::new(),
             ships: Vec::new(),
             ground_inv: HashMap::new(),
             station_inv: HashMap::new(),
             distress_ticks: 0,
         }
+    }
+
+    pub fn is_debt_overdue(&self, tick: u64) -> bool {
+        self.debt > 0 && self.debt_due_tick.is_some_and(|due| tick > due)
     }
 
     pub fn ground_qty(&self, pid: &str, item: &str) -> u32 {

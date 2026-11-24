@@ -4,7 +4,10 @@ use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{bps_of, ItemId, Money, OrderId, OrderSide, StationId, TRADE_FEE_BPS};
+use crate::types::{
+    bps_of, checked_notional, price_in_band, ItemId, Money, OrderId, OrderSide, StationId,
+    TRADE_FEE_BPS,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Order {
@@ -230,62 +233,171 @@ impl CLOBStation {
             .sum()
     }
 
+    /// Reference unit price used to bound admissible limit prices on this book.
+    fn reference_price(&self, item_id: &str) -> Money {
+        self.last_trade_price.get(item_id).copied().unwrap_or(0)
+    }
+
+    /// Evict a corrupt top-of-book order and zero its escrow so that it can never be refunded as
+    /// phantom money (escrow truncation bug: `(qty * price) as Money` could lock less than the
+    /// nominal notional). Dropping the residual escrow only ever burns already-locked cash of the
+    /// offending order; it can never create a refund larger than what was actually escrowed.
+    fn evict_top(&mut self, item: &str, side: OrderSide) -> bool {
+        let removed = match side {
+            OrderSide::Buy => self
+                .bids
+                .get_mut(item)
+                .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) }),
+            OrderSide::Sell => self
+                .asks
+                .get_mut(item)
+                .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) }),
+        };
+        let Some(mut order) = removed else {
+            return false;
+        };
+        let dropped_escrow = order.escrow_cash;
+        order.escrow_cash = 0;
+        eprintln!(
+            "[meridian-core] evicting corrupt {} order {} on {} (price={}, qty={}, dropped_escrow={})",
+            match side {
+                OrderSide::Buy => "bid",
+                OrderSide::Sell => "ask",
+            },
+            order.order_id,
+            item,
+            order.price,
+            order.qty,
+            dropped_escrow
+        );
+        let empty = match side {
+            OrderSide::Buy => self.bids.get(item).map(|v| v.is_empty()).unwrap_or(true),
+            OrderSide::Sell => self.asks.get(item).map(|v| v.is_empty()).unwrap_or(true),
+        };
+        if empty {
+            match side {
+                OrderSide::Buy => {
+                    self.bids.remove(item);
+                }
+                OrderSide::Sell => {
+                    self.asks.remove(item);
+                }
+            }
+        }
+        true
+    }
+
     /// Match crossing bids and asks across all items present on this station.
     /// Does NOT expire orders automatically (#18 removed). Collects station fee_bps.
+    ///
+    /// Every notional is computed with 128-bit checked math and every escrow invariant is verified
+    /// *before* mutating the book: `0 <= escrowed_for_take <= bid.escrow_cash` and
+    /// `0 <= buyer_refund <= escrowed_for_take`. Corrupt resting orders are evicted instead of
+    /// allowing a fill that mints cash.
     pub fn match_all(&mut self, tick: u64) -> Vec<TradeFill> {
         let mut fills = Vec::new();
         let item_keys: Vec<ItemId> = self.bids.keys().cloned().collect();
 
         for item in item_keys {
             loop {
-                let can_cross = match (
+                let (bid_price, bid_qty, bid_escrow, bid_tick, ask_price, ask_qty, ask_tick) = match (
                     self.bids.get(&item).and_then(|v| v.first()),
                     self.asks.get(&item).and_then(|v| v.first()),
                 ) {
-                    (Some(b), Some(a)) => b.price >= a.price,
-                    _ => false,
+                    (Some(b), Some(a)) => (
+                        b.price,
+                        b.qty,
+                        b.escrow_cash,
+                        b.created_tick,
+                        a.price,
+                        a.qty,
+                        a.created_tick,
+                    ),
+                    _ => break,
                 };
-                if !can_cross {
-                    break;
-                }
 
-                // Skip self-wash: if same owner holds both top orders, cancel the newer one cleanly
+                // Self-wash guard: block crossing in place, never silently drop escrow.
                 let same_owner = {
                     let b = &self.bids[&item][0];
                     let a = &self.asks[&item][0];
                     b.owner_id == a.owner_id
                 };
                 if same_owner {
-                    // Pop newer order out of matching? Wait: returning its escrow is caller's duty;
-                    // better to block crossing in place or pop nothing without refund!
-                    // Break matching for this item if top bid == top ask owner (prevent zero-refund silent drop).
                     break;
                 }
 
-                let (trade_price, take, buyer_id, seller_id, buyer_refund) = {
+                if bid_price < ask_price {
+                    break;
+                }
+
+                let ref_price = self.reference_price(&item);
+
+                // Bid-side invariants: sane price band and non-negative escrow.
+                if bid_qty == 0 || bid_escrow < 0 || !price_in_band(bid_price, ref_price) {
+                    if !self.evict_top(&item, OrderSide::Buy) {
+                        break;
+                    }
+                    continue;
+                }
+                if ask_qty == 0 || !price_in_band(ask_price, ref_price) {
+                    if !self.evict_top(&item, OrderSide::Sell) {
+                        break;
+                    }
+                    continue;
+                }
+
+                let take = bid_qty.min(ask_qty);
+                let trade_price = if ask_tick <= bid_tick {
+                    ask_price
+                } else {
+                    bid_price
+                };
+
+                // All three amounts are checked; any failure evicts the offending bid.
+                let Some(escrowed_for_take) = checked_notional(take, bid_price) else {
+                    if !self.evict_top(&item, OrderSide::Buy) {
+                        break;
+                    }
+                    continue;
+                };
+                let Some(notional) = checked_notional(take, trade_price) else {
+                    if !self.evict_top(&item, OrderSide::Buy) {
+                        break;
+                    }
+                    continue;
+                };
+                let Some(new_bid_escrow) = bid_escrow.checked_sub(escrowed_for_take) else {
+                    if !self.evict_top(&item, OrderSide::Buy) {
+                        break;
+                    }
+                    continue;
+                };
+                let buyer_refund = escrowed_for_take - notional;
+
+                // Hard invariants: never refund more than was escrowed, never go negative, and
+                // never pay out more than the ask actually asked for.
+                if escrowed_for_take > bid_escrow
+                    || new_bid_escrow < 0
+                    || notional <= 0
+                    || buyer_refund < 0
+                    || buyer_refund > escrowed_for_take
+                {
+                    if !self.evict_top(&item, OrderSide::Buy) {
+                        break;
+                    }
+                    continue;
+                }
+
+                let (buyer_id, seller_id) = {
                     let bids = self.bids.get_mut(&item).unwrap();
                     let asks = self.asks.get_mut(&item).unwrap();
                     let b = &mut bids[0];
                     let a = &mut asks[0];
-                    let trade_price = if a.created_tick <= b.created_tick {
-                        a.price
-                    } else {
-                        b.price
-                    };
-                    let take = b.qty.min(a.qty);
-                    let notional = (take as i128 * trade_price as i128) as Money;
-                    let escrowed_for_take = (take as i128 * b.price as i128) as Money;
-                    let buyer_refund = escrowed_for_take - notional;
                     b.qty -= take;
-                    b.escrow_cash -= escrowed_for_take;
+                    b.escrow_cash = new_bid_escrow;
                     a.qty -= take;
-                    (
-                        trade_price,
-                        take,
-                        b.owner_id.clone(),
-                        a.owner_id.clone(),
-                        buyer_refund,
-                    )
+                    debug_assert!(b.escrow_cash >= 0);
+                    (b.owner_id.clone(), a.owner_id.clone())
                 };
 
                 if self.bids.get(&item).map(|v| v[0].qty == 0).unwrap_or(false) {
@@ -301,7 +413,6 @@ impl CLOBStation {
                     self.asks.remove(&item);
                 }
 
-                let notional = (take as i128 * trade_price as i128) as Money;
                 let fee = bps_of(notional, self.fee_bps);
                 let seller_proceeds = notional - fee;
 
@@ -329,12 +440,22 @@ impl CLOBStation {
 
     pub fn record_trade_stats(&mut self, item: &str, tick: u64, qty: u32, price: Money) {
         self.last_trade_price.insert(item.to_string(), price);
+        let has_history = self.total_vol.get(item).copied().unwrap_or(0) > 0;
         let prev_f = *self.ema_fast.get(item).unwrap_or(&price);
         let prev_s = *self.ema_slow.get(item).unwrap_or(&price);
-        let next_f = ((prev_f as i128 * 85 + price as i128 * 15) / 100) as Money;
-        let next_s = ((prev_s as i128 * 97 + price as i128 * 3) / 100) as Money;
-        self.ema_fast.insert(item.to_string(), next_f);
-        self.ema_slow.insert(item.to_string(), next_s);
+        // Damp single-trade price shocks entering EMA (+/-10% around slow EMA) so thin
+        // outlier fills cannot instantly warp CPI or city anchors, while sustained scarcity still trends.
+        let ema_input = if has_history && prev_s > 0 {
+            let lo = (prev_s.saturating_mul(90) / 100).max(1);
+            let hi = (prev_s.saturating_mul(110) / 100).max(prev_s.saturating_add(1));
+            price.clamp(lo, hi)
+        } else {
+            price
+        };
+        let next_f = ((prev_f as i128 * 85 + ema_input as i128 * 15) / 100) as Money;
+        let next_s = ((prev_s as i128 * 97 + ema_input as i128 * 3) / 100) as Money;
+        self.ema_fast.insert(item.to_string(), next_f.max(1));
+        self.ema_slow.insert(item.to_string(), next_s.max(1));
 
         let win = self.vol_window.entry(item.to_string()).or_default();
         win.push_back((tick, qty));

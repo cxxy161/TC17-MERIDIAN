@@ -12,6 +12,51 @@ pub const TRADE_FEE_BPS: u32 = 50;
 /// Safety limits matching docs/PROTOCOL.md.
 pub const MAX_INTENTS_PER_TICK: usize = 32;
 pub const MAX_ACTIVE_ORDERS_PER_COMPANY: usize = 64;
+/// Hard cap on a single order quantity, keeping `qty * price` inside i64 for any admissible price.
+pub const MAX_ORDER_QTY: u32 = 10_000;
+
+/// Width of the admissible unit-price band around the reference price (100x ref).
+pub const PRICE_BAND_MULTIPLIER: i128 = 100;
+
+/// Planet bank credit & overdue recovery constants.
+pub const LOAN_TERM_TICKS: u64 = 360;
+pub const OVERDUE_GARNISH_BPS: u32 = 2_500; // 25% of sales proceeds seized when overdue
+pub const BANK_MIN_RESERVE_BPS: u32 = 2_500; // keep >=25% of deposits liquid in reserves
+
+/// Checked `qty * price` evaluated in 128-bit space and converted back to `Money`.
+///
+/// Returns `None` when the product is non-positive or does not fit into `i64`, so callers can
+/// reject the intent instead of silently truncating/wrapping a balance into existence.
+pub fn checked_notional(qty: u32, price: Money) -> Option<Money> {
+    if qty == 0 || price <= 0 {
+        return None;
+    }
+    let product = (qty as i128).checked_mul(price as i128)?;
+    if product <= 0 || product > i64::MAX as i128 {
+        return None;
+    }
+    Some(product as Money)
+}
+
+/// Upper bound of the admissible unit-price band: `ref_price * 100`.
+///
+/// `ref_price` is already fixed-point `Money` (credits x `MONEY_SCALE`); multiplying by
+/// `MONEY_SCALE` a second time would silently widen the band to 1,000,000x the reference.
+/// A non-positive reference falls back to a 1-credit floor; the result is capped at 1,000,000
+/// credits (defence against a poisoned `last_trade_price` ratcheting the band) and finally
+/// clamped so that `MAX_ORDER_QTY * price` can never overflow `i64`.
+pub fn price_band_max(ref_price: Money) -> Money {
+    let base = ref_price.max(MONEY_SCALE) as i128;
+    let cap = base.saturating_mul(PRICE_BAND_MULTIPLIER);
+    let absolute_cap = 1_000_000i128.saturating_mul(MONEY_SCALE as i128);
+    let hard_cap = (i64::MAX as i128) / (MAX_ORDER_QTY as i128);
+    cap.min(absolute_cap).min(hard_cap) as Money
+}
+
+/// True when `price` lies inside `[1, price_band_max(ref_price)]`.
+pub fn price_in_band(price: Money, ref_price: Money) -> bool {
+    price > 0 && price <= price_band_max(ref_price)
+}
 
 #[inline]
 pub fn to_money(credits: f64) -> Money {

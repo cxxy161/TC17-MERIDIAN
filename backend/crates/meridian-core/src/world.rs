@@ -16,10 +16,44 @@ use crate::snapshot::{
     ShipCountsView, ShipView, StarSystemView, WorldSnapshot,
 };
 use crate::types::{
-    bps_of, from_money, to_money, BankOpKind, BuildingId, CompanyId, Intent, ItemId, ListingId,
-    Money, OrderId, OrderSide, PlanetId, PlotId, ShipId, SlotId, StationId,
-    MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK,
+    bps_of, checked_notional, from_money, price_band_max, price_in_band, to_money, BankOpKind,
+    BuildingId, CompanyId, Intent, ItemId, ListingId, Money, OrderId, OrderSide, PlanetId, PlotId,
+    ShipId, SlotId, StationId, BANK_MIN_RESERVE_BPS, LOAN_TERM_TICKS,
+    MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK, MAX_ORDER_QTY, MONEY_SCALE,
+    OVERDUE_GARNISH_BPS,
 };
+
+/// Saturating cash credit. Fixed-point `Money` is i64; overflowing it would wrap into a negative
+/// balance (or silently mint), so clamp instead and leave an auditable trace (core has no tracing).
+fn credit_cash(target: &mut Money, amount: Money) {
+    if amount <= 0 {
+        return;
+    }
+    match target.checked_add(amount) {
+        Some(next) => *target = next,
+        None => {
+            eprintln!(
+                "[meridian-core] cash credit overflow: {target} + {amount}; clamping to i64::MAX"
+            );
+            *target = Money::MAX;
+        }
+    }
+}
+
+/// Checked cash debit that never wraps and never produces a negative balance.
+/// Returns `false` (leaving `target` untouched) when the payer cannot afford `amount`.
+fn debit_cash(target: &mut Money, amount: Money) -> bool {
+    if amount <= 0 {
+        return true;
+    }
+    match target.checked_sub(amount) {
+        Some(next) if next >= 0 => {
+            *target = next;
+            true
+        }
+        _ => false,
+    }
+}
 
 struct SplitMix(u64);
 
@@ -757,6 +791,89 @@ impl World {
         self.catalog.is_instant_item(item_id)
     }
 
+    /// Unit-price reference for a book: last trade price on that station, else catalog ref price
+    /// (with a 1-credit floor). Used to bound admissible limit prices and reject minting exploits.
+    fn reference_price_for(&self, station_id: &str, item_id: &str) -> Money {
+        let fallback = self
+            .catalog
+            .items
+            .get(item_id)
+            .map(|it| to_money(it.ref_price.max(0.01)))
+            .unwrap_or(MONEY_SCALE);
+        self.stations
+            .get(station_id)
+            .and_then(|st| st.last_trade_price.get(item_id).copied())
+            .unwrap_or(fallback)
+    }
+
+    /// Credit limit for a company's home-planet bank borrowing:
+    /// starter base floor (`2,000 * cpi`) or 50% of asset valuation (excluding borrowed cash),
+    /// preventing 100-credit fresh accounts from borrowing 196x their equity.
+    pub fn company_credit_limit(&self, company_id: &str) -> Money {
+        let base = to_money(2_000.0 * self.cpi);
+        let Some(comp) = self.companies.get(company_id) else {
+            return base;
+        };
+        let land_px = self
+            .planets
+            .get(&comp.home_planet_id)
+            .map(|p| from_money(p.primary_land_price(self.cpi)))
+            .unwrap_or(1_500.0);
+        let bld_count: usize = comp
+            .plots
+            .iter()
+            .filter_map(|pid| self.plots.get(pid))
+            .map(|pl| pl.building_ids.len())
+            .sum();
+        let fixed_assets = to_money(
+            (comp.plots.len() as f64) * land_px * 0.5
+                + (bld_count as f64) * 140.0 * self.cpi * 0.4
+                + (comp.ships.len() as f64) * 260.0 * self.cpi * 0.5,
+        );
+        let unencumbered_liquid =
+            ((comp.savings * 4) / 5).saturating_add(comp.cash.saturating_sub(comp.debt) / 2);
+        base.max(fixed_assets.saturating_add(unencumbered_liquid))
+    }
+
+    /// Credit revenue to a company seller; if their loan is past `debt_due_tick`, automatically
+    /// garnish 25% (`OVERDUE_GARNISH_BPS`) directly to the home planet's bank reserves to pay down debt.
+    fn credit_seller_revenue(&mut self, seller_id: &str, proceeds: Money, tick: u64) {
+        if proceeds <= 0 {
+            return;
+        }
+        let (home_pid, garnish) = {
+            let Some(comp) = self.companies.get(seller_id) else {
+                return;
+            };
+            if comp.is_debt_overdue(tick) {
+                (
+                    Some(comp.home_planet_id.clone()),
+                    bps_of(proceeds, OVERDUE_GARNISH_BPS).min(comp.debt),
+                )
+            } else {
+                (None, 0)
+            }
+        };
+        let net = proceeds.saturating_sub(garnish);
+        if let Some(comp) = self.companies.get_mut(seller_id) {
+            credit_cash(&mut comp.cash, net);
+            if garnish > 0 {
+                comp.debt = comp.debt.saturating_sub(garnish);
+                if comp.debt == 0 {
+                    comp.debt_due_tick = None;
+                }
+            }
+        }
+        if garnish > 0 {
+            if let Some(pid) = home_pid {
+                if let Some(p) = self.planets.get_mut(&pid) {
+                    credit_cash(&mut p.bank.reserves, garnish);
+                    p.bank.total_loans = p.bank.total_loans.saturating_sub(garnish);
+                }
+            }
+        }
+    }
+
     pub fn total_currency_in_system(&self) -> i128 {
         let comp_cash: i128 = self.companies.values().map(|c| c.cash as i128).sum();
         let planet_treasury: i128 = self.planets.values().map(|p| p.treasury as i128).sum();
@@ -879,7 +996,7 @@ impl World {
                 px_sum += from_money(p);
             }
             let avg_p = px_sum / self.stations.len().max(1) as f64;
-            ratio_sum += (avg_p / it.ref_price).clamp(0.2, 8.0);
+            ratio_sum += (avg_p / it.ref_price).clamp(0.4, 4.0);
             cnt += 1;
         }
         if cnt > 0 {
@@ -1170,7 +1287,7 @@ impl World {
                 .or_else(|| self.planets.keys().min().cloned());
             if let Some(pid) = fallback_pid {
                 if let Some(p) = self.planets.get_mut(&pid) {
-                    p.treasury += amount;
+                    credit_cash(&mut p.treasury, amount);
                 }
             }
             return;
@@ -1185,7 +1302,7 @@ impl World {
             };
             distributed += share;
             if let Some(p) = self.planets.get_mut(pid) {
-                p.treasury += share;
+                credit_cash(&mut p.treasury, share);
             }
         }
     }
@@ -1198,8 +1315,9 @@ impl World {
             if p.city_count == 0 || p.population <= 0.0 {
                 return HashMap::new();
             }
-            // Restored steady civic money faucet (#8 fix) scaled gently by CPI
-            let civic_mint = to_money(p.population * p.civic_output_per_capita * p.prosperity * self.cpi);
+            // Restored steady civic money faucet (#8 fix) scaled smoothly by CPI
+            let civic_cpi = self.cpi.clamp(0.5, 3.0);
+            let civic_mint = to_money(p.population * p.civic_output_per_capita * p.prosperity * civic_cpi);
             p.treasury += civic_mint;
             self.ledger.record_mint(civic_mint);
             p.last_bought = std::mem::take(&mut p.bought_this_tick);
@@ -1226,7 +1344,8 @@ impl World {
             .unwrap_or_default();
         for oid in prev_ids {
             if let Some(removed) = self.stations.get_mut(&sid).unwrap().remove_order(oid) {
-                self.planets.get_mut(planet_id).unwrap().treasury += removed.escrow_cash;
+                let p = self.planets.get_mut(planet_id).unwrap();
+                credit_cash(&mut p.treasury, removed.escrow_cash);
             }
         }
 
@@ -1248,7 +1367,9 @@ impl World {
             let urgency = 1.0 + 1.5 * (1.0 - prev_sat);
             let st = &self.stations[&sid];
             let ref_m = st
-                .best_ask(item)
+                .ema_slow
+                .get(item)
+                .copied()
                 .or_else(|| st.last_trade_price.get(item).copied())
                 .unwrap_or_else(|| to_money(self.catalog.items[item].ref_price));
             weights.insert(
@@ -1258,7 +1379,7 @@ impl World {
         }
         let total_w: f64 = weights.values().sum::<f64>().max(0.1);
 
-        let mut spent_escrow = 0;
+        let mut spent_escrow: Money = 0;
         let treasury_avail = self.planets[planet_id].treasury;
         for (item, &qty) in &demands {
             let share = weights[item] / total_w;
@@ -1273,20 +1394,39 @@ impl World {
                 .last_trade_price
                 .get(item)
                 .unwrap_or(&to_money(self.catalog.items[item].ref_price));
-            let prev_bid = *self.planets[planet_id].prev_bids.get(item).unwrap_or(&last_p);
+            let slow_p = *st.ema_slow.get(item).unwrap_or(&last_p);
+            let prev_bid = *self.planets[planet_id].prev_bids.get(item).unwrap_or(&slow_p);
+            // Smooth upward city procurement ramp (+8%/tick above prev_bid/slow EMA): lets real
+            // shortages bid prices upward naturally while blocking 1-tick 50x thin-book spikes.
+            let ramp_cap = prev_bid
+                .max(slow_p)
+                .saturating_mul(108)
+                .saturating_div(100)
+                .max(to_money(0.05 * self.cpi));
             let raw_bid = match ba {
-                Some(ask_p) => item_cap.min((ask_p * 103) / 100),
+                Some(ask_p) => item_cap.min(ask_p.saturating_mul(103) / 100).min(ramp_cap),
                 None => item_cap
                     .min(last_p.saturating_mul(6))
-                    .min(((last_p * 108) / 100).max((prev_bid * 102) / 100)),
+                    .min((last_p.saturating_mul(108) / 100).max(prev_bid.saturating_mul(102) / 100))
+                    .min(ramp_cap),
             };
-            let clean_bid = raw_bid.max(to_money(0.02 * self.cpi));
-            let needed_escrow = (qty as i128 * clean_bid as i128) as Money;
-            if needed_escrow <= 0 || spent_escrow + needed_escrow > treasury_avail {
+            // Keep planet bids inside the same admissible band the matcher enforces.
+            let band_cap = price_band_max(slow_p);
+            let clean_bid = raw_bid.max(to_money(0.02 * self.cpi)).min(band_cap);
+            // Checked qty*price: never let planet escrow wrap into a negative/free treasury.
+            let Some(needed_escrow) = checked_notional(qty, clean_bid) else {
+                continue;
+            };
+            let Some(new_spent) = spent_escrow.checked_add(needed_escrow) else {
+                continue;
+            };
+            if needed_escrow <= 0 || new_spent > treasury_avail {
                 continue;
             }
-            spent_escrow += needed_escrow;
-            self.planets.get_mut(planet_id).unwrap().treasury -= needed_escrow;
+            spent_escrow = new_spent;
+            if !debit_cash(&mut self.planets.get_mut(planet_id).unwrap().treasury, needed_escrow) {
+                continue;
+            }
             self.planets
                 .get_mut(planet_id)
                 .unwrap()
@@ -1324,12 +1464,26 @@ impl World {
                 qty,
                 price,
             } => {
-                if qty == 0 || price <= 0 || !self.catalog.items.contains_key(&item_id) {
+                if qty == 0
+                    || qty > MAX_ORDER_QTY
+                    || price <= 0
+                    || !self.catalog.items.contains_key(&item_id)
+                {
                     return false;
                 }
                 if !self.stations.contains_key(&station_id) {
                     return false;
                 }
+                let ref_price = self.reference_price_for(&station_id, &item_id);
+                // Unit price band: [1, ref_price * 100 * MONEY_SCALE]. Sell orders lock no cash but
+                // a sky-high ask would still poison DealOrder/escrow settlement, so validate both.
+                if !price_in_band(price, ref_price) {
+                    return false;
+                }
+                // Checked qty*price: reject instead of letting `(qty * price) as Money` truncate.
+                let Some(notional) = checked_notional(qty, price) else {
+                    return false;
+                };
                 let active_orders: usize = self
                     .stations
                     .values()
@@ -1361,13 +1515,11 @@ impl World {
 
                 let escrow_cash = match side {
                     OrderSide::Buy => {
-                        let cost = (qty as i128 * price as i128) as Money;
                         let comp = self.companies.get_mut(company_id).unwrap();
-                        if cost <= 0 || comp.cash < cost {
+                        if !debit_cash(&mut comp.cash, notional) {
                             return false;
                         }
-                        comp.cash -= cost;
-                        cost
+                        notional
                     }
                     OrderSide::Sell => {
                         let instant = self.is_instant_item(&item_id);
@@ -1429,7 +1581,8 @@ impl World {
                 };
                 match order.side {
                     OrderSide::Buy => {
-                        self.companies.get_mut(company_id).unwrap().cash += order.escrow_cash;
+                        let comp = self.companies.get_mut(company_id).unwrap();
+                        credit_cash(&mut comp.cash, order.escrow_cash);
                     }
                     OrderSide::Sell => {
                         self.companies.get_mut(company_id).unwrap().add_station_qty(
@@ -1447,7 +1600,7 @@ impl World {
                     return false;
                 }
                 let mut target_sid = None;
-                let mut is_valid = false;
+                let mut target_meta = None;
                 for (sid, st) in &self.stations {
                     for o in st
                         .bids
@@ -1457,32 +1610,62 @@ impl World {
                     {
                         if o.order_id == order_id {
                             target_sid = Some(sid.clone());
-                            is_valid = o.owner_id != company_id;
+                            target_meta = Some((o.owner_id != company_id, o.side, o.item_id.clone(), o.price));
                             break;
                         }
                     }
                 }
-                let Some(sid) = target_sid else {
+                let (Some(sid), Some((not_self, side, item_id, target_price))) = (target_sid, target_meta) else {
                     return false;
                 };
-                if !is_valid {
+                if !not_self {
                     return false;
                 }
+                // Enforce CLOB price priority: DealOrder cannot skip better-priced resting counterparty
+                // orders (closes deep-book wash-trade / EMA-poisoning attacks).
+                {
+                    let st = &self.stations[&sid];
+                    let has_better_counterparty = match side {
+                        OrderSide::Sell => st
+                            .asks
+                            .get(&item_id)
+                            .map(|v| v.iter().any(|o| o.owner_id != company_id && o.price < target_price))
+                            .unwrap_or(false),
+                        OrderSide::Buy => st
+                            .bids
+                            .get(&item_id)
+                            .map(|v| v.iter().any(|o| o.owner_id != company_id && o.price > target_price))
+                            .unwrap_or(false),
+                    };
+                    if has_better_counterparty {
+                        return false;
+                    }
+                }
                 let order = self.stations.get_mut(&sid).unwrap().remove_order(order_id).unwrap();
-                let take = amount.min(order.qty);
+                let take = amount.min(order.qty).min(MAX_ORDER_QTY);
                 if take == 0 {
                     self.stations.get_mut(&sid).unwrap().insert_order(order);
                     return false;
                 }
-                let notional = (take as i128 * order.price as i128) as Money;
+                // Checked notional + mandatory price band on the resting order. A negative or
+                // truncated `(take * price) as Money` must never reach the cash ledger.
+                let ref_price = self.reference_price_for(&sid, &order.item_id);
+                let Some(notional) = checked_notional(take, order.price) else {
+                    self.stations.get_mut(&sid).unwrap().insert_order(order);
+                    return false;
+                };
+                if notional <= 0 || !price_in_band(order.price, ref_price) {
+                    self.stations.get_mut(&sid).unwrap().insert_order(order);
+                    return false;
+                }
                 match order.side {
                     OrderSide::Sell => {
                         // Caller buys from resting Sell order
-                        if self.companies[company_id].cash < notional {
+                        let comp = self.companies.get_mut(company_id).unwrap();
+                        if !debit_cash(&mut comp.cash, notional) {
                             self.stations.get_mut(&sid).unwrap().insert_order(order);
                             return false;
                         }
-                        self.companies.get_mut(company_id).unwrap().cash -= notional;
                         let fee = bps_of(notional, self.stations[&sid].fee_bps);
                         let fill = TradeFill {
                             tick,
@@ -1492,7 +1675,7 @@ impl World {
                             price: order.price,
                             notional,
                             fee,
-                            seller_proceeds: notional - fee,
+                            seller_proceeds: notional.saturating_sub(fee),
                             buyer_refund: 0,
                             buyer_id: company_id.to_string(),
                             seller_id: order.owner_id.clone(),
@@ -1510,7 +1693,17 @@ impl World {
                         true
                     }
                     OrderSide::Buy => {
-                        // Caller sells into resting Buy order
+                        // Caller sells into resting Buy order. The resting bid must have escrowed
+                        // at least the fill notional, otherwise `escrow_cash -= notional` would go
+                        // negative (and the buyer would be credited cash it never locked).
+                        if order.escrow_cash < notional {
+                            eprintln!(
+                                "[meridian-core] rejecting DealOrder into under-escrowed bid {}: escrow={} notional={}",
+                                order.order_id, order.escrow_cash, notional
+                            );
+                            self.stations.get_mut(&sid).unwrap().insert_order(order);
+                            return false;
+                        }
                         let instant = self.is_instant_item(&order.item_id);
                         let comp = self.companies.get_mut(company_id).unwrap();
                         let st_have = comp.station_qty(&sid, &order.item_id);
@@ -1535,6 +1728,14 @@ impl World {
                         }
 
                         let fee = bps_of(notional, self.stations[&sid].fee_bps);
+                        let residual_escrow = order.escrow_cash - notional;
+                        // Full fill: any leftover escrow (normally zero) is refunded rather than
+                        // silently destroyed; partial fill keeps it locked for the remainder.
+                        let buyer_refund = if order.qty > take {
+                            0
+                        } else {
+                            residual_escrow
+                        };
                         let fill = TradeFill {
                             tick,
                             station_id: sid.clone(),
@@ -1543,8 +1744,8 @@ impl World {
                             price: order.price,
                             notional,
                             fee,
-                            seller_proceeds: notional - fee,
-                            buyer_refund: 0,
+                            seller_proceeds: notional.saturating_sub(fee),
+                            buyer_refund,
                             buyer_id: order.owner_id.clone(),
                             seller_id: company_id.to_string(),
                         };
@@ -1556,7 +1757,7 @@ impl World {
                         if order.qty > take {
                             let mut rem = order;
                             rem.qty -= take;
-                            rem.escrow_cash -= notional;
+                            rem.escrow_cash = residual_escrow;
                             self.stations.get_mut(&sid).unwrap().insert_order(rem);
                         }
                         true
@@ -1665,6 +1866,11 @@ impl World {
                 if !self.planets.contains_key(&planet_id) {
                     return false;
                 }
+                // Players CAN monopolize a planet using earned money, but cannot expand land while
+                // in overdue loan default.
+                if self.companies[company_id].is_debt_overdue(tick) {
+                    return false;
+                }
                 if !self.companies[company_id].is_player
                     && self.npc_plot_count_on(&planet_id) >= self.npc_plot_cap_on(&planet_id)
                 {
@@ -1688,20 +1894,23 @@ impl World {
                         .unwrap()
                         .land_listings
                         .remove(idx);
-                    self.companies.get_mut(company_id).unwrap().cash -= lst.ask_price;
+                    if !debit_cash(&mut self.companies.get_mut(company_id).unwrap().cash, lst.ask_price) {
+                        return false;
+                    }
                     if lst.seller_id == "BANK" {
                         let p = self.planets.get_mut(&planet_id).unwrap();
                         let pay_debt = lst.debt_recovery.min(lst.ask_price);
                         p.bank.total_loans = p.bank.total_loans.saturating_sub(pay_debt);
-                        p.bank.reserves += lst.ask_price;
-                    } else if let Some(seller) = self.companies.get_mut(&lst.seller_id) {
-                        seller.cash += lst.ask_price;
+                        credit_cash(&mut p.bank.reserves, lst.ask_price);
+                    } else if self.companies.contains_key(&lst.seller_id) {
+                        self.credit_seller_revenue(&lst.seller_id, lst.ask_price, tick);
                     } else {
-                        self.planets.get_mut(&planet_id).unwrap().treasury += lst.ask_price;
+                        credit_cash(&mut self.planets.get_mut(&planet_id).unwrap().treasury, lst.ask_price);
                     }
                     let mut bought_slot: Option<SlotId> = None;
                     if let Some(pl) = self.plots.get_mut(&lst.plot_id) {
                         pl.owner_id = Some(company_id.to_string());
+                        pl.jobs.clear(); // Cancel unfinished seller construction on ownership transfer (BL-06)
                         bought_slot = Some(pl.slot_id);
                         for &bid in &pl.building_ids {
                             if let Some(b) = self.buildings.get_mut(&bid) {
@@ -1930,14 +2139,32 @@ impl World {
                         true
                     }
                     BankOpKind::Borrow => {
-                        let p = &self.planets[&planet_id];
-                        if p.bank.reserves < amount {
+                        let credit_limit = self.company_credit_limit(company_id);
+                        let comp = &self.companies[company_id];
+                        if comp.is_debt_overdue(tick) {
                             return false;
                         }
-                        self.planets.get_mut(&planet_id).unwrap().bank.reserves -= amount;
-                        self.planets.get_mut(&planet_id).unwrap().bank.total_loans += amount;
-                        self.companies.get_mut(company_id).unwrap().cash += amount;
-                        self.companies.get_mut(company_id).unwrap().debt += amount;
+                        let Some(next_debt) = comp.debt.checked_add(amount) else {
+                            return false;
+                        };
+                        if next_debt > credit_limit {
+                            return false;
+                        }
+                        let p = &self.planets[&planet_id];
+                        let min_reserves = bps_of(p.bank.total_deposits, BANK_MIN_RESERVE_BPS);
+                        let lendable = p.bank.reserves.saturating_sub(min_reserves);
+                        if lendable < amount {
+                            return false;
+                        }
+                        let p_mut = self.planets.get_mut(&planet_id).unwrap();
+                        p_mut.bank.reserves -= amount;
+                        p_mut.bank.total_loans = p_mut.bank.total_loans.saturating_add(amount);
+                        let c_mut = self.companies.get_mut(company_id).unwrap();
+                        credit_cash(&mut c_mut.cash, amount);
+                        c_mut.debt = next_debt;
+                        if c_mut.debt_due_tick.is_none() {
+                            c_mut.debt_due_tick = Some(tick + LOAN_TERM_TICKS);
+                        }
                         true
                     }
                     BankOpKind::Repay => {
@@ -1946,11 +2173,15 @@ impl World {
                         if repay <= 0 || comp.cash < repay {
                             return false;
                         }
-                        self.companies.get_mut(company_id).unwrap().cash -= repay;
-                        self.companies.get_mut(company_id).unwrap().debt -= repay;
+                        let c_mut = self.companies.get_mut(company_id).unwrap();
+                        c_mut.cash -= repay;
+                        c_mut.debt -= repay;
+                        if c_mut.debt == 0 {
+                            c_mut.debt_due_tick = None;
+                        }
                         let p = self.planets.get_mut(&planet_id).unwrap();
                         p.bank.total_loans = p.bank.total_loans.saturating_sub(repay);
-                        p.bank.reserves += repay;
+                        credit_cash(&mut p.bank.reserves, repay);
                         true
                     }
                 }
@@ -1959,26 +2190,26 @@ impl World {
     }
 
     fn settle_trade_fill(&mut self, fill: &TradeFill) {
-        // 1. Refund excess buy escrow (price improvement)
+        // 1. Refund excess buy escrow (price improvement), checked against i64 wrap-around.
         if fill.buyer_refund > 0 {
             if let Some(pid) = fill.buyer_id.strip_prefix("PLANET:") {
                 if let Some(p) = self.planets.get_mut(pid) {
-                    p.treasury += fill.buyer_refund;
+                    credit_cash(&mut p.treasury, fill.buyer_refund);
                 }
             } else if let Some(b) = self.companies.get_mut(&fill.buyer_id) {
-                b.cash += fill.buyer_refund;
+                credit_cash(&mut b.cash, fill.buyer_refund);
             }
         }
 
-        // 2. Credit seller proceeds
+        // 2. Credit seller proceeds (with 25% overdue loan garnishment when applicable)
         if fill.seller_id == "BANK" {
             if let Some(bank_pid) = self.default_bank_planet_id(&fill.station_id) {
                 if let Some(p) = self.planets.get_mut(&bank_pid) {
-                    p.bank.reserves += fill.seller_proceeds;
+                    credit_cash(&mut p.bank.reserves, fill.seller_proceeds);
                 }
             }
-        } else if let Some(s) = self.companies.get_mut(&fill.seller_id) {
-            s.cash += fill.seller_proceeds;
+        } else {
+            self.credit_seller_revenue(&fill.seller_id, fill.seller_proceeds, fill.tick);
         }
 
         // 3. Credit trade station fee (0.5%) to station planet treasury (Hub -> system habitable cities)
@@ -1987,7 +2218,7 @@ impl World {
             self.credit_habitable_cities_for_system(Some(&sys_id), fill.fee);
         } else if let Some(pid) = fill.station_id.strip_prefix("ST:") {
             if let Some(p) = self.planets.get_mut(pid) {
-                p.treasury += fill.fee;
+                credit_cash(&mut p.treasury, fill.fee);
             } else {
                 self.credit_habitable_cities(fill.fee);
             }
@@ -1996,7 +2227,8 @@ impl World {
         // 4. Deliver goods to buyer
         if let Some(pid) = fill.buyer_id.strip_prefix("PLANET:") {
             if let Some(p) = self.planets.get_mut(pid) {
-                *p.bought_this_tick.entry(fill.item_id.clone()).or_insert(0) += fill.qty;
+                let qty = p.bought_this_tick.entry(fill.item_id.clone()).or_insert(0);
+                *qty = qty.saturating_add(fill.qty);
             }
         } else {
             let instant = self.is_instant_item(&fill.item_id);
@@ -2177,13 +2409,16 @@ impl World {
                 for oid in ids {
                     if let Some(o) = st.remove_order(oid) {
                         match o.side {
-                            OrderSide::Buy => returned_cash += o.escrow_cash,
+                            OrderSide::Buy => {
+                                returned_cash = returned_cash.saturating_add(o.escrow_cash)
+                            }
                             OrderSide::Sell => {
-                                *confiscated_station_inv
+                                let q = confiscated_station_inv
                                     .entry(sid.clone())
                                     .or_default()
                                     .entry(o.item_id)
-                                    .or_insert(0) += o.qty;
+                                    .or_insert(0);
+                                *q = q.saturating_add(o.qty);
                             }
                         }
                     }
@@ -2194,7 +2429,7 @@ impl World {
                 home_p.bank.total_loans = home_p.bank.total_loans.saturating_sub(comp.debt);
                 home_p.bank.total_deposits = home_p.bank.total_deposits.saturating_sub(comp.savings);
                 // Settle remaining cash back to bank reserves (zero currency destruction!)
-                home_p.bank.reserves += returned_cash;
+                credit_cash(&mut home_p.bank.reserves, returned_cash);
             }
 
             // Confiscated station inventory becomes BANK liquidation asks
@@ -2208,7 +2443,8 @@ impl World {
                             .last_trade_price
                             .get(&item_id)
                             .unwrap_or(&to_money(1.0));
-                        let ask_p = ((last_p * 88) / 100).max(to_money(0.1 * self.cpi));
+                        let ask_p =
+                            (last_p.saturating_mul(88) / 100).max(to_money(0.1 * self.cpi));
                         let oid = self.next_order_id;
                         self.next_order_id += 1;
                         st.insert_order(Order {
