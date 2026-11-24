@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  Info,
   KeyRound,
   Loader2,
   LogOut,
@@ -15,16 +14,11 @@ import { ApiError, accountApi, type AccountInfo } from '../api/client';
 import type { PaneProps } from '../layout/paneRegistry';
 import { useSessionStore } from '../store/useSessionStore';
 
-type Tab = 'account' | 'sessions' | 'about';
-
-const APP_VERSION = 'v0.1.0';
-/** 没有构建插件，也不引入新的构建链：构建信息就是常量。 */
-const BUILD_STAMP = 'dev';
+type Tab = 'account' | 'sessions';
 
 const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'account', label: '账号', icon: User },
   { id: 'sessions', label: '会话', icon: Monitor },
-  { id: 'about', label: '关于', icon: Info },
 ];
 
 /* ------------------------------------------------------------------ styles */
@@ -212,13 +206,6 @@ const ErrorBox: React.FC<{ text: string }> = ({ text }) => (
 
 const FieldErrorLine: React.FC<{ text?: string | null }> = ({ text }) =>
   text ? <div className="mt-1 text-[10px] text-rose-400">{text}</div> : null;
-
-const InfoRow: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
-  <div className="flex items-baseline justify-between gap-3 border-b border-white/[0.05] pb-1.5">
-    <span className="mono shrink-0 text-[10px] tracking-[0.14em] text-slate-500">{label}</span>
-    <span className="mono min-w-0 break-all text-right text-[11px] text-slate-300">{value}</span>
-  </div>
-);
 
 /* ------------------------------------------------------------ SettingsPanel */
 
@@ -699,27 +686,6 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
     </div>
   );
 
-  const renderAbout = () => (
-    <div className="space-y-3">
-      <div className="border-b border-[rgba(56,189,248,0.18)] pb-2">
-        <div className="text-[13px] tracking-[0.18em] text-slate-100">子午线 · MERIDIAN</div>
-        <div className="mono mt-1 text-[10px] text-slate-500">星际供应链 · 实时经济模拟</div>
-      </div>
-      <div className="space-y-1.5">
-        <InfoRow label="版本" value={APP_VERSION} />
-        <InfoRow label="构建" value={BUILD_STAMP} />
-        <InfoRow label="前端" value="React 18 · TypeScript · Vite · Tailwind" />
-        <InfoRow label="后端" value="Rust · axum · 确定性 tick 循环" />
-        <InfoRow label="会话" value="argon2 · HttpOnly Cookie" />
-        <InfoRow label="身份" value={roleLabel(account?.role ?? user?.role)} />
-      </div>
-      <p className="text-[11px] leading-relaxed text-slate-500">
-        前后端分离的遥测控制台：server 负责确定性 tick、经济模拟与鉴权，浏览器只做渲染与交互；
-        所有玩家态请求的身份来自会话 cookie，不再由前端自行传 company_id。
-      </p>
-    </div>
-  );
-
   const gateError = loadError !== null && account === null;
 
   return (
@@ -745,16 +711,10 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
             </button>
           );
         })}
-        <div className="mt-auto space-y-0.5 border-t border-white/[0.05] px-2.5 py-1.5">
-          <div className="mono text-[9px] text-slate-600">{APP_VERSION}</div>
-          <div className="mono text-[9px] text-slate-700">BUILD {BUILD_STAMP}</div>
-        </div>
       </nav>
 
       <section className="min-h-0 min-w-0 flex-1 overflow-y-auto px-3 py-2.5">
-        {tab === 'about' ? (
-          renderAbout()
-        ) : gateError ? (
+        {gateError ? (
           <div className="space-y-2">
             <ErrorBox text={loadError ?? ''} />
             <div className="flex items-center gap-2">
