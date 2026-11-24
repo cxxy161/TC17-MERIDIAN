@@ -4,9 +4,9 @@ services:
     container_name: meridian
     env_file:
       - .env
-    # 只监听回环：公网流量必须经 Caddy/反代（见 deploy/Caddyfile）
+    # 对外监听 18420（容器内绑定 0.0.0.0:18420；若只走本机 Caddy 可改回 127.0.0.1:18420:18420）
     ports:
-      - "127.0.0.1:18420:18420"
+      - "18420:18420"
     volumes:
       - ./data:/app/data
     # 非 root 运行。宿主数据目录需要可写：
