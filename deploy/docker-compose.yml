@@ -4,8 +4,28 @@ services:
     container_name: meridian
     env_file:
       - .env
+    # 只监听回环：公网流量必须经 Caddy/反代（见 deploy/Caddyfile）
     ports:
-      - "18420:18420"
+      - "127.0.0.1:18420:18420"
     volumes:
       - ./data:/app/data
+    # 非 root 运行。宿主数据目录需要可写：
+    #   mkdir -p data && sudo chown -R 10001:10001 data
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    memswap_limit: 512m
+    healthcheck:
+      # 运行时镜像 debian:bookworm-slim 自带 bash/grep；用 /dev/tcp 探 /api/health
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/18420 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"ok\":true' <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped

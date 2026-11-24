@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -104,6 +105,21 @@ async fn main() {
         },
     );
 
+    let trusted_proxies = std::env::var("MERIDIAN_TRUSTED_PROXIES").unwrap_or_default();
+    let allowed_origins = std::env::var("MERIDIAN_ALLOWED_ORIGINS").unwrap_or_default();
+    if trusted_proxies.trim().is_empty() {
+        info!(
+            "MERIDIAN_TRUSTED_PROXIES 未配置：忽略所有 X-Forwarded-For，限流按 TCP peer IP 计（直连部署正确；反代部署必须配置）"
+        );
+    } else {
+        info!(trusted_proxies = %trusted_proxies, "已启用可信反代 CIDR 名单");
+    }
+    if allowed_origins.trim().is_empty() {
+        info!("MERIDIAN_ALLOWED_ORIGINS 未配置：不启用跨域（同源部署正确）");
+    } else {
+        info!(allowed_origins = %allowed_origins, "CORS 白名单已启用");
+    }
+
     info!(
         "Meridian server listening on http://{bind_addr} (data={:?}, db={:?})",
         data_path, db_path
@@ -112,12 +128,16 @@ async fn main() {
         .await
         .expect("failed to bind TCP listener");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .expect("axum serve failed");
+    // 必须带 ConnectInfo：client_ip 只能基于可信 peer 判断是否采信 X-Forwarded-For。
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .expect("axum serve failed");
 
     // Final world snapshot before exit
     let mut eng = shared.lock().await;

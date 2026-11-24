@@ -5,10 +5,22 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use meridian_core::{from_money, to_money, BankOpKind, Intent};
+use meridian_server::engine::{IntentQueueError, MAX_MANUAL_INTENTS_PER_COMPANY};
 use meridian_server::{build_router, GameEngine, SqliteStore};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tower::ServiceExt;
+
+/// argon2 HASH_GATE 是进程级 semaphore(1)：并行跑用例时多个 tokio 测试会同时排队哈希，
+/// 叠加 debug 构建 + 1200 tick 重负载可能超过 2s 等待窗（表现为 503）。
+/// 这里用测试级互斥把用例串行化，断言本身不做任何放宽。
+static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn data_json_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -29,6 +41,7 @@ async fn read_json(resp: axum::response::Response) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
+    let _serial = serial_guard();
     let db_dir = std::env::temp_dir().join(format!("meridian_test_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir).unwrap();
@@ -326,6 +339,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
 
 #[test]
 fn test_long_horizon_1200_ticks_economy_never_stalls() {
+    let _serial = serial_guard();
     let db_dir = std::env::temp_dir().join(format!("meridian_long_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&db_dir);
     std::fs::create_dir_all(&db_dir).unwrap();
@@ -461,6 +475,7 @@ fn login_request(email: &str, password: &str) -> Request<Body> {
 
 #[tokio::test]
 async fn test_auth_register_login_ownership_and_admin() {
+    let _serial = serial_guard();
     let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
     let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
     let shared = Arc::new(Mutex::new(engine));
@@ -613,6 +628,7 @@ async fn test_auth_register_login_ownership_and_admin() {
 
 #[tokio::test]
 async fn test_public_company_endpoint_and_leaderboard_omit_secrets() {
+    let _serial = serial_guard();
     let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
     let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
     let shared = Arc::new(Mutex::new(engine));
@@ -681,6 +697,7 @@ async fn test_public_company_endpoint_and_leaderboard_omit_secrets() {
 
 #[tokio::test]
 async fn test_admin_telemetry_and_player_ops() {
+    let _serial = serial_guard();
     let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
     let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
     let shared = Arc::new(Mutex::new(engine));
@@ -828,4 +845,271 @@ async fn test_admin_telemetry_and_player_ops() {
 
     let (st, _, _) = send(&app, login_request("ply@meridian.test", "new-password-99")).await;
     assert_eq!(st, StatusCode::OK);
+}
+
+/* ============================================================ 安全回归 */
+
+fn login_request_with_xff(email: &str, password: &str, xff: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header("content-type", "application/json")
+        .header("x-forwarded-for", xff)
+        .body(Body::from(
+            serde_json::json!({ "email": email, "password": password, "remember": false })
+                .to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_security_headers_csrf_body_limit_and_unknown_api() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+
+    // 临时 dist：验证「未知 /api 回 JSON 404、其它未知路径回 SPA、静态资源照常」。
+    let dist = std::env::temp_dir().join(format!("meridian_dist_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dist);
+    std::fs::create_dir_all(&dist).unwrap();
+    std::fs::write(dist.join("index.html"), "<html>SPA-INDEX</html>").unwrap();
+    std::fs::write(dist.join("asset.txt"), "asset-body").unwrap();
+
+    let app = build_router(Arc::clone(&shared), Some(dist.clone()));
+
+    // 1. 未知 /api/* → JSON 404（不能是 200 index.html），且带全套安全头
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/api/does-not-exist").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        resp.headers().get("x-content-type-options").unwrap().to_str().unwrap(),
+        "nosniff"
+    );
+    assert_eq!(resp.headers().get("x-frame-options").unwrap().to_str().unwrap(), "DENY");
+    assert_eq!(
+        resp.headers().get("referrer-policy").unwrap().to_str().unwrap(),
+        "strict-origin-when-cross-origin"
+    );
+    assert!(
+        resp.headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("'unsafe-eval'"),
+        "CSP 必须允许 'unsafe-eval'（ConsolePanel 使用 new Function）"
+    );
+    assert!(
+        resp.headers().get("strict-transport-security").is_none(),
+        "没有 X-Forwarded-Proto: https 时不得下发 HSTS"
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["message"].is_string());
+
+    // 2. 未知非 /api 路径仍回 SPA index.html
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/dashboard").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(String::from_utf8_lossy(&bytes), "<html>SPA-INDEX</html>");
+
+    // 3. 静态资源照常由 ServeDir 提供
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/asset.txt").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. 反代声明 https 时才下发 HSTS
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/health")
+                .header("x-forwarded-proto", "https")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("strict-transport-security").unwrap().to_str().unwrap(),
+        "max-age=31536000; includeSubDomains"
+    );
+
+    // 5. 认证响应带 Cache-Control: no-store
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"email":"nobody@meridian.test","password":"wrong-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.headers().get("cache-control").unwrap().to_str().unwrap(), "no-store");
+
+    // 6. 非白名单 Origin 的写请求 → 403
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .header("origin", "https://evil.example")
+                .body(Body::from(
+                    r#"{"email":"nobody@meridian.test","password":"wrong-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 6b. 同源 Origin（Origin 与 Host 一致）不得被误杀：正常进入登录逻辑 → 401
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .header("host", "meridian.test")
+                .header("origin", "https://meridian.test")
+                .body(Body::from(
+                    r#"{"email":"nobody@meridian.test","password":"wrong-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "同源 Origin 不应被 CSRF 层拦截");
+
+    // 7. Sec-Fetch-Site: cross-site → 403
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .header("sec-fetch-site", "cross-site")
+                .body(Body::from(
+                    r#"{"email":"nobody@meridian.test","password":"wrong-password"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+    // 8. 超过 2 MiB 的请求体 → 413
+    let big = vec![b'a'; 2 * 1024 * 1024 + 1];
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(big))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let _ = std::fs::remove_dir_all(&dist);
+}
+
+#[tokio::test]
+async fn test_login_account_lockout_cannot_be_bypassed_by_spoofed_xff() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    let (st, _, _) = send(&app, register_request("lock@meridian.test", "Lock", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+
+    // 每次轮换伪造 XFF；无可信 ConnectInfo 时 XFF 一律被忽略 → 第 5 次触发账号锁定。
+    for i in 1..=4 {
+        let xff = format!("203.0.113.{i}");
+        let (st, _, _) =
+            send(&app, login_request_with_xff("lock@meridian.test", "wrong-password", &xff)).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED, "第 {i} 次失败应为 401");
+    }
+    let (st, body, _) = send(
+        &app,
+        login_request_with_xff("lock@meridian.test", "wrong-password", "203.0.113.5"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS, "第 5 次失败应触发账号锁定");
+    assert!(body["cooldown_until"].is_number());
+
+    // 锁定期间即使密码正确也拒绝
+    let (st, _, _) = send(&app, login_request("lock@meridian.test", "password-123")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[test]
+fn test_manual_intent_queue_has_per_company_cap() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let mut engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let home = engine
+        .world
+        .companies
+        .get("player1")
+        .expect("player1 must exist")
+        .home_planet_id
+        .clone();
+
+    let make_intent = || Intent::BankOp {
+        planet_id: home.clone(),
+        op: BankOpKind::Deposit,
+        amount: to_money(1.0),
+    };
+
+    for _ in 0..MAX_MANUAL_INTENTS_PER_COMPANY {
+        engine
+            .queue_manual_intent("player1".to_string(), make_intent())
+            .expect("queue under cap must succeed");
+    }
+    let err = engine
+        .queue_manual_intent("player1".to_string(), make_intent())
+        .expect_err("queue over cap must fail");
+    match err {
+        IntentQueueError::QueueFull { company_id, limit } => {
+            assert_eq!(company_id, "player1");
+            assert_eq!(limit, MAX_MANUAL_INTENTS_PER_COMPANY);
+        }
+        other => panic!("expected QueueFull, got {other:?}"),
+    }
+    assert_eq!(
+        engine.runner.extra_intents["player1"].len(),
+        MAX_MANUAL_INTENTS_PER_COMPANY
+    );
+    assert!(matches!(
+        engine.queue_manual_intent("does-not-exist".to_string(), make_intent()),
+        Err(IntentQueueError::UnknownCompany(_))
+    ));
 }

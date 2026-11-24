@@ -2,29 +2,71 @@
 //! market depth/candle queries, manual intents, and static frontend serving.
 
 use std::collections::{BTreeMap, HashMap};
+use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::{Html, IntoResponse};
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use meridian_core::{from_money, Intent, MONEY_SCALE};
 use meridian_sandbox::{normalize_module_name, NpcGenome, PlayerRunConfig, PlayerScriptBundle};
 use serde::{Deserialize, Serialize};
-use tower_http::cors::CorsLayer;
+use tower::limit::ConcurrencyLimitLayer;
+use tower::ServiceExt;
+use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::timeout::TimeoutLayer;
 
 use crate::auth::{
     self, clear_cookie, client_ip, cookie_secure, ensure_owner, hash_password, new_token, now_secs,
-    session_cookie, token_hash, verify_password, verify_turnstile, AdminUser, AuthUser,
+    session_cookie, token_hash, verify_password, verify_turnstile, AdminUser, AuthUser, ClientAddr,
     SESSION_TTL_DEFAULT, SESSION_TTL_REMEMBER,
 };
-use crate::engine::SharedEngine;
+use crate::engine::{IntentQueueError, SharedEngine};
 use crate::storage::{CandleRow, TradeRow};
 
 const ADMIN_HTML: &str = include_str!("../assets/admin.html");
+
+/// 请求体上限（2 MiB）。
+const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// 同时在途请求上限；超出后排队，排队时间计入 TimeoutLayer。
+const MAX_CONCURRENT_REQUESTS: usize = 256;
+/// 单请求总超时（含排队与请求体读取）。
+const REQUEST_TIMEOUT_SECS: u64 = 15;
+
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
+/// MERIDIAN_ALLOWED_ORIGINS（逗号分隔的完整 Origin，如 https://meridian.example.com）。
+/// 为空 = 不启用跨域；显式拒绝 *（与 credentials 组合是浏览器的非法配置）。
+static ALLOWED_ORIGINS: LazyLock<Vec<HeaderValue>> = LazyLock::new(|| {
+    let raw = std::env::var("MERIDIAN_ALLOWED_ORIGINS").unwrap_or_default();
+    let mut out = Vec::new();
+    for item in raw.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if item == "*" {
+            tracing::warn!("MERIDIAN_ALLOWED_ORIGINS 不接受 *（与 credentials 冲突），已忽略");
+            continue;
+        }
+        match item.parse::<HeaderValue>() {
+            Ok(value) => out.push(value),
+            Err(_) => {
+                tracing::warn!(origin = item, "MERIDIAN_ALLOWED_ORIGINS 含无效 Origin，已忽略")
+            }
+        }
+    }
+    out
+});
 
 pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
     let api_router = Router::new()
@@ -57,16 +99,204 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/account/password", post(change_password_handler))
         .route("/api/account/sessions/revoke", post(revoke_sessions_handler))
         .route("/ws", get(ws_handler))
-        .with_state(engine)
-        .layer(CorsLayer::permissive());
+        .with_state(engine);
 
-    match dist_dir {
+    let app = match dist_dir {
         Some(dir) if dir.exists() => {
             let index = dir.join("index.html");
-            api_router.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)))
+            let static_files = ServeDir::new(dir).fallback(ServeFile::new(index));
+            // 未知 /api/* 必须回 JSON 404，不能被 SPA 兜底成 200 index.html。
+            let guarded = tower::service_fn(move |req: Request| {
+                let static_files = static_files.clone();
+                async move {
+                    if is_api_path(req.uri().path()) {
+                        Ok::<_, Infallible>(api_not_found_response())
+                    } else {
+                        let response = static_files.oneshot(req).await?;
+                        Ok::<_, Infallible>(response.map(axum::body::Body::new))
+                    }
+                }
+            });
+            api_router.fallback_service(guarded)
         }
-        _ => api_router,
+        _ => api_router.fallback(api_not_found_handler),
+    };
+
+    let app = app
+        .layer(middleware::from_fn(csrf_guard))
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BODY_BYTES))
+        .layer(ConcurrencyLimitLayer::new(MAX_CONCURRENT_REQUESTS))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        ))
+        .layer(middleware::from_fn(security_headers));
+
+    let app = static_security_headers(app);
+
+    // CORS 放最外层：预检请求由 CORS 层直接响应，不会落进 CSRF 校验。
+    match cors_layer() {
+        Some(cors) => app.layer(cors),
+        None => app,
     }
+}
+
+fn is_api_path(path: &str) -> bool {
+    path == "/api" || path.starts_with("/api/")
+}
+
+fn api_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({ "message": "接口不存在" })),
+    )
+        .into_response()
+}
+
+async fn api_not_found_handler() -> Response {
+    api_not_found_response()
+}
+
+fn forbidden_cross_site_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "message": "跨站请求被拒绝" })),
+    )
+        .into_response()
+}
+
+fn static_security_headers(app: Router) -> Router {
+    app.layer(SetResponseHeaderLayer::overriding(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    ))
+    .layer(SetResponseHeaderLayer::overriding(
+        header::X_FRAME_OPTIONS,
+        HeaderValue::from_static("DENY"),
+    ))
+    .layer(SetResponseHeaderLayer::overriding(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    ))
+    .layer(SetResponseHeaderLayer::overriding(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    ))
+}
+
+fn cors_layer() -> Option<CorsLayer> {
+    if ALLOWED_ORIGINS.is_empty() {
+        return None;
+    }
+    // 显式 Origin 列表 + credentials；永远不会出现 * 与 credentials 的组合。
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(ALLOWED_ORIGINS.clone()))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::OPTIONS,
+            ])
+            .allow_headers([header::CONTENT_TYPE])
+            .allow_credentials(true),
+    )
+}
+
+/// HSTS（仅当反代声明 X-Forwarded-Proto: https）与认证响应的 Cache-Control: no-store。
+async fn security_headers(req: Request, next: Next) -> Response {
+    let forwarded_https = req
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| {
+            v.split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("https")
+        })
+        .unwrap_or(false);
+    let no_store = {
+        let path = req.uri().path();
+        path.starts_with("/api/auth/")
+            || path == "/api/auth"
+            || path.starts_with("/api/account")
+            || path == "/api/state"
+    };
+    let mut response = next.run(req).await;
+    if forwarded_https {
+        response.headers_mut().insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+    if no_store {
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+fn origin_allowed(origin: &str) -> bool {
+    ALLOWED_ORIGINS
+        .iter()
+        .any(|allowed| allowed.as_bytes() == origin.as_bytes())
+}
+
+/// 同源写请求也带 Origin：Origin 的 host[:port] 与请求 Host 一致时视为同源放行，
+/// 这样 MERIDIAN_ALLOWED_ORIGINS 留空（同源部署）不会被 CSRF 层误杀。
+fn origin_matches_host(origin: &str, headers: &HeaderMap) -> bool {
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    if authority.contains(['/', '?', '#']) {
+        return false;
+    }
+    let Some(host) = headers.get(header::HOST).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    // 默认端口（http:80 / https:443）在 Origin 与 Host 中可能一个有、一个没有
+    let strip_default_port = |value: &str| -> String {
+        let value = value.trim().to_ascii_lowercase();
+        let default_port = if scheme == "https" { ":443" } else { ":80" };
+        value.strip_suffix(default_port).unwrap_or(&value).to_string()
+    };
+    strip_default_port(authority) == strip_default_port(host)
+}
+
+/// CSRF 纵深：非安全方法若带 Origin 且不在白名单，或 Sec-Fetch-Site: cross-site，直接 403。
+/// 仍保留 SameSite=Lax Cookie 作为第一道防线。
+async fn csrf_guard(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    if method != Method::GET && method != Method::HEAD && method != Method::OPTIONS {
+        let origin = req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let origin_ok = origin
+            .map(|origin| origin_allowed(origin) || origin_matches_host(origin, req.headers()))
+            .unwrap_or(true);
+        let cross_site = req
+            .headers()
+            .get("sec-fetch-site")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().eq_ignore_ascii_case("cross-site"))
+            .unwrap_or(false);
+        if !origin_ok || cross_site {
+            tracing::warn!(origin = ?origin, cross_site, "拒绝跨站写请求（CSRF 纵深）");
+            return forbidden_cross_site_response();
+        }
+    }
+    next.run(req).await
 }
 
 #[derive(Serialize)]
@@ -134,7 +364,7 @@ async fn admin_script_toggle_handler(
     };
     eng.store
         .save_player_memory(&company_id, &mem_copy, req.enabled)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     eng.mark_player_memory_saved(&company_id, &mem_copy, req.enabled);
     Ok(Json(serde_json::json!({ "ok": true, "company_id": company_id, "enabled": req.enabled })))
 }
@@ -160,7 +390,7 @@ async fn admin_user_status_handler(
     let found = eng
         .store
         .set_user_status(user_id, &req.status, now_secs())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     if !found {
         return Err((StatusCode::NOT_FOUND, format!("Unknown user {user_id}")));
     }
@@ -180,13 +410,13 @@ async fn admin_user_kick_handler(
         let deleted = eng
             .store
             .delete_other_sessions(user_id, admin.0.session_id)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(internal_error)?;
         return Ok(Json(serde_json::json!({ "ok": true, "revoked": deleted })));
     }
     let deleted = eng
         .store
         .delete_all_sessions(user_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     Ok(Json(serde_json::json!({ "ok": true, "revoked": deleted })))
 }
 
@@ -213,7 +443,7 @@ async fn admin_user_password_handler(
     }
     eng.store
         .update_password(user_id, &hash, &salt)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     let _ = eng.store.delete_all_sessions(user_id);
     Ok(Json(serde_json::json!({ "ok": true, "user_id": user_id })))
 }
@@ -450,11 +680,11 @@ async fn market_book_handler(
     let candles = eng
         .store
         .query_candles(sid, item_id, candle_lim)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     let recent_trades = eng
         .store
         .query_recent_trades(sid, item_id, 40)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
 
     Ok(Json(MarketBookResp {
         station_id: sid.to_string(),
@@ -532,7 +762,7 @@ async fn market_candles_handler(
     let range = eng
         .store
         .query_candles_range(sid, item_id, period, from_bucket, to_bucket)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
 
     Ok(Json(MarketCandlesResp {
         station_id: sid.to_string(),
@@ -624,7 +854,7 @@ async fn put_scripts_handler(
     let bundle = PlayerScriptBundle { modules: clean_mods };
     eng.store
         .save_player_bundle(&company_id, &bundle)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     eng.runner.set_player_script(&company_id, bundle);
 
     if let Some(en) = req.enabled {
@@ -676,7 +906,7 @@ async fn put_memory_handler(
     let enabled = eng.runner.players[&company_id].enabled;
     eng.store
         .save_player_memory(&company_id, &req.memory_json, enabled)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(internal_error)?;
     eng.mark_player_memory_saved(&company_id, &req.memory_json, enabled);
 
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -694,9 +924,18 @@ async fn post_intent_handler(
     Json(req): Json<PostIntentReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     ensure_owner(&user, &req.company_id)?;
+    let company_id = req.company_id;
     let mut eng = engine.lock().await;
-    eng.queue_manual_intent(req.company_id, req.intent)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    eng.queue_manual_intent(company_id.clone(), req.intent)
+        .map_err(|e| match e {
+            IntentQueueError::QueueFull { limit, .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("手动指令队列已满（每家公司上限 {limit} 条），请稍后重试"),
+            ),
+            IntentQueueError::UnknownCompany(id) => {
+                (StatusCode::NOT_FOUND, format!("公司 '{id}' 不存在"))
+            }
+        })?;
     Ok(Json(serde_json::json!({ "ok": true, "queued": true })))
 }
 
@@ -729,13 +968,13 @@ async fn sim_control_handler(
         "step" => {
             let bcast = eng
                 .step_once()
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                .map_err(internal_error)?;
             Ok(Json(serde_json::to_value(&bcast).unwrap()))
         }
         "reset" => {
             let bcast = eng
                 .reset_world()
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+                .map_err(internal_error)?;
             Ok(Json(serde_json::to_value(&bcast).unwrap()))
         }
         other => Err((
@@ -778,17 +1017,17 @@ async fn create_company_handler(
         let bundle = PlayerScriptBundle::single_main(crate::engine::STARTER_PLAYER_JS);
         eng.store
             .save_player_bundle(&req.id, &bundle)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(internal_error)?;
         eng.store
             .save_player_memory(&req.id, "{}", true)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(internal_error)?;
         eng.mark_player_memory_saved(&req.id, "{}", true);
         eng.runner.set_player_script(&req.id, bundle);
     } else {
         let genome = NpcGenome::from_seed(eng.world.tick.wrapping_add(req.id.len() as u64) + 31337);
         eng.store
             .save_npc_genome(&req.id, &genome)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(internal_error)?;
         eng.runner.register_npc(&req.id, genome);
     }
 
@@ -904,6 +1143,12 @@ impl ApiError {
             },
         }
     }
+
+    /// 内部错误：客户端只看到通用文案，细节（含 SQLite 报错）只进 tracing。
+    fn internal(err: impl std::fmt::Display) -> Self {
+        tracing::error!(error = %err, "请求处理失败");
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR_MESSAGE)
+    }
 }
 
 impl IntoResponse for ApiError {
@@ -945,15 +1190,49 @@ fn user_json(user: &crate::storage::UserRow) -> serde_json::Value {
     })
 }
 
+/// 500 响应的统一文案：细节只进日志，不回显给客户端（避免泄露 SQLite/内部结构）。
+const INTERNAL_ERROR_MESSAGE: &str = "服务器内部错误，请稍后重试";
+
+fn internal_error(err: impl std::fmt::Display) -> (StatusCode, String) {
+    tracing::error!(error = %err, "请求处理失败");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        INTERNAL_ERROR_MESSAGE.to_string(),
+    )
+}
+
+/// argon2 全局闸门最多等待 2s，超时 503（避免未认证请求无限排队）。
+const HASH_GATE_WAIT: Duration = Duration::from_secs(2);
+
+/// 注册/登录全局在途上限：Turnstile 网络等待 + 阻塞哈希都算在途。
+static AUTH_INFLIGHT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(64);
+
+fn auth_inflight_slot() -> Result<tokio::sync::SemaphorePermit<'static>, ApiError> {
+    AUTH_INFLIGHT
+        .try_acquire()
+        .map_err(|_| ApiError::new(StatusCode::TOO_MANY_REQUESTS, "认证请求过多，请稍后重试"))
+}
+
+async fn hash_gate_permit() -> Result<tokio::sync::SemaphorePermit<'static>, ApiError> {
+    match tokio::time::timeout(HASH_GATE_WAIT, auth::HASH_GATE.acquire()).await {
+        Ok(Ok(permit)) => Ok(permit),
+        Ok(Err(_)) => Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "认证服务暂不可用，请稍后重试",
+        )),
+        Err(_) => Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "认证服务繁忙，请稍后重试",
+        )),
+    }
+}
+
 async fn hash_blocking(password: String) -> Result<(String, String), ApiError> {
-    let _permit = auth::HASH_GATE
-        .acquire()
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _permit = hash_gate_permit().await?;
     tokio::task::spawn_blocking(move || hash_password(&password))
         .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)
 }
 
 async fn verify_blocking(
@@ -961,13 +1240,10 @@ async fn verify_blocking(
     salt: String,
     hash: String,
 ) -> Result<bool, ApiError> {
-    let _permit = auth::HASH_GATE
-        .acquire()
-        .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let _permit = hash_gate_permit().await?;
     tokio::task::spawn_blocking(move || verify_password(&password, &salt, &hash))
         .await
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(ApiError::internal)
 }
 
 #[derive(Deserialize)]
@@ -982,8 +1258,11 @@ struct RegisterReq {
 async fn register_handler(
     State(engine): State<SharedEngine>,
     headers: HeaderMap,
+    client: ClientAddr,
     Json(req): Json<RegisterReq>,
 ) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    // 全局在途上限：超出直接 429，不让慢请求（Turnstile/哈希）无限堆积。
+    let _slot = auth_inflight_slot()?;
     let email = req.email.trim().to_lowercase();
     let nickname = req.nickname.trim().to_string();
     if !valid_email(&email) {
@@ -1001,7 +1280,7 @@ async fn register_handler(
         return Err(ApiError::field(StatusCode::BAD_REQUEST, "密码不能超过 128 位", "password"));
     }
 
-    let ip = client_ip(&headers);
+    let ip = client_ip(&headers, client.connect_info());
     {
         let eng = engine.lock().await;
         if let Err(msg) = eng.auth.check_register(&ip) {
@@ -1009,7 +1288,11 @@ async fn register_handler(
         }
     }
 
-    let remote_ip = if ip == "local" { None } else { Some(ip.as_str()) };
+    let remote_ip = if ip == auth::UNKNOWN_CLIENT {
+        None
+    } else {
+        Some(ip.as_str())
+    };
     verify_turnstile(&req.turnstile_token, remote_ip)
         .await
         .map_err(|m| ApiError::new(StatusCode::FORBIDDEN, m))?;
@@ -1034,7 +1317,7 @@ async fn register_handler(
     let user_id = eng
         .store
         .create_user(&email, &nickname, &hash, &salt, role, "", now)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
 
     let company_id = if eng.company_is_unclaimed("player1") {
         "player1".to_string()
@@ -1043,20 +1326,20 @@ async fn register_handler(
     };
     eng.store
         .set_user_company(user_id, &company_id)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     eng.provision_player_company(&company_id, &nickname)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
 
     let ttl = SESSION_TTL_DEFAULT;
     let token = new_token();
     eng.store
         .create_session(user_id, &token_hash(&token), now, now + ttl, &user_agent(&headers))
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     let _ = eng.store.set_last_login(user_id, now);
     let user = eng
         .store
         .user_by_id(user_id)
-        .ok_or_else(|| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "用户创建失败"))?;
+        .ok_or_else(|| ApiError::internal("用户创建失败"))?;
     let body = user_json(&user);
     drop(eng);
 
@@ -1077,17 +1360,42 @@ struct LoginReq {
     remember: bool,
 }
 
+/// 记录一次账号登录失败，达到阈值时返回 429（带解锁时间戳）。
+async fn login_failure(engine: &SharedEngine, email: &str) -> ApiError {
+    let locked_until = {
+        let eng = engine.lock().await;
+        eng.auth.record_login_failure(email)
+    };
+    if let Some(until) = locked_until {
+        return ApiError::cooldown(
+            format!("密码错误次数过多，账号已临时锁定至 {until}"),
+            until,
+        );
+    }
+    ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误")
+}
+
 async fn login_handler(
     State(engine): State<SharedEngine>,
     headers: HeaderMap,
+    client: ClientAddr,
     Json(req): Json<LoginReq>,
 ) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
+    // 全局在途上限：超出直接 429，不让慢请求无限堆积。
+    let _slot = auth_inflight_slot()?;
     let email = req.email.trim().to_lowercase();
-    let ip = client_ip(&headers);
+    let ip = client_ip(&headers, client.connect_info());
     {
         let eng = engine.lock().await;
         if let Err(msg) = eng.auth.check_login(&ip) {
             return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, msg));
+        }
+        // 按账号维度的失败锁定：换 IP 也无法继续猜密码。
+        if let Some(until) = eng.auth.account_lock_until(&email) {
+            return Err(ApiError::cooldown(
+                format!("该账号因多次密码错误已被临时锁定，解锁时间戳 {until}"),
+                until,
+            ));
         }
     }
 
@@ -1098,11 +1406,11 @@ async fn login_handler(
     let Some((user, salt, hash)) = found else {
         // 用户不存在也跑一次哈希，避免通过响应时间探测账号是否注册
         let _ = hash_blocking(req.password.clone()).await;
-        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
+        return Err(login_failure(&engine, &email).await);
     };
     let ok = verify_blocking(req.password.clone(), salt, hash).await?;
     if !ok {
-        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误"));
+        return Err(login_failure(&engine, &email).await);
     }
     if user.status != "active" {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "账号已被禁用"));
@@ -1117,6 +1425,8 @@ async fn login_handler(
     let token = new_token();
     {
         let eng = engine.lock().await;
+        // 登录成功：清零该账号的失败计数。
+        eng.auth.clear_login_failures(&email);
         eng.store
             .create_session(
                 user.id,
@@ -1125,7 +1435,7 @@ async fn login_handler(
                 now + ttl,
                 &user_agent(&headers),
             )
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(ApiError::internal)?;
         let _ = eng.store.set_last_login(user.id, now);
         let _ = eng.store.purge_expired_sessions(now);
     }
@@ -1148,7 +1458,7 @@ async fn logout_handler(
     let eng = engine.lock().await;
     eng.store
         .delete_session(user.session_id)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     drop(eng);
     Ok((
         [(header::SET_COOKIE, clear_cookie(cookie_secure(&headers)))],
@@ -1227,7 +1537,7 @@ async fn update_account_handler(
     }
     eng.store
         .update_nickname(user.user.id, &nickname, now)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "ok": true, "nickname": nickname })))
 }
 
@@ -1278,7 +1588,7 @@ async fn change_password_handler(
     let eng = engine.lock().await;
     eng.store
         .update_password(user.user.id, &new_hash, &new_salt)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     // 改密后踢掉其它设备，只保留当前会话
     let _ = eng.store.delete_other_sessions(user.user.id, user.session_id);
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1303,7 +1613,7 @@ async fn revoke_sessions_handler(
         let removed = eng
             .store
             .delete_other_sessions(user.user.id, user.session_id)
-            .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            .map_err(ApiError::internal)?;
         return Ok(Json(serde_json::json!({ "ok": true, "revoked": removed })));
     }
     let session_id = match req.session_id {
@@ -1330,6 +1640,6 @@ async fn revoke_sessions_handler(
     }
     eng.store
         .delete_session(session_id)
-        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "ok": true, "revoked": 1 })))
 }

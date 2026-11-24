@@ -1,0 +1,36 @@
+# Meridian 反向代理示例（Caddy 2）
+#
+# 用法：
+#   1) 设置域名：环境变量 MERIDIAN_DOMAIN=meridian.example.com（或用真实域名替换占位符）
+#   2) 后端只监听回环：MERIDIAN_ADDR=127.0.0.1:18420
+#   3) 后端信任本机反代：MERIDIAN_TRUSTED_PROXIES=127.0.0.1/32,::1/128
+#   4) caddy run --config deploy/Caddyfile；80/443 可达时证书自动申请/续期
+#
+# 关键点：
+#   - TLS 在 Caddy 终结；后端依据 X-Forwarded-Proto 决定 Cookie Secure 与 HSTS
+#   - X-Forwarded-For 必须「覆盖写」而不是追加，否则客户端自带的伪造值会留在链上
+#   - 安全响应头在 Caddy 再兜一层（后端也已统一注入）；-Server 去掉版本指纹
+
+{
+	email {$ACME_EMAIL:ops@example.com}
+}
+
+{$MERIDIAN_DOMAIN:meridian.example.com} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	# WebSocket（/ws）由 reverse_proxy 自动透传
+	reverse_proxy 127.0.0.1:18420 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+	}
+}

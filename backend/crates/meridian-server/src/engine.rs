@@ -204,6 +204,30 @@ impl Drop for GameEngine {
     }
 }
 
+/// 手动指令队列每公司上限：防止连接方无限堆叠意图把内存打爆。
+pub const MAX_MANUAL_INTENTS_PER_COMPANY: usize = 256;
+
+/// queue_manual_intent 的失败原因；api 层据此映射 404 / 429。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntentQueueError {
+    UnknownCompany(String),
+    QueueFull { company_id: String, limit: usize },
+}
+
+impl std::fmt::Display for IntentQueueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownCompany(id) => write!(f, "Unknown company '{id}'"),
+            Self::QueueFull { company_id, limit } => write!(
+                f,
+                "手动指令队列已满：公司 '{company_id}' 上限 {limit} 条，请稍后重试"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for IntentQueueError {}
+
 impl GameEngine {
     pub fn bootstrap(
         data_path: PathBuf,
@@ -1728,15 +1752,26 @@ impl GameEngine {
         }
     }
 
-    pub fn queue_manual_intent(&mut self, company_id: String, intent: Intent) -> Result<(), String> {
+    pub fn queue_manual_intent(
+        &mut self,
+        company_id: String,
+        intent: Intent,
+    ) -> Result<(), IntentQueueError> {
         if !self.world.companies.contains_key(&company_id) {
-            return Err(format!("Unknown company '{company_id}'"));
+            return Err(IntentQueueError::UnknownCompany(company_id));
         }
-        self.runner
+        let queue = self
+            .runner
             .extra_intents
-            .entry(company_id)
-            .or_default()
-            .push(intent);
+            .entry(company_id.clone())
+            .or_default();
+        if queue.len() >= MAX_MANUAL_INTENTS_PER_COMPANY {
+            return Err(IntentQueueError::QueueFull {
+                company_id,
+                limit: MAX_MANUAL_INTENTS_PER_COMPANY,
+            });
+        }
+        queue.push(intent);
         Ok(())
     }
 
