@@ -19,7 +19,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::storage::SqliteStore;
 
-pub const STARTER_PLAYER_JS: &str = r#"// 《Meridian》Screeps 风格默认玩家策略脚本
+pub const STARTER_PLAYER_JS: &str = r#"// 《Meridian》默认玩家策略脚本
 // 提示：支持 module.exports.loop、多模块 require()、Game、Memory、Store Proxy 与 console.log
 
 module.exports.loop = function () {

@@ -1,0 +1,37 @@
+/* 独立文档页专用：只补打印样式，其余复用 styles/index.css + Tailwind。 */
+@media print {
+  .docs-chrome,
+  .docs-nav,
+  .docs-pane-bar {
+    display: none !important;
+  }
+
+  html,
+  body,
+  #root,
+  .docs-print-root,
+  .docs-print-content {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .docs-print-root * {
+    color: #111 !important;
+    background: transparent !important;
+    border-color: #ccc !important;
+    box-shadow: none !important;
+  }
+
+  .docs-print-content {
+    padding: 0 !important;
+  }
+
+  pre,
+  code {
+    border: 1px solid #ddd !important;
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+  }
+}

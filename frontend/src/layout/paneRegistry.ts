@@ -1,5 +1,6 @@
 import type { CatalogIndex } from '../entities/catalogIndex';
 import type { WorldIndex } from '../entities/worldIndex';
+import { docTitle } from '../docs/apiDocs';
 
 export type PaneKind =
   | 'orbit'
@@ -19,6 +20,7 @@ export type PaneKind =
   | 'script'
   | 'memory'
   | 'console'
+  | 'apidocs'
   | 'settings';
 
 export interface PaneParams {
@@ -28,6 +30,8 @@ export interface PaneParams {
   itemId?: string;
   buildingId?: string;
   recipeId?: string;
+  /** API 文档窗口当前条目 id，如 'Game.market.createOrder'；undefined = 默认条目。 */
+  docId?: string;
 }
 
 export interface PaneProps {
@@ -86,9 +90,16 @@ export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'treasury', label: '央行与财务', description: '现金、储蓄、借贷与母星央行存贷', group: '财务' },
   { kind: 'ranking', label: '势力排行', description: '玩家与演化 NPC 净资产排名及货币守恒审计', group: '财务' },
   { kind: 'files', label: '代码文件', description: '脚本模块树管理', group: '开发' },
-  { kind: 'script', label: '脚本编辑器', description: 'Screeps 风格多模块 JS 策略 IDE 与热重载', group: '开发' },
+  { kind: 'script', label: '脚本编辑器', description: '多模块 JS 策略 IDE 与热重载', group: '开发' },
   { kind: 'memory', label: 'Memory 内存', description: '查看、搜索与编辑 128KB 持久化 JSON', group: '开发' },
   { kind: 'console', label: '控制台', description: 'F12 交互式 JS 命令行与沙盒实时日志流', group: '开发' },
+  {
+    kind: 'apidocs',
+    label: 'API 参考',
+    description: '玩家脚本 Game / Memory / 错误码速查与可复制示例',
+    group: '开发',
+    keywords: 'api 文档 手册 game memory console require store 接口 参考 js 脚本 错误码',
+  },
   { kind: 'settings', label: '个人设置', description: '账号信息、昵称密码与登录会话管理', group: '系统', keywords: '设置 账号 昵称 密码 会话 登出 关于' },
 ];
 
@@ -156,6 +167,8 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
       return 'Memory 内存';
     case 'console':
       return '控制台';
+    case 'apidocs':
+      return p.docId ? `API · ${docTitle(p.docId)}` : 'API 参考';
     case 'settings':
       return '设置';
     default:

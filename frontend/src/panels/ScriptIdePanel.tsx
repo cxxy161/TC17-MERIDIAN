@@ -8,7 +8,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 
-const SCREEPS_COMPLETIONS = [
+const API_COMPLETIONS = [
   { label: 'Game.time', type: 'property', detail: '当前回合数' },
   { label: 'Game.cpi', type: 'property', detail: '全星系物价指数' },
   { label: 'Game.cpu.getUsed()', type: 'method', detail: '当前脚本已消耗毫秒数' },
@@ -44,7 +44,7 @@ const SCREEPS_COMPLETIONS = [
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
 ];
 
-export const ScriptIdePanel: React.FC<PaneProps> = () => {
+export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
   const scripts = useGameStore((s) => s.scripts);
   const catalog = useGameStore((s) => s.catalog);
   const draftModules = useGameStore((s) => s.draftModules);
@@ -78,14 +78,14 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
       detail: `→ RESOURCE_${it.id.toUpperCase()}`,
       apply: `RESOURCE_${it.id.toUpperCase()}`,
     }));
-    return [...SCREEPS_COMPLETIONS, ...constants, ...aliases];
+    return [...API_COMPLETIONS, ...constants, ...aliases];
   }, [catalog]);
 
   useEffect(() => {
     const host = editorHostRef.current;
     if (!host) return;
 
-    const screepsSource = (context: CompletionContext) => {
+    const apiCompletionSource = (context: CompletionContext) => {
       // CJK included so Chinese item names trigger the alias completions.
       const word = context.matchBefore(/[\w.\u4e00-\u9fa5]+/);
       if (!word || (word.from === word.to && !context.explicit)) return null;
@@ -104,7 +104,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
         keymap.of([...defaultKeymap, ...historyKeymap]),
         javascript(),
         oneDark,
-        autocompletion({ override: [screepsSource] }),
+        autocompletion({ override: [apiCompletionSource] }),
         EditorView.updateListener.of((upd) => {
           if (upd.docChanged) {
             updateDraftModule(activeMod, upd.state.doc.toString());
@@ -227,6 +227,13 @@ export const ScriptIdePanel: React.FC<PaneProps> = () => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => openTemp('apidocs', { docId: 'overview/quickstart' })}
+            className="pill-btn py-0 text-[10px] whitespace-nowrap"
+            title="打开玩家脚本 API 参考（Game / Memory / 错误码）"
+          >
+            API 参考
+          </button>
           <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
             耗时 {cpuMs.toFixed(2)} / 5.00 ms
           </span>

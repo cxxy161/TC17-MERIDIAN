@@ -1,12 +1,11 @@
 (function (global) {
   "use strict";
 
-  // 1. Screeps-compatible constants
+  // 1. 全局常量与返回码
   const CONSTANTS = {
     OK: 0,
     ERR_NOT_OWNER: -1,
     ERR_NO_PATH: -2,
-    ERR_NAME_EXISTS: -3,
     ERR_BUSY: -4,
     ERR_NOT_FOUND: -5,
     ERR_NOT_ENOUGH_RESOURCES: -6,
@@ -14,7 +13,6 @@
     ERR_FULL: -8,
     ERR_NOT_IN_RANGE: -9,
     ERR_INVALID_ARGS: -10,
-    ERR_TIRED: -11,
     ERR_NOT_ENOUGH_CREDITS: -14,
     ORDER_BUY: "buy",
     ORDER_SELL: "sell",
@@ -72,7 +70,7 @@
     error: makeLogger("error"),
   });
 
-  // 3. Store Proxy (Screeps-compatible Store view)
+  // 3. Store Proxy（只读库存视图）
   function createStore(rawMap, totalCapacity) {
     const counts = Object.create(null);
     let totalUsed = 0;

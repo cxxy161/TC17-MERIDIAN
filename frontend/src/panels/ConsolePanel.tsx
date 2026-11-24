@@ -354,7 +354,7 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
           tick,
           level: 'system',
           message:
-            '控制台支持 F12 式 JS 表达式实时求值：例如 Game.company / Game.planets.P2.demands / Game.market.quote("ST:HUB","steel") / Memory / clear()',
+            '控制台支持 F12 式 JS 表达式实时求值：例如 Game.company / Game.planets[Game.company.homePlanetId].demands / Game.market.quote("ST:HUB","steel") / Memory / clear()。完整接口见 API 参考窗口或 /docs/。',
         },
       ]);
       return;

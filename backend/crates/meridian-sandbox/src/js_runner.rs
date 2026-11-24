@@ -1,4 +1,4 @@
-//! QuickJS (`rquickjs`) sandbox runner exposing Screeps-compatible `Game`, `Memory`, `Store`,
+//! QuickJS (`rquickjs`) sandbox runner exposing the player-script API: `Game`, `Memory`, `Store`,
 //! `console`, `require()`, and `OK/ERR_*` constants with strict CPU & heap isolation.
 
 use std::collections::HashMap;
@@ -321,7 +321,7 @@ pub fn run_player_tick(
             return;
         }
 
-        // Load Screeps prelude wrapper
+        // Load player-script prelude
         if let Err(err) = ctx.eval::<(), _>(PRELUDE_JS).catch(&ctx) {
             run_error = Some(format_caught_error(err));
             return;
@@ -607,7 +607,7 @@ fn install_host_bindings<'js>(
         )?;
     }
 
-    // 5. Intent emitters with Screeps validation codes
+    // 5. Intent emitters with return codes
     {
         let h = Arc::clone(&host);
         globals.set(

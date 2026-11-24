@@ -18,6 +18,7 @@ import { TreasuryPanel } from '../panels/TreasuryPanel';
 import { RankingPanel } from '../panels/RankingPanel';
 import { ScriptIdePanel } from '../panels/ScriptIdePanel';
 import { ConsolePanel } from '../panels/ConsolePanel';
+import { ApiDocsPanel } from '../panels/ApiDocsPanel';
 import { FileExplorerPanel } from '../panels/FileExplorerPanel';
 import { MemoryPanel } from '../panels/MemoryPanel';
 import { SettingsPanel } from '../panels/SettingsPanel';
@@ -40,6 +41,7 @@ const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   script: ScriptIdePanel,
   memory: MemoryPanel,
   console: ConsolePanel,
+  apidocs: ApiDocsPanel,
   settings: SettingsPanel,
 };
 

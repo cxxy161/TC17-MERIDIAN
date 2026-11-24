@@ -18,7 +18,7 @@ fn load_catalog() -> ProductionCatalog {
 }
 
 #[test]
-fn test_screeps_api_multimodule_memory_store_and_intents() {
+fn test_player_script_api_multimodule_memory_store_and_intents() {
     let catalog = load_catalog();
     let mut world = World::new_standard(catalog);
     world
@@ -31,9 +31,9 @@ fn test_screeps_api_multimodule_memory_store_and_intents() {
         module.exports.loop = function () {
             Memory.runs = (Memory.runs || 0) + 1;
 
-            // Validate Screeps constants & dynamic RESOURCES_ALL
+            // Validate script constants & dynamic RESOURCES_ALL
             if (OK !== 0 || RESOURCE_POWER !== 'power' || !Array.isArray(RESOURCES_ALL)) {
-                throw new Error('Missing Screeps constants');
+                throw new Error('Missing script constants');
             }
 
             // Validate Store Proxy returning 0 for valid unstocked items

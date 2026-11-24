@@ -380,7 +380,7 @@ fn test_manufacturing_recipe_switch_recycling_and_interplanetary_logistics() {
     assert!(world.companies["ind"].station_qty("ST:P1", "steel") > 0);
     assert!(world.companies["ind"].station_qty("ST:P1", "disposal_cert") > 0);
 
-    // Verify snapshot_for produces complete Screeps-ready data
+    // Verify snapshot_for produces complete script-ready data
     let snap = world.snapshot_for("ind").expect("snapshot for ind");
     assert_eq!(snap.company.id, "ind");
     assert!(snap.quotes.contains_key("ST:P1"));

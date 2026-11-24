@@ -7,7 +7,7 @@
 
 ## 1. 项目定位与核心设计原则
 
-《Meridian》是一款结合 **Screeps 编程沙盒**、**Prosperous Universe（PrUn）行星工业供应链** 与 **星际交易所 CLOB（中央限价订单簿）** 的轻量化多人/单人异步经济模拟游戏，设计目标是在 `2C / 500MB` 服务器上 24/7 稳定运行。
+《Meridian》是一款结合 **可编程自动化沙盒**、**Prosperous Universe（PrUn）行星工业供应链** 与 **星际交易所 CLOB（中央限价订单簿）** 的轻量化多人/单人异步经济模拟游戏，设计目标是在 `2C / 500MB` 服务器上 24/7 稳定运行。
 
 项目必须长期坚守以下两条**架构铁律**：
 
@@ -43,7 +43,7 @@ Meridian/
 │       ├── meridian-sandbox/         # 双端策略执行层（玩家 JS + 演化 NPC）
 │       │   ├── src/
 │       │   │   ├── js_runner.rs      # rquickjs 沙盒（4MB 堆 / 5ms 超时熔断 / 128KB Memory）
-│       │   │   ├── prelude.js        # 暴露给玩家脚本的 Screeps 风格 API（Game.*, CREEP/ORDER_* 等）
+│       │   │   ├── prelude.js        # 暴露给玩家脚本的 API（Game.* / ORDER_* 等）
 │       │   │   ├── npc.rs            # 零硬编码 NpcGenome 进化权重策略引擎
 │       │   │   ├── runner.rs         # rayon 并行决策与 Intent 提交协调器
 │       │   │   └── types.rs

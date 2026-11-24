@@ -1,4 +1,4 @@
-//! Core primitives, fixed-point money, Screeps-compatible return codes, and unified Intents.
+//! Core primitives, fixed-point money, player-script return codes, and unified Intents.
 
 use serde::{Deserialize, Serialize};
 
@@ -34,21 +34,19 @@ pub fn bps_of(amount: Money, bps: u32) -> Money {
     ((amount as i128 * bps as i128) / 10_000) as Money
 }
 
-/// Screeps-compatible error / status codes.
-pub type ScreepsCode = i32;
-pub const OK: ScreepsCode = 0;
-pub const ERR_NOT_OWNER: ScreepsCode = -1;
-pub const ERR_NO_PATH: ScreepsCode = -2;
-pub const ERR_NAME_EXISTS: ScreepsCode = -3;
-pub const ERR_BUSY: ScreepsCode = -4;
-pub const ERR_NOT_FOUND: ScreepsCode = -5;
-pub const ERR_NOT_ENOUGH_RESOURCES: ScreepsCode = -6;
-pub const ERR_INVALID_TARGET: ScreepsCode = -7;
-pub const ERR_FULL: ScreepsCode = -8;
-pub const ERR_NOT_IN_RANGE: ScreepsCode = -9;
-pub const ERR_INVALID_ARGS: ScreepsCode = -10;
-pub const ERR_TIRED: ScreepsCode = -11;
-pub const ERR_NOT_ENOUGH_CREDITS: ScreepsCode = -14;
+/// 玩家脚本写方法的返回码：0 成功，负数为错误码。
+pub type RetCode = i32;
+pub const OK: RetCode = 0;
+pub const ERR_NOT_OWNER: RetCode = -1;
+pub const ERR_NO_PATH: RetCode = -2;
+pub const ERR_BUSY: RetCode = -4;
+pub const ERR_NOT_FOUND: RetCode = -5;
+pub const ERR_NOT_ENOUGH_RESOURCES: RetCode = -6;
+pub const ERR_INVALID_TARGET: RetCode = -7;
+pub const ERR_FULL: RetCode = -8;
+pub const ERR_NOT_IN_RANGE: RetCode = -9;
+pub const ERR_INVALID_ARGS: RetCode = -10;
+pub const ERR_NOT_ENOUGH_CREDITS: RetCode = -14;
 
 pub type ItemId = String;
 pub type BuildingTypeId = String;

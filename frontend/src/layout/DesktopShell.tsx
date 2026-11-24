@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  BookOpen,
   Box,
   CandlestickChart,
   Code2,
@@ -73,9 +74,28 @@ const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode
   { kind: 'script', label: '脚本', icon: <Code2 className="w-4 h-4" /> },
   { kind: 'memory', label: '内存', icon: <Database className="w-4 h-4" /> },
   { kind: 'console', label: '控制台', icon: <Terminal className="w-4 h-4" /> },
+  { kind: 'apidocs', label: 'API', icon: <BookOpen className="w-4 h-4" /> },
 ];
 
 const MAX_FLOATING_WINDOWS = 10;
+
+/**
+ * PaneParams 里只有这 4 个是「实体焦点」。docId 之类的面板私有参数不能写进 lastFocus，
+ * 否则下次开别的窗口时会被当成焦点状态带出去。
+ */
+function focusOnly(params: Partial<PaneParams>): {
+  planetId?: string;
+  locationId?: string;
+  stationId?: string;
+  itemId?: string;
+} {
+  const out: { planetId?: string; locationId?: string; stationId?: string; itemId?: string } = {};
+  if (params.planetId) out.planetId = params.planetId;
+  if (params.locationId) out.locationId = params.locationId;
+  if (params.stationId) out.stationId = params.stationId;
+  if (params.itemId) out.itemId = params.itemId;
+  return out;
+}
 
 /**
  * Fill any missing entity for a pane that is being opened, so the pane's title and its content agree
@@ -214,14 +234,16 @@ export const DesktopShell: React.FC = () => {
         catalogRef.current,
       );
       const width =
-        kind === 'script'
-          ? 680
-          : kind === 'settings'
-            ? 600
-            : kind === 'chart' || kind === 'orbit'
-              ? 520
-              : 460;
-      const height = kind === 'script' || kind === 'settings' ? 460 : 380;
+        kind === 'apidocs'
+          ? 760
+          : kind === 'script'
+            ? 680
+            : kind === 'settings'
+              ? 600
+              : kind === 'chart' || kind === 'orbit'
+                ? 520
+                : 460;
+      const height = kind === 'apidocs' ? 560 : kind === 'script' || kind === 'settings' ? 460 : 380;
 
       setFloatingWindows((prev) => {
         const next = [
@@ -264,7 +286,7 @@ export const DesktopShell: React.FC = () => {
 
   const setFloatParams = useCallback(
     (id: string, patch: Partial<PaneParams>) => {
-      touchFocus(patch);
+      touchFocus(focusOnly(patch));
       setFloatingWindows((prev) =>
         prev.map((w) => {
           if (w.id !== id) return w;
@@ -276,7 +298,7 @@ export const DesktopShell: React.FC = () => {
   );
 
   const replaceFloat = useCallback((id: string, kind: PaneKind, params: PaneParams) => {
-    touchFocus(params);
+    touchFocus(focusOnly(params));
     setFloatingWindows((prev) =>
       prev.map((w) => (w.id === id ? { ...w, kind, params, title: undefined } : w)),
     );
@@ -284,7 +306,7 @@ export const DesktopShell: React.FC = () => {
 
   const setTileParams = useCallback(
     (tileId: string, patch: Partial<PaneParams>) => {
-      touchFocus(patch);
+      touchFocus(focusOnly(patch));
       updateActiveTree((tree) => setLeafParams(tree, tileId, patch));
     },
     [touchFocus, updateActiveTree],

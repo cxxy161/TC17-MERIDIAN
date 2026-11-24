@@ -77,11 +77,11 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const [facetSel, setFacetSel] = useState<Record<string, string | undefined>>({});
-  const [rect, setRect] = useState<{ top: number; left: number; width: number; openUp: boolean }>({
+  const [rect, setRect] = useState<{ top: number; left: number; width: number; maxHeight: number }>({
     top: 0,
     left: 0,
     width: 320,
-    openUp: false,
+    maxHeight: 360,
   });
 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -120,22 +120,53 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     return filtered;
   }, [options, query, facetSel]);
 
+  /**
+   * 用「弹层真实高度」决定朝上还是朝下，并始终与触发按钮保持 4px 间距、夹在视口内。
+   * 旧实现用固定 320px 估算：条目少的列表会离按钮很远（看起来像"飞上去"），
+   * 条目多时又会反过来盖住按钮。
+   */
   const reposition = useCallback(() => {
-    const el = triggerRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const wantHeight = 320;
-    const openUp = r.bottom + wantHeight > window.innerHeight - 8 && r.top > wantHeight;
-    setRect({
-      top: openUp ? Math.max(8, r.top - Math.min(wantHeight, r.top - 8) - 4) : r.bottom + 4,
-      left: Math.min(r.left, window.innerWidth - Math.max(r.width, 320) - 8),
-      width: Math.max(r.width, 320),
-      openUp,
-    });
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const r = trigger.getBoundingClientRect();
+    const margin = 8;
+    const gap = 4;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = Math.min(Math.max(r.width, 320), Math.max(240, vw - margin * 2));
+    const left = Math.min(Math.max(margin, r.left), Math.max(margin, vw - width - margin));
+    // scrollHeight 是内容自然高度（即使 maxHeight 已经把它裁短）
+    const pop = popRef.current;
+    const naturalHeight = pop ? Math.max(pop.scrollHeight, 160) : 320;
+    const spaceBelow = vh - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    const openUp = spaceBelow < naturalHeight && spaceAbove > spaceBelow;
+    const available = openUp ? spaceAbove : spaceBelow;
+    const maxHeight = Math.max(140, Math.min(naturalHeight, available));
+    const top = openUp
+      ? Math.max(margin, r.top - maxHeight - gap)
+      : Math.min(r.bottom + gap, vh - margin - maxHeight);
+    setRect((prev) =>
+      prev.top === top && prev.left === left && prev.width === width && prev.maxHeight === maxHeight
+        ? prev
+        : { top, left, width, maxHeight },
+    );
   }, []);
 
   useLayoutEffect(() => {
-    if (open) reposition();
+    if (!open) return;
+    reposition();
+    // 结果数量/分面变化会改变弹层高度，重新贴回按钮旁边（否则会留下空隙或盖住按钮）。
+  }, [open, reposition, measured.length, facetSel]);
+
+  // 悬浮窗/分割条拖动只触发 pointermove，不触发 scroll：按住拖动时让弹层跟着按钮走。
+  useEffect(() => {
+    if (!open) return;
+    const onDragMove = (e: PointerEvent) => {
+      if (e.buttons !== 0) reposition();
+    };
+    window.addEventListener('pointermove', onDragMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onDragMove);
   }, [open, reposition]);
 
   useEffect(() => {
@@ -218,7 +249,14 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       {open && (
         <div
           ref={popRef}
-          style={{ position: 'fixed', top: rect.top, left: rect.left, width: rect.width, zIndex: 10000 }}
+          style={{
+            position: 'fixed',
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            maxHeight: rect.maxHeight,
+            zIndex: 10000,
+          }}
           className="bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden flex flex-col"
           onKeyDown={onKeyDown}
         >
@@ -273,7 +311,12 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
 
           {header}
 
-          <div style={{ height: Math.min(300, Math.max(120, measured.length * ROW_HEIGHT + 4)) }}>
+          <div
+            style={{
+              height: Math.min(300, Math.max(120, measured.length * ROW_HEIGHT + 4)),
+              minHeight: 0,
+            }}
+          >
             <VirtualList
               count={measured.length}
               rowHeight={ROW_HEIGHT}

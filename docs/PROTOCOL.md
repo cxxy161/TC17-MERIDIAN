@@ -1,6 +1,6 @@
-# 《Meridian》统一决策协议与 Screeps 风格 JS API 规范（v1.0）
+# 《Meridian》统一决策协议与玩家 JS API 规范（v1.0）
 
-> 本文档定义 `meridian-core` 与 `meridian-sandbox` 之间的唯一契约：**`WorldSnapshot -> Intent[]`**，以及面向玩家的 **Screeps 风格 QuickJS 脚本接口（`module.exports.loop` / `Game` / `Memory` / `Store` / `OK & ERR_*`）**。
+> 本文档定义 `meridian-core` 与 `meridian-sandbox` 之间的唯一契约：**`WorldSnapshot -> Intent[]`**，以及面向玩家的 **QuickJS 脚本接口（`module.exports.loop` / `Game` / `Memory` / `Store` / `OK & ERR_*`）**。
 > **核心原则**：玩家 JS 脚本与 0 硬编码自由 NPC 站在完全同等的视野与动作约束下运行，物理与会计内核绝对不做决策启发式兜底。
 
 ---
@@ -19,15 +19,14 @@
 
 ---
 
-## 二、Screeps 风格全局常量与错误码
+## 二、全局常量与错误码
 
-对齐 Screeps 官方习惯（参考 `screeps-cn.github.io/api`）：
+返回值约定（写方法同步返回 `OK` 或负数错误码）：
 
 ```ts
 declare const OK: 0;
 declare const ERR_NOT_OWNER: -1;
 declare const ERR_NO_PATH: -2;
-declare const ERR_NAME_EXISTS: -3;
 declare const ERR_BUSY: -4;
 declare const ERR_NOT_FOUND: -5;
 declare const ERR_NOT_ENOUGH_RESOURCES: -6;
@@ -35,7 +34,6 @@ declare const ERR_INVALID_TARGET: -7;
 declare const ERR_FULL: -8;
 declare const ERR_NOT_IN_RANGE: -9;
 declare const ERR_INVALID_ARGS: -10;
-declare const ERR_TIRED: -11;
 declare const ERR_NOT_ENOUGH_CREDITS: -14;
 
 declare const ORDER_BUY: "buy";
@@ -54,10 +52,14 @@ declare const RESOURCES_ALL: readonly string[];
 
 ## 三、Player JS API（`TypeScript` 契约定义）
 
-此接口同时作为前端 **CodeMirror 6 智能补全（`.d.ts`）** 的唯一来源：
+此接口同时作为前端 **CodeMirror 6 智能补全（`.d.ts`）** 的唯一来源。
+> **2026-11-23 已按 `prelude.js` / `js_runner.rs` 逐条核对**：补上 `Game.cpi` / `Game.plots` / `RetCode` / `landListings`，修正 `demands` 形状与 `quote` 可空性。可交互版本（含错误码矩阵与可运行示例）在游戏左侧「API」窗口或 `/docs/`。
 
 ```ts
-/** 通用容器库存接口（与 Screeps Store 一致） */
+/** 写方法的返回码：0 成功，负数为错误码 */
+type RetCode = number;
+
+/** 通用库存容器接口 */
 interface Store {
   readonly [resourceType: string]: number;
   getCapacity(resource?: string): number | null;
@@ -76,10 +78,10 @@ interface Building {
   readonly progress: number;      // 当前周期已跑 tick
   readonly cycleTicks: number;    // 当前配方总周期
 
-  /** 热切换配方（下批生效） */
-  setRecipe(recipeId: string): ScreepsCode;
+  /** 热切换配方：立即改 recipeId，进度不清零，当前周期结束后按新配方结算 */
+  setRecipe(recipeId: string): RetCode;
   /** 开机/停产（停产仅付轻待机电费） */
-  setActive(active: boolean): ScreepsCode;
+  setActive(active: boolean): RetCode;
 }
 
 interface Ship {
@@ -88,7 +90,7 @@ interface Ship {
   readonly capacity: number;
   readonly durability: number;    // 0 ~ 100
   readonly location: string;      // "P2"（地面）或 "ST:P2" / "ST:HUB"
-  readonly busyUntil: number;     // 0 表示空闲，否则为到达 tick
+  readonly busyUntil: number;     // 上次派船算出的到达 tick；到站后不清零，空闲判据是 isBusy
   readonly isBusy: boolean;
   readonly store: Store;
 
@@ -98,9 +100,9 @@ interface Ship {
    * @param to   "ST:P2" / "P2" / "ST:HUB"
    * @param cargo 例如 { steel: 20, building_mat: 10 }
    */
-  dispatch(from: string, to: string, cargo: Record<string, number>): ScreepsCode;
+  dispatch(from: string, to: string, cargo: Record<string, number>): RetCode;
   /** 消耗维修件恢复飞船耐久 */
-  repair(): ScreepsCode;
+  repair(): RetCode;
 }
 
 interface MarketOrder {
@@ -135,7 +137,7 @@ interface MarketAPI {
   readonly credits: number;
   readonly orders: Record<string, MarketOrder>; // 自己挂在市场中的活跃订单
 
-  quote(stationId: string, resourceType: string): MarketQuote;
+  quote(stationId: string, resourceType: string): MarketQuote | null;
   depth(stationId: string, resourceType: string, limit?: number): {
     bids: Array<{ price: number; qty: number }>;
     asks: Array<{ price: number; qty: number }>;
@@ -152,10 +154,10 @@ interface MarketAPI {
     price: number;
     totalAmount: number;
     stationId: string;
-  }): ScreepsCode;
+  }): RetCode;
 
-  cancelOrder(orderId: string): ScreepsCode;
-  deal(orderId: string, amount: number): ScreepsCode;
+  cancelOrder(orderId: string): RetCode;
+  deal(orderId: string, amount: number): RetCode;
   calcRoute(fromId: string, toId: string): RouteCost | null;
 }
 
@@ -171,42 +173,74 @@ interface PlanetInfo {
   readonly bankRatePct: number;
   readonly groundStore: Store;       // 本公司在该星地面仓库
   readonly stationStore: Store;      // 本公司在该星轨道站仓库
-  readonly demands: Record<string, { qty: number; satisfaction: number }>;
+  readonly landListings: Array<{ listingId: string; plotId: string; askPrice: number }>; // 最多 8 条
+  readonly demands: Record<string, { qty: number }>;   // 只有 qty（旧版误写成含 satisfaction）
+}
+
+interface Plot {
+  readonly id: string;
+  readonly planetId: string;
+  readonly terrainName: string;
+  readonly capacity: number;
+  readonly usedSlots: number;
+  readonly buildingMods: Record<string, number>;  // 建筑类型 -> 效率乘数
+}
+
+interface RecipeInfo {
+  readonly id: string;
+  readonly buildingId: string;
+  readonly cycleTicks: number;
+  readonly powerCost: number;
+  readonly laborCost: number;
+  readonly inputs: Array<{ item: string; qty: number }>;
+  readonly outputs: Array<{ item: string; qty: number }>;
 }
 
 interface GameGlobal {
   readonly time: number;
+  readonly cpi: number;             // 全星系物价指数
   readonly cpu: {
     readonly limit: number;          // ms 预算（如 5）
     getUsed(): number;
   };
   readonly company: {
     readonly id: string;
+    readonly name: string;
     readonly profession: string;
+    readonly homePlanetId: string;
     readonly cash: number;
     readonly savings: number;
     readonly debt: number;
   };
   readonly planets: Record<string, PlanetInfo>;
-  readonly stations: Record<string, { readonly id: string; readonly store: Store }>;
+  readonly plots: Record<string, Plot>;            // 只有自己的地块
+  readonly stations: Record<string, { readonly id: string; readonly store: Store }>; // 只含有库存记录的站
   readonly buildings: Record<string, Building>;
   readonly ships: Record<string, Ship>;
   readonly market: MarketAPI;
 
   /** 购买一手/二手土地 */
-  buyPlot(planetId: string, listingId?: string): ScreepsCode;
+  buyPlot(planetId: string, listingId?: string): RetCode;
   /** 在指定地块建造或拆除通用建筑 */
-  buildFacility(plotId: string, buildingType: string): ScreepsCode;
-  demolishFacility(plotId: string, buildingId: string): ScreepsCode;
+  buildFacility(plotId: string, buildingType: string): RetCode;
+  demolishFacility(plotId: string, buildingId: string): RetCode;
   /** 银行存取借还 */
-  bank(planetId: string, op: "deposit" | "withdraw" | "borrow" | "repay", amount: number): ScreepsCode;
-  /** 读取静态配方表（只读字典） */
-  getRecipe(recipeId: string): object | null;
+  bank(planetId: string, op: "deposit" | "withdraw" | "borrow" | "repay", amount: number): RetCode;
+  /** 读取静态配方表 */
+  getRecipe(recipeId: string): RecipeInfo | null;
 }
 
 declare const Game: GameGlobal;
 declare let Memory: Record<string, any>;
 ```
+
+**补充约定（类型里看不出来的硬约束）**
+
+- `OK` / `ERR_*` 常量全部冻结；写方法只可能返回文档里列出的那些码。
+- 每公司每 tick 最多 **32** 条写操作（游戏界面手动操作也占这 32 条，且排在脚本之后），活跃挂单最多 **64** 条。
+- 写方法只把 Intent 写进本 tick 缓冲；Phase 2 校验失败会被静默丢弃，脚本拿不到回执。
+- `market.depth` 的快照只存 **5** 档；`calcRoute().fuel` 是按小船 × 100 耐久估算的近似值。
+- 所有 id 都是字符串；`Game` 与实体对象全部 `Object.freeze`，跨 tick 状态只能写 `Memory`。
 
 ---
 
