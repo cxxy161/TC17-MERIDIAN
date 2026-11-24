@@ -6,6 +6,7 @@ import {
   setUnauthorizedHandler,
   type SessionUser,
 } from '../api/client';
+import { useGameStore } from './useGameStore';
 
 export type SessionStatus = 'checking' | 'anon' | 'authed';
 
@@ -27,6 +28,17 @@ interface SessionStore {
   logout: () => Promise<void>;
 }
 
+/**
+ * 会话身份的唯一入口：把公司 id 同步给 api 层（currentCompanyId）和游戏 store。
+ * 之前 useGameStore 自己写死 'player1'，多账号下会出现
+ * 「公司 'player1' 不属于当前账号」的 403。
+ */
+function applyIdentity(user: SessionUser | null): void {
+  const companyId = user?.company_id ?? '';
+  setCurrentCompany(companyId);
+  useGameStore.getState().setCompanyId(companyId);
+}
+
 export const useSessionStore = create<SessionStore>((set) => ({
   status: 'checking',
   user: null,
@@ -38,7 +50,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
       if (!me || typeof me.company_id !== 'string' || me.company_id === '') {
         throw new ApiError(404, null, 'auth endpoint not implemented');
       }
-      setCurrentCompany(me.company_id);
+      applyIdentity(me);
       set({ status: 'authed', user: me });
       return { status: 'authed' };
     } catch (err) {
@@ -50,7 +62,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   },
 
   setUser: (user) => {
-    setCurrentCompany(user.company_id);
+    applyIdentity(user);
     set({ status: 'authed', user });
   },
 
@@ -60,6 +72,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
     } catch {
       // 会话可能已经失效（401）或网络断了 —— 本地依旧要退出，不留半登录态
     }
+    applyIdentity(null);
     set({ status: 'anon', user: null });
   },
 }));
