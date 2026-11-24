@@ -93,7 +93,33 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(cat["items"].as_array().unwrap().len(), 16);
 
-        // 2. Hot-reload player1 multi-module script via PUT /api/scripts/player1
+        // 2. Fetch /api/state to inspect procedural 3..=9 planets, single S1 system, and player1 home planet
+        let (st, init_state) = read_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .header("cookie", &cookie)
+                        .uri("/api/state?company_id=player1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let init_planets = init_state["planets"].as_array().unwrap().len();
+        assert!(
+            (3..=9).contains(&init_planets),
+            "expected 3..=9 generated planets, got {init_planets}"
+        );
+        assert_eq!(init_state["systems"].as_array().unwrap().len(), 1);
+        let home_pid = init_state["player_snapshot"]["company"]["home_planet_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // 2b. Hot-reload player1 multi-module script via PUT /api/scripts/player1
         let put_body = serde_json::json!({
             "modules": {
                 "main": "const m = require('custom'); module.exports.loop = function() { Memory.tag = m.tag; console.log('hot-reloaded'); };",
@@ -118,11 +144,11 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(put_res["ok"], true);
 
-        // 3. Queue manual intent (deposit 50 credits into P1 bank)
+        // 3. Queue manual intent (deposit 50 credits into player1 home planet bank)
         let intent_body = serde_json::json!({
             "company_id": "player1",
             "intent": Intent::BankOp {
-                planet_id: "P1".to_string(),
+                planet_id: home_pid,
                 op: BankOpKind::Deposit,
                 amount: to_money(50.0),
             }
@@ -237,7 +263,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(admin_res["conservation_error"], 0);
         assert_eq!(admin_res["companies"].as_array().unwrap().len(), 49);
-        assert_eq!(admin_res["planets"].as_array().unwrap().len(), 3);
+        assert_eq!(admin_res["planets"].as_array().unwrap().len(), init_planets);
 
         // 6c. Verify max-speed (tick_ms=0) sim control works
         let (st, speed_res) = read_json(
@@ -283,6 +309,10 @@ fn test_long_horizon_1200_ticks_economy_never_stalls() {
     let store = SqliteStore::open(&db_path).expect("open sqlite");
     let mut engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
 
+    assert_eq!(engine.world.systems.len(), 1);
+    assert!((3..=9).contains(&engine.world.planets.len()));
+    let planet_ids: Vec<String> = engine.world.planets.keys().cloned().collect();
+
     let mut buckets = [0usize; 6];
     let mut item_fills: std::collections::HashMap<String, (usize, u32)> =
         std::collections::HashMap::new();
@@ -292,7 +322,7 @@ fn test_long_horizon_1200_ticks_economy_never_stalls() {
     for t in 0..1200 {
         let out = engine.step_once().expect("step_once");
         assert_eq!(out.conservation_error, 0, "conservation violated at tick {}", out.tick);
-        for pid in ["P1", "P2", "P3"] {
+        for pid in &planet_ids {
             assert!(
                 engine.world.npc_plot_count_on(pid) <= engine.world.npc_plot_cap_on(pid),
                 "NPC plot cap (90%) exceeded on {pid} at tick {}",

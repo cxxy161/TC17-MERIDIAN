@@ -14,8 +14,11 @@ pub mod world;
 pub use company::Company;
 pub use exchange::{CLOBStation, DepthLevel, MarketQuote, Order, TradeFill};
 pub use ledger::MoneyLedger;
-pub use logistics::{compute_route, RouteKind, RouteSpec, Ship, ShipInFlight, ShipSize};
-pub use planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob};
+pub use logistics::{
+    compute_route, compute_route_in_systems, station_coords, station_coords_in_systems, RouteKind,
+    RouteSpec, Ship, ShipInFlight, ShipSize,
+};
+pub use planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem};
 pub use schema::{
     BuildingDef, DemandCategoryDef, ItemDef, ItemQty, ItemRole, ProductionCatalog, ProductionPack,
     ProfessionDef, RecipeDef,

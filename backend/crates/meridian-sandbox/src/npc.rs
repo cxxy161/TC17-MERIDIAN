@@ -144,6 +144,7 @@ pub fn decide_npc_intents(
     let mut intents = Vec::new();
     let home_pid = &snap.company.home_planet_id;
     let home_sid = format!("ST:{home_pid}");
+    let home_hub = snap.home_hub_id().to_string();
     let cash_f = from_money(snap.company.cash).max(0.0);
     let savings_f = from_money(snap.company.savings).max(0.0);
     let debt_f = from_money(snap.company.debt).max(0.0);
@@ -184,7 +185,7 @@ pub fn decide_npc_intents(
             }
         }
         if !catalog.is_instant_item(item_id) {
-            if let Some(hq) = snap.quotes.get("ST:HUB").and_then(|m| m.get(item_id)) {
+            if let Some(hq) = snap.quotes.get(home_hub.as_str()).and_then(|m| m.get(item_id)) {
                 if let Some(hbb) = hq.best_bid {
                     let h_last = from_money(hq.last_price).max(0.01);
                     val = val.max(from_money(hbb).min(h_last * 5.0) * 0.90);
@@ -234,7 +235,7 @@ pub fn decide_npc_intents(
             let Some(r) = catalog.recipes.get(rid) else {
                 continue;
             };
-            let hub_st = snap.company.station_stores.get("ST:HUB");
+            let hub_st = snap.company.station_stores.get(home_hub.as_str());
             let mut in_cost = r.labor_cost * snap.cpi;
             if r.power_cost > 0 {
                 in_cost += r.power_cost as f64 * est_input_cost(&b_sid, "power");
@@ -260,7 +261,7 @@ pub fn decide_npc_intents(
                 let hub_ask = !is_inp_instant
                     && snap
                         .quotes
-                        .get("ST:HUB")
+                        .get(home_hub.as_str())
                         .and_then(|m| m.get(&inp.item))
                         .and_then(|q| q.best_ask)
                         .is_some();
@@ -420,7 +421,7 @@ pub fn decide_npc_intents(
         }
     }
 
-    let watched_stations = [home_sid.as_str(), "ST:HUB"];
+    let watched_stations = [home_sid.as_str(), home_hub.as_str()];
     let mut item_ids: Vec<&String> = catalog.items.keys().collect();
     item_ids.sort();
 
@@ -445,7 +446,7 @@ pub fn decide_npc_intents(
         let st_hub = snap
             .company
             .station_stores
-            .get("ST:HUB")
+            .get(home_hub.as_str())
             .and_then(|m| m.get(item_id))
             .copied()
             .unwrap_or(0);
@@ -548,7 +549,7 @@ pub fn decide_npc_intents(
             };
             let deficit = need_target.saturating_sub(owned_for_buy);
             let want_local_buy = sid == home_sid && deficit > 0;
-            let want_hub_buy = sid == "ST:HUB"
+            let want_hub_buy = sid == home_hub.as_str()
                 && deficit > 0
                 && !is_instant
                 && snap
@@ -657,9 +658,14 @@ pub fn decide_npc_intents(
 
     // 3. Logistics Head: two-way shipping with return-fuel protection
     let candidate_nodes: Vec<String> = {
-        let mut nodes = vec![home_pid.clone(), home_sid.clone(), "ST:HUB".to_string()];
-        for pid in snap.planets.keys() {
-            if pid != home_pid {
+        let mut nodes = vec![home_pid.clone(), home_sid.clone(), home_hub.clone()];
+        for (pid, pv) in &snap.planets {
+            if pid != home_pid
+                && snap
+                    .planets
+                    .get(home_pid)
+                    .is_none_or(|hp| pv.system_id == hp.system_id)
+            {
                 nodes.push(format!("ST:{pid}"));
             }
         }
@@ -752,22 +758,22 @@ pub fn decide_npc_intents(
                             pack.push((fit.to_string(), spare));
                         }
                     }
-                } else if loc_is_st && dest == "ST:HUB" {
+                } else if loc_is_st && dest == &home_hub {
                     let ret_fuel = snap
-                        .route_cost("ST:HUB", &home_sid)
+                        .route_cost(&home_hub, &home_sid)
                         .map(|r| r.1)
                         .unwrap_or(fuel_req);
                     let hub_fuel = snap
                         .company
                         .station_stores
-                        .get("ST:HUB")
+                        .get(&home_hub)
                         .and_then(|m| m.get(fit))
                         .copied()
                         .unwrap_or(0);
                     if hub_fuel < ret_fuel {
                         let need_ret = ret_fuel - hub_fuel;
                         if fuel_have < fuel_req + need_ret {
-                            // Do not strand ship at ST:HUB without fuel to return home
+                            // Do not strand ship at Hub without fuel to return home
                             continue;
                         }
                         let spare = need_ret.min(rem_cap / 2);
@@ -831,7 +837,7 @@ pub fn decide_npc_intents(
                     if avail_take > keep_here {
                         price_diff = price_diff.max(0.95);
                     }
-                } else if dest == "ST:HUB" && loc_is_st {
+                } else if dest == &home_hub && loc_is_st {
                     if is_needed_home {
                         // Don't export critical local factory inputs to Hub
                         continue;
@@ -846,7 +852,7 @@ pub fn decide_npc_intents(
                         .unwrap_or(false);
                     let hub_arb_ok = snap
                         .quotes
-                        .get("ST:HUB")
+                        .get(&home_hub)
                         .and_then(|m| m.get(item_id))
                         .and_then(|q| q.best_bid)
                         .map(|hbb| from_money(hbb) >= p_src * 1.15)
@@ -955,13 +961,13 @@ pub fn decide_npc_intents(
                             best_route =
                                 Some((dest.as_str(), 0.35, vec![(fit.to_string(), spare_fuel)]));
                         }
-                    } else if (!loc_is_st && dest == &home_sid && (has_needed_at(&home_sid) || has_needed_at("ST:HUB")))
-                        || (ship.location == home_sid && dest == "ST:HUB" && has_needed_at("ST:HUB"))
+                    } else if (!loc_is_st && dest == &home_sid && (has_needed_at(&home_sid) || has_needed_at(&home_hub)))
+                        || (ship.location == home_sid && dest == &home_hub && has_needed_at(&home_hub))
                     {
                         if fuel_have >= fuel_req * 2 + 1 {
                             best_route = Some((dest.as_str(), 0.30, vec![(fit.to_string(), 1)]));
                         }
-                    } else if ship.location == "ST:HUB" && dest == &home_sid && fuel_have >= fuel_req + 1 {
+                    } else if ship.location == home_hub && dest == &home_sid && fuel_have >= fuel_req + 1 {
                         best_route = Some((dest.as_str(), 0.25, vec![(fit.to_string(), 1)]));
                     }
                 }

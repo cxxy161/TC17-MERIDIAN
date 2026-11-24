@@ -89,8 +89,22 @@ export interface ProductionPack {
   professions: ProfessionDef[];
 }
 
+export interface StarSystemView {
+  id: string;
+  name: string;
+  star_class: string;
+  luminosity: number;
+  x: number;
+  y: number;
+  hub_station_id: string;
+  hub_orbit_radius: number;
+  hub_orbit_days: number;
+  hub_orbit_angle: number;
+}
+
 export interface PlanetSummary {
   id: string;
+  system_id?: string;
   name: string;
   archetype: string;
   wealth_tier: number;
@@ -103,6 +117,14 @@ export interface PlanetSummary {
   unclaimed_plots: number;
   orbit_radius: number;
   orbit_angle: number;
+  habitability?: number;
+  solar_mult?: number;
+  mineral_mult?: number;
+  water_mult?: number;
+  ocean_ratio?: number;
+  rotation_days?: number;
+  visual_seed?: number;
+  city_count?: number;
   demands: Record<string, number>;
 }
 
@@ -240,6 +262,10 @@ export interface StateResponse {
   tick_ms: number;
   conservation_error: number;
   total_minted: number;
+  hub_orbit_radius?: number;
+  hub_orbit_days?: number;
+  hub_orbit_angle?: number;
+  systems?: StarSystemView[];
   planets: PlanetSummary[];
   leaderboard: LeaderboardRow[];
   market_tickers: MarketTickerRow[];

@@ -157,7 +157,8 @@ async fn market_book_handler(
     Query(q): Query<BookQuery>,
 ) -> Result<Json<MarketBookResp>, (StatusCode, String)> {
     let eng = engine.lock().await;
-    let sid = q.station_id.as_deref().unwrap_or("ST:HUB");
+    let default_hub = eng.primary_hub_station_id();
+    let sid = q.station_id.as_deref().unwrap_or(&default_hub);
     let item_id = q.item_id.as_deref().unwrap_or("steel");
     let depth_lim = q.limit.unwrap_or(20).clamp(1, 100);
     let candle_lim = q.candle_limit.unwrap_or(120).clamp(1, 500);
@@ -248,7 +249,8 @@ async fn market_candles_handler(
     Query(q): Query<CandlesQuery>,
 ) -> Result<Json<MarketCandlesResp>, (StatusCode, String)> {
     let eng = engine.lock().await;
-    let sid = q.station_id.as_deref().unwrap_or("ST:HUB");
+    let default_hub = eng.primary_hub_station_id();
+    let sid = q.station_id.as_deref().unwrap_or(&default_hub);
     let item_id = q.item_id.as_deref().unwrap_or("steel");
     let period = q.period.unwrap_or(1).clamp(1, 1000);
 

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { PlanetSummary } from '../types/meridian';
 
 interface Vec3 {
   x: number;
@@ -401,8 +402,61 @@ function rotatePlanetPoint(
   return worldToCamera(planetToWorld(p, spinYaw, tiltRad), camYaw, camPitch);
 }
 
+function hashPlanetId(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) || 10131;
+}
+
+function resolvePlanetProfile(planetId: string, planet?: PlanetSummary): PlanetProfile {
+  if (!planet || (planet.visual_seed === undefined && planet.solar_mult === undefined)) {
+    return PROFILES[planetId] ?? PROFILES.P2;
+  }
+  const solar = planet.solar_mult ?? 1.0;
+  const ocean = planet.ocean_ratio ?? 0.25;
+  const water = planet.water_mult ?? 1.0;
+  const hab = planet.habitability ?? 0.5;
+  const mode: PlanetProfile['mode'] =
+    solar > 1.35 && ocean < 0.18
+      ? 'volcanic'
+      : solar < 0.65 && hab < 0.55
+        ? 'icy'
+        : 'terrestrial';
+  const seed = (planet.visual_seed && planet.visual_seed > 0) ? planet.visual_seed : hashPlanetId(planetId);
+  const seaOffset = mode === 'volcanic' ? -0.3 + ocean * 0.4 : (ocean - 0.32) * 0.65;
+  const tempBias = Math.max(-0.6, Math.min(0.6, (solar - 1.0) * 0.55));
+  const moistBias = Math.max(-0.55, Math.min(0.55, (water - 1.0) * 0.45));
+  const tiltDeg = 8 + (seed % 20);
+  const rotDays = planet.rotation_days && planet.rotation_days > 0
+    ? planet.rotation_days
+    : (PLANET_ROTATION_DAYS[planetId] ?? 3.5);
+  const atmoColor =
+    mode === 'volcanic'
+      ? 'rgba(234, 120, 62, 0.22)'
+      : mode === 'icy'
+        ? 'rgba(125, 211, 252, 0.22)'
+        : hab >= 0.65
+          ? 'rgba(56, 189, 248, 0.26)'
+          : 'rgba(148, 163, 184, 0.20)';
+
+  return {
+    seed,
+    seaOffset,
+    tempBias,
+    moistBias,
+    tiltDeg,
+    rotDays,
+    atmoColor,
+    mode,
+  };
+}
+
 export interface Planet3DCanvasProps {
   planetId: string;
+  planet?: PlanetSummary;
   tick: number;
   paused: boolean;
   tickMs: number;
@@ -411,12 +465,24 @@ export interface Planet3DCanvasProps {
 
 export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   planetId,
+  planet,
   tick,
   paused,
   tickMs,
   ticksPerDay,
 }) => {
-  const profile = PROFILES[planetId] ?? PROFILES.P2;
+  const profile = useMemo(
+    () => resolvePlanetProfile(planetId, planet),
+    [
+      planetId,
+      planet?.visual_seed,
+      planet?.solar_mult,
+      planet?.water_mult,
+      planet?.ocean_ratio,
+      planet?.habitability,
+      planet?.rotation_days,
+    ],
+  );
   const facets = useMemo(() => buildGoldbergFacets(4, profile), [profile]);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);

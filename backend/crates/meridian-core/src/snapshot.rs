@@ -54,13 +54,35 @@ pub struct LandListingView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StarSystemView {
+    pub id: String,
+    pub name: String,
+    pub star_class: String,
+    pub luminosity: f64,
+    pub x: f64,
+    pub y: f64,
+    pub hub_station_id: StationId,
+    pub hub_orbit_radius: f64,
+    pub hub_orbit_days: f64,
+    pub hub_orbit_angle: f64,
+}
+
+fn default_snapshot_system_id() -> String {
+    "S1".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanetView {
     pub id: PlanetId,
+    #[serde(default = "default_snapshot_system_id")]
+    pub system_id: String,
     pub name: String,
     pub wealth_tier: u8,
     pub prosperity: f64,
     pub population: f64,
     pub gravity: f64,
+    #[serde(default)]
+    pub habitability: f64,
     pub waste_backlog: u32,
     pub primary_land_price: Option<Money>,
     pub land_listings: Vec<LandListingView>,
@@ -92,6 +114,7 @@ pub struct SharedSnapshot {
     pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
     pub all_orders: Vec<Order>,
     pub open_orders_by_owner: HashMap<CompanyId, Vec<Order>>,
+    pub systems: HashMap<String, StarSystemView>,
     pub planet_templates: Vec<(PlanetId, StationId, PlanetView)>,
     pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
 }
@@ -101,6 +124,8 @@ pub struct WorldSnapshot {
     pub tick: u64,
     pub cpi: f64,
     pub company: SelfView,
+    #[serde(default)]
+    pub systems: HashMap<String, StarSystemView>,
     pub planets: HashMap<PlanetId, PlanetView>,
     pub quotes: HashMap<StationId, HashMap<ItemId, MarketQuote>>,
     pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
@@ -111,5 +136,24 @@ pub struct WorldSnapshot {
 impl WorldSnapshot {
     pub fn route_cost(&self, from: &str, to: &str) -> Option<(u32, u32)> {
         self.routes.get(from).and_then(|m| m.get(to)).copied()
+    }
+
+    /// Resolve the trade hub station serving a given planet (or the company's home planet).
+    pub fn hub_for_planet(&self, planet_id: &str) -> &str {
+        if let Some(p) = self.planets.get(planet_id) {
+            if let Some(sys) = self.systems.get(&p.system_id) {
+                return sys.hub_station_id.as_str();
+            }
+        }
+        self.systems
+            .values()
+            .next()
+            .map(|s| s.hub_station_id.as_str())
+            .unwrap_or("ST:HUB")
+    }
+
+    /// Resolve the company's home system trade hub station (defaults to `ST:HUB`).
+    pub fn home_hub_id(&self) -> &str {
+        self.hub_for_planet(&self.company.home_planet_id)
     }
 }

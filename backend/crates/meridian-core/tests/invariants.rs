@@ -434,3 +434,63 @@ fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
     assert_eq!(world.npc_plot_count_on("P2"), cap);
     assert_eq!(world.conservation_error(), 0);
 }
+
+#[test]
+fn test_procedural_system_generation_3_to_9_planets_and_conservation() {
+    let cat = load_production_catalog();
+    let mut seen_counts = std::collections::HashSet::new();
+    for seed in [
+        11_u64, 42, 107, 2026, 7777, 98765, 133701, 404040, 555123, 888999, 10293847, 99112233,
+    ] {
+        let mut world = World::new_generated(cat.clone(), seed);
+        assert_eq!(world.systems.len(), 1);
+        assert!(world.systems.contains_key("S1"));
+        assert!(world.stations.contains_key("ST:HUB"));
+        let n_planets = world.planets.len();
+        assert!(
+            (3..=9).contains(&n_planets),
+            "seed {seed} produced {n_planets} planets (expected 3..=9)"
+        );
+        seen_counts.insert(n_planets);
+
+        let total_cities: u32 = world.planets.values().map(|p| p.city_count).sum();
+        let total_pop: f64 = world.planets.values().map(|p| p.population).sum();
+        for p in world.planets.values() {
+            assert_eq!(p.system_id, "S1");
+            assert!((0.05..=0.99).contains(&p.habitability));
+            if p.habitability < 0.34 {
+                assert_eq!(p.city_count, 0);
+            } else {
+                assert!(p.city_count >= 1);
+                assert!(p.population >= 400.0);
+            }
+        }
+        if total_cities > 0 {
+            assert!(
+                (9_500.0..=10_500.0).contains(&total_pop),
+                "seed {seed} initial urban pop={total_pop} out of ~10k range"
+            );
+        } else {
+            assert_eq!(total_pop, 0.0);
+        }
+
+        // Verify zero currency drift across 12 ticks (including Hub storage rent & city demand ticks)
+        let first_pid = world.planets.keys().min().unwrap().clone();
+        world
+            .spawn_company("probe_corp", "Probe", true, "mining_ind", &first_pid, 10_000.0)
+            .expect("spawn probe corp");
+        for _ in 0..12 {
+            world.step_tick(vec![]);
+            assert_eq!(
+                world.conservation_error(),
+                0,
+                "seed {seed} leaked currency at tick {}",
+                world.tick
+            );
+        }
+    }
+    assert!(
+        seen_counts.len() >= 3,
+        "expected diverse planet counts across seeds, got {seen_counts:?}"
+    );
+}

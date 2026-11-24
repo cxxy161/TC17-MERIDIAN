@@ -1,10 +1,7 @@
 import React from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-
-// Must match meridian-core::world::World hub parameters (1.45 AU, 200d period, starting angle 0)
-const HUB_ORBIT_RADIUS = 1.45;
-const HUB_ORBIT_DAYS = 200.0;
+import type { PlanetSummary } from '../types/meridian';
 
 const PLANET_COLORS: Record<string, string> = {
   P1: '#e07b42',
@@ -12,22 +9,38 @@ const PLANET_COLORS: Record<string, string> = {
   P3: '#7dd3fc',
 };
 
+function planetOrbitColor(p: PlanetSummary): string {
+  if (p.habitability !== undefined && p.solar_mult !== undefined) {
+    if (p.habitability >= 0.72) return (p.ocean_ratio ?? 0) >= 0.5 ? '#38bdf8' : '#3b82f6';
+    if (p.habitability >= 0.34) return '#34d399';
+    if (p.solar_mult >= 1.35) return '#e07b42';
+    return '#7dd3fc';
+  }
+  return PLANET_COLORS[p.id] ?? '#38bdf8';
+}
+
 export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
   const planets = state?.planets ?? [];
   const ships = state?.player_snapshot?.company.ships ?? [];
+  const primarySys = state?.systems?.[0];
+  const hubStationId = primarySys?.hub_station_id ?? 'ST:HUB';
+  const hubOrbitRadius = state?.hub_orbit_radius ?? primarySys?.hub_orbit_radius ?? 1.45;
+  const hubOrbitDays = state?.hub_orbit_days ?? primarySys?.hub_orbit_days ?? 200.0;
 
   const cx = 260;
   const cy = 190;
-  const maxR = Math.max(...planets.map((p) => p.orbit_radius), 2.8);
+  const maxR = Math.max(...planets.map((p) => p.orbit_radius), hubOrbitRadius + 0.4, 2.8);
   const scaleR = (r: number) => 38 + (r / maxR) * 130;
 
   const tick = state?.tick ?? 0;
   const ticksPerDay = catalog?.meta.ticks_per_day || 24;
-  // Keplerian angular velocity: 2*PI / (ticks_per_day * orbit_period_days), starting at angle 0
-  const hubAngle = ((tick * Math.PI * 2) / (ticksPerDay * HUB_ORBIT_DAYS)) % (Math.PI * 2);
-  const hr = scaleR(HUB_ORBIT_RADIUS);
+  const hubAngle =
+    state?.hub_orbit_angle ??
+    primarySys?.hub_orbit_angle ??
+    ((tick * Math.PI * 2) / (ticksPerDay * hubOrbitDays)) % (Math.PI * 2);
+  const hr = scaleR(hubOrbitRadius);
   const hx = cx + hr * Math.cos(hubAngle);
   const hy = cy + hr * Math.sin(hubAngle);
 
@@ -73,7 +86,7 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
             const pr = scaleR(p.orbit_radius);
             const px = cx + pr * Math.cos(p.orbit_angle);
             const py = cy + pr * Math.sin(p.orbit_angle);
-            const col = PLANET_COLORS[p.id] ?? '#38bdf8';
+            const col = planetOrbitColor(p);
 
             return (
               <g
@@ -90,10 +103,10 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
             );
           })}
 
-          {/* Central Trade Hub Station on distinct 1.45 AU Keplerian orbit (between P1=0.90 and P2=1.85) */}
+          {/* Central Trade Hub Station */}
           <g
             className="cursor-pointer"
-            onClick={() => openTemp('cargo', { locationId: 'ST:HUB' })}
+            onClick={() => openTemp('cargo', { locationId: hubStationId })}
           >
             <circle cx={cx} cy={cy} r={hr} fill="none" stroke="rgba(56,189,248,0.28)" strokeDasharray="3 4" />
             <polygon

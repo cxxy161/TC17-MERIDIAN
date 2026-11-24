@@ -3,9 +3,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use meridian_core::{from_money, Intent, ProductionCatalog, TickReport, World, WorldSnapshot};
+use meridian_core::{
+    from_money, snapshot::StarSystemView, Intent, ProductionCatalog, TickReport, World,
+    WorldSnapshot,
+};
 use meridian_sandbox::{
     NpcGenome, PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle, SimulationRunner,
 };
@@ -91,6 +96,8 @@ pub struct LeaderboardRow {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanetSummary {
     pub id: String,
+    #[serde(default)]
+    pub system_id: String,
     pub name: String,
     pub archetype: String,
     pub wealth_tier: u8,
@@ -103,6 +110,22 @@ pub struct PlanetSummary {
     pub unclaimed_plots: u32,
     pub orbit_radius: f64,
     pub orbit_angle: f64,
+    #[serde(default)]
+    pub habitability: f64,
+    #[serde(default)]
+    pub solar_mult: f64,
+    #[serde(default)]
+    pub mineral_mult: f64,
+    #[serde(default)]
+    pub water_mult: f64,
+    #[serde(default)]
+    pub ocean_ratio: f64,
+    #[serde(default)]
+    pub rotation_days: f64,
+    #[serde(default)]
+    pub visual_seed: u32,
+    #[serde(default)]
+    pub city_count: u32,
     pub demands: HashMap<String, u32>,
 }
 
@@ -124,6 +147,11 @@ pub struct StateResponse {
     pub tick_ms: u64,
     pub conservation_error: i128,
     pub total_minted: f64,
+    pub hub_orbit_radius: f64,
+    pub hub_orbit_days: f64,
+    pub hub_orbit_angle: f64,
+    #[serde(default)]
+    pub systems: Vec<StarSystemView>,
     pub planets: Vec<PlanetSummary>,
     pub leaderboard: Vec<LeaderboardRow>,
     pub market_tickers: Vec<MarketTickerRow>,
@@ -142,6 +170,9 @@ pub struct TickBroadcast {
     pub bankruptcies: Vec<String>,
     pub rejected_intents: usize,
     pub conservation_error: i128,
+    pub hub_orbit_radius: f64,
+    pub hub_orbit_days: f64,
+    pub hub_orbit_angle: f64,
     pub planets: Vec<PlanetSummary>,
     pub leaderboard: Vec<LeaderboardRow>,
     pub player_outputs: HashMap<String, PlayerRunOutput>,
@@ -238,7 +269,7 @@ impl GameEngine {
             return Ok(engine);
         }
 
-        let mut world = World::new_standard(catalog);
+        let mut world = World::new_generated(catalog, generate_world_seed());
         Self::seed_initial_actors(&mut world, &mut runner, &mut store)?;
         store.save_world(&world)?;
 
@@ -260,33 +291,144 @@ impl GameEngine {
         })
     }
 
+    fn preferred_player_home_planet(world: &World) -> String {
+        let mut candidates: Vec<&meridian_core::Planet> = world.planets.values().collect();
+        candidates.sort_by(|a, b| {
+            let a_avail = (a.unclaimed_plots_remaining > 0) as u8;
+            let b_avail = (b.unclaimed_plots_remaining > 0) as u8;
+            b_avail
+                .cmp(&a_avail)
+                .then_with(|| {
+                    let ascore = a.mineral_mult * 0.55 + a.habitability * 0.45;
+                    let bscore = b.mineral_mult * 0.55 + b.habitability * 0.45;
+                    bscore
+                        .partial_cmp(&ascore)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        candidates
+            .first()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| "P1".to_string())
+    }
+
+    fn allocate_initial_npcs(world: &World) -> Vec<(&'static str, String)> {
+        let mut planets: Vec<&meridian_core::Planet> = world.planets.values().collect();
+        planets.sort_by(|a, b| a.id.cmp(&b.id));
+        if planets.is_empty() {
+            return Vec::new();
+        }
+
+        const TOTAL_NPCS: usize = 48;
+        let weights: Vec<f64> = planets
+            .iter()
+            .map(|p| {
+                1.0 + (p.city_count as f64) * 1.45 + p.habitability * 1.6 + p.mineral_mult * 0.65
+            })
+            .collect();
+        let w_sum: f64 = weights.iter().sum::<f64>().max(1.0);
+        let caps: Vec<usize> = planets
+            .iter()
+            .map(|p| world.npc_plot_cap_on(&p.id).max(1) as usize)
+            .collect();
+
+        let mut counts: Vec<usize> = weights
+            .iter()
+            .zip(caps.iter())
+            .map(|(w, &cap)| ((TOTAL_NPCS as f64 * (*w / w_sum)).round() as usize).clamp(1, cap))
+            .collect();
+
+        let mut cur_total: usize = counts.iter().sum();
+        while cur_total < TOTAL_NPCS {
+            let mut progressed = false;
+            for idx in 0..planets.len() {
+                if cur_total >= TOTAL_NPCS {
+                    break;
+                }
+                if counts[idx] < caps[idx] {
+                    counts[idx] += 1;
+                    cur_total += 1;
+                    progressed = true;
+                }
+            }
+            if !progressed {
+                break;
+            }
+        }
+        while cur_total > TOTAL_NPCS {
+            if let Some((idx, _)) = counts
+                .iter()
+                .enumerate()
+                .filter(|&(_, &c)| c > 1)
+                .max_by_key(|&(_, &c)| c)
+            {
+                counts[idx] -= 1;
+                cur_total -= 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut cohort = Vec::with_capacity(cur_total);
+        for (p, n) in planets.iter().zip(counts.into_iter()) {
+            // Profession mix adapts naturally to each generated planet's physics
+            let (w_mine, w_env, _w_agri) = if p.city_count >= 2 || p.habitability >= 0.56 {
+                (0.28, 0.36, 0.36)
+            } else if p.mineral_mult >= 1.25 && p.city_count == 0 {
+                (0.56, 0.24, 0.20)
+            } else if p.water_mult >= 1.25 && p.city_count == 0 {
+                (0.32, 0.40, 0.28)
+            } else {
+                (0.42, 0.32, 0.26)
+            };
+            let n_mine = ((n as f64) * w_mine).round() as usize;
+            let n_env = ((n as f64) * w_env).round() as usize;
+            let mut rem_mine = n_mine.min(n);
+            let mut rem_env = n_env.min(n - rem_mine);
+            let mut rem_agri = n.saturating_sub(rem_mine + rem_env);
+            if n >= 3 && rem_agri == 0 {
+                if rem_mine > 1 {
+                    rem_mine -= 1;
+                } else if rem_env > 1 {
+                    rem_env -= 1;
+                }
+                rem_agri += 1;
+            }
+            for _ in 0..rem_mine {
+                cohort.push(("mining_ind", p.id.clone()));
+            }
+            for _ in 0..rem_env {
+                cohort.push(("env_recycle", p.id.clone()));
+            }
+            for _ in 0..rem_agri {
+                cohort.push(("agri_bio", p.id.clone()));
+            }
+        }
+        cohort
+    }
+
     fn seed_initial_actors(
         world: &mut World,
         runner: &mut SimulationRunner,
         store: &mut SqliteStore,
     ) -> Result<(), String> {
-        // Starter player on P1 (can also spawn extra players via /api/companies)
-        world.spawn_company("player1", "Meridian Pioneer", true, "mining_ind", "P1", 10_000.0)?;
+        let player_home = Self::preferred_player_home_planet(world);
+        world.spawn_company(
+            "player1",
+            "Meridian Pioneer",
+            true,
+            "mining_ind",
+            &player_home,
+            10_000.0,
+        )?;
         let starter_bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
         runner.set_player_script("player1", starter_bundle.clone());
         store.save_player_bundle("player1", &starter_bundle)?;
         store.save_player_memory("player1", "{}", true)?;
 
-        // Balanced initial cohort of 48 0-hardcoded NPCs across P1/P2/P3 (90% plot cap safe)
-        let mut cohort: Vec<(&str, &str)> = Vec::with_capacity(48);
-        // P1 (12): heavy mining/industrial base + local support
-        cohort.extend(std::iter::repeat_n(("mining_ind", "P1"), 8));
-        cohort.extend(std::iter::repeat_n(("env_recycle", "P1"), 2));
-        cohort.extend(std::iter::repeat_n(("agri_bio", "P1"), 2));
-        // P2 (24): populous habitable core + all 3 chains
-        cohort.extend(std::iter::repeat_n(("env_recycle", "P2"), 9));
-        cohort.extend(std::iter::repeat_n(("agri_bio", "P2"), 9));
-        cohort.extend(std::iter::repeat_n(("mining_ind", "P2"), 6));
-        // P3 (12): outer cold planet fuel/water/mining + agri
-        cohort.extend(std::iter::repeat_n(("env_recycle", "P3"), 5));
-        cohort.extend(std::iter::repeat_n(("agri_bio", "P3"), 3));
-        cohort.extend(std::iter::repeat_n(("mining_ind", "P3"), 4));
-
+        // Dynamic 48-NPC cohort distributed across all generated planets within 90% plot cap
+        let cohort = Self::allocate_initial_npcs(world);
         for (i, (prof, planet)) in cohort.iter().enumerate() {
             let cid = format!("npc_{i:02}");
             let name = format!("Autonomous-{prof}-{i:02}");
@@ -358,8 +500,9 @@ impl GameEngine {
             }
             return Ok(());
         }
+        let home_pid = Self::preferred_player_home_planet(&self.world);
         self.world
-            .spawn_company(company_id, nickname, true, "mining_ind", "P1", 10_000.0)?;
+            .spawn_company(company_id, nickname, true, "mining_ind", &home_pid, 10_000.0)?;
         self.world_dirty = true;
         let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
         self.store.save_player_bundle(company_id, &bundle)?;
@@ -490,23 +633,24 @@ impl GameEngine {
         }
         self.next_npc_seq = seq + 1;
 
-        // Preserve ecosystem profession & planet niche diversity scaled to 48-NPC baseline
-        let target_niches: [(&str, &str, usize); 9] = [
-            ("env_recycle", "P2", 9),
-            ("agri_bio", "P2", 9),
-            ("mining_ind", "P2", 6),
-            ("mining_ind", "P1", 8),
-            ("env_recycle", "P1", 2),
-            ("agri_bio", "P1", 2),
-            ("env_recycle", "P3", 5),
-            ("agri_bio", "P3", 3),
-            ("mining_ind", "P3", 4),
-        ];
+        // Preserve ecosystem profession & planet niche diversity dynamically across all generated planets
+        let target_niches: Vec<(&'static str, String, usize)> = Self::allocate_initial_npcs(&self.world)
+            .into_iter()
+            .fold(HashMap::<(&'static str, String), usize>::new(), |mut acc, pair| {
+                *acc.entry(pair).or_insert(0) += 1;
+                acc
+            })
+            .into_iter()
+            .map(|((prof, pid), want)| (prof, pid, want))
+            .collect();
+        if target_niches.is_empty() {
+            return;
+        }
         let mut best_idx = (seq as usize) % target_niches.len();
         let mut best_deficit: i32 = i32::MIN;
         for off in 0..target_niches.len() {
             let i = ((seq as usize) + off) % target_niches.len();
-            let (p, pl, want) = target_niches[i];
+            let (p, ref pl, want) = target_niches[i];
             if self.world.npc_plot_count_on(pl) >= self.world.npc_plot_cap_on(pl) {
                 continue;
             }
@@ -514,7 +658,7 @@ impl GameEngine {
                 .world
                 .companies
                 .values()
-                .filter(|c| !c.is_player && c.profession == p && c.home_planet_id == pl)
+                .filter(|c| !c.is_player && c.profession == p && c.home_planet_id == *pl)
                 .count() as i32;
             let deficit = want as i32 - have;
             if deficit > best_deficit {
@@ -522,7 +666,7 @@ impl GameEngine {
                 best_idx = i;
             }
         }
-        let (prof, planet, _) = target_niches[best_idx];
+        let (prof, ref planet, _) = target_niches[best_idx];
         if let Some((new_cid, genome)) = self.spawn_evolved_company_on(
             prof,
             planet,
@@ -621,32 +765,52 @@ impl GameEngine {
 
         let cpi = self.world.cpi.max(0.25);
         let profs = ["env_recycle", "agri_bio", "mining_ind"];
-        for pid in ["P2", "P1", "P3"] {
+        let mut planet_order: Vec<(String, u32, f64)> = self
+            .world
+            .planets
+            .values()
+            .map(|p| (p.id.clone(), p.city_count, p.habitability))
+            .collect();
+        planet_order.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        let total_p_weight: f64 = planet_order
+            .iter()
+            .map(|(_, cc, hab)| 1.0 + (*cc as f64) * 1.45 + *hab * 1.6)
+            .sum::<f64>()
+            .max(1.0);
+
+        for (pid, cc, hab) in &planet_order {
             if total_npcs >= MAX_GLOBAL_NPCS {
                 break;
             }
             let Some(p) = self.world.planets.get(pid) else {
                 continue;
             };
-            let cap_p = match pid {
-                "P2" => (24 + (p.population / 350.0) as usize).min(42),
-                _ => 18,
-            };
-            let min_p = match pid {
-                "P2" => 20,
-                _ => 10,
-            };
+            let w = 1.0 + (*cc as f64) * 1.45 + *hab * 1.6;
+            let min_p = ((48.0 * w / total_p_weight).round() as usize).clamp(4, 24);
+            let cap_p = ((min_p as f64 * 1.65).ceil() as usize + (p.population / 500.0) as usize)
+                .min(42)
+                .max(min_p);
             let mut cur_on_p = self
                 .world
                 .companies
                 .values()
-                .filter(|c| !c.is_player && c.home_planet_id == pid)
+                .filter(|c| !c.is_player && c.home_planet_id == *pid)
                 .count();
             if cur_on_p >= cap_p {
                 continue;
             }
 
-            let sid = format!("ST:{pid}");
+            let sid = p.station_id.clone();
+            let hub_sid = self
+                .world
+                .systems
+                .get(&p.system_id)
+                .map(|s| s.hub_station_id.clone())
+                .unwrap_or_else(|| "ST:HUB".to_string());
             let n_spawn = if cur_on_p < min_p { 2 } else { 1 };
 
             for _ in 0..n_spawn {
@@ -673,7 +837,7 @@ impl GameEngine {
                 // Evaluate best profession on this planet using current market prices & shortages
                 let (best_prof, best_margin) = {
                     let st_opt = self.world.stations.get(&sid);
-                    let hub_opt = self.world.stations.get("ST:HUB");
+                    let hub_opt = self.world.stations.get(&hub_sid);
                     let mut best_prof = profs[0];
                     let mut best_score = f64::NEG_INFINITY;
                     let mut best_margin = 0.0;
@@ -685,7 +849,7 @@ impl GameEngine {
                             .world
                             .companies
                             .values()
-                            .filter(|c| !c.is_player && c.home_planet_id == pid && c.profession == pr_id)
+                            .filter(|c| !c.is_player && c.home_planet_id == *pid && c.profession == pr_id)
                             .count();
                         let mut top_m = -1.0f64;
                         let mut shortage_bonus = 0.0f64;
@@ -768,13 +932,29 @@ impl GameEngine {
                                 }
                             }
                         }
-                        // Encourage underrepresented professions on the planet so no monopoly forms
-                        let crowding_pen = (have_pr as f64 / (cur_on_p.max(1) as f64 / 3.0)) * 0.25;
-                        let score = top_m + shortage_bonus - crowding_pen;
+                        // Encourage underrepresented professions locally and globally so no monopoly forms
+                        let global_have_pr = self
+                            .world
+                            .companies
+                            .values()
+                            .filter(|c| !c.is_player && c.profession == pr_id)
+                            .count();
+                        let global_target = (total_npcs.max(3) as f64) / 3.0;
+                        let local_crowding_pen =
+                            (have_pr as f64 / (cur_on_p.max(1) as f64 / 3.0)) * 0.25;
+                        let global_crowding_pen =
+                            (global_have_pr as f64 / global_target.max(1.0)) * 0.55;
+                        let global_scarcity_bonus = if global_have_pr < 8 {
+                            (8 - global_have_pr) as f64 * 0.25
+                        } else {
+                            0.0
+                        };
+                        let score =
+                            top_m + shortage_bonus + global_scarcity_bonus - local_crowding_pen - global_crowding_pen;
                         if score > best_score {
                             best_score = score;
                             best_prof = pr_id;
-                            best_margin = top_m;
+                            best_margin = top_m + global_scarcity_bonus;
                         }
                     }
                     (best_prof, best_margin)
@@ -811,7 +991,7 @@ impl GameEngine {
         self.runner.extra_intents.clear();
         self.runner.last_player_outputs.clear();
 
-        let mut new_world = World::new_standard(catalog);
+        let mut new_world = World::new_generated(catalog, generate_world_seed());
         Self::seed_initial_actors(&mut new_world, &mut self.runner, &mut self.store)?;
         self.store.save_world(&new_world)?;
         self.world = new_world;
@@ -833,6 +1013,51 @@ impl GameEngine {
         Ok(bcast)
     }
 
+    pub fn primary_hub_station_id(&self) -> String {
+        self.world
+            .systems
+            .get("S1")
+            .or_else(|| self.world.systems.values().next())
+            .map(|s| s.hub_station_id.clone())
+            .unwrap_or_else(|| "ST:HUB".to_string())
+    }
+
+    pub fn system_summaries(&self) -> Vec<StarSystemView> {
+        let mut out: Vec<StarSystemView> = self
+            .world
+            .systems
+            .values()
+            .map(|s| StarSystemView {
+                id: s.id.clone(),
+                name: s.name.clone(),
+                star_class: s.star_class.clone(),
+                luminosity: s.luminosity,
+                x: s.x,
+                y: s.y,
+                hub_station_id: s.hub_station_id.clone(),
+                hub_orbit_radius: s.hub_orbit_radius,
+                hub_orbit_days: s.hub_orbit_days,
+                hub_orbit_angle: s.hub_orbit_angle,
+            })
+            .collect();
+        if out.is_empty() {
+            out.push(StarSystemView {
+                id: "S1".to_string(),
+                name: "新伊甸星系".to_string(),
+                star_class: "G2V 黄矮星".to_string(),
+                luminosity: 1.0,
+                x: 0.0,
+                y: 0.0,
+                hub_station_id: "ST:HUB".to_string(),
+                hub_orbit_radius: self.world.hub_orbit_radius,
+                hub_orbit_days: self.world.hub_orbit_days,
+                hub_orbit_angle: self.world.hub_orbit_angle,
+            });
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
     pub fn planet_summaries(&self) -> Vec<PlanetSummary> {
         let mut out: Vec<PlanetSummary> = self
             .world
@@ -840,6 +1065,7 @@ impl GameEngine {
             .values()
             .map(|p| PlanetSummary {
                 id: p.id.clone(),
+                system_id: p.system_id.clone(),
                 name: p.name.clone(),
                 archetype: p.archetype.clone(),
                 wealth_tier: p.wealth_tier,
@@ -852,10 +1078,18 @@ impl GameEngine {
                 unclaimed_plots: p.unclaimed_plots_remaining,
                 orbit_radius: p.orbit_radius,
                 orbit_angle: p.orbit_angle,
+                habitability: p.habitability,
+                solar_mult: p.solar_mult,
+                mineral_mult: p.mineral_mult,
+                water_mult: p.water_mult,
+                ocean_ratio: p.ocean_ratio,
+                rotation_days: p.rotation_days,
+                visual_seed: p.visual_seed,
+                city_count: p.city_count,
                 demands: p.last_demands.clone(),
             })
             .collect();
-        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out.sort_by(|a, b| a.orbit_radius.partial_cmp(&b.orbit_radius).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.id.cmp(&b.id)));
         out
     }
 
@@ -945,8 +1179,12 @@ impl GameEngine {
             .map(|p| {
                 serde_json::json!({
                     "id": p.id,
+                    "system_id": p.system_id,
                     "name": p.name,
                     "archetype": p.archetype,
+                    "habitability": p.habitability,
+                    "city_count": p.city_count,
+                    "orbit_radius": p.orbit_radius,
                     "population": p.population,
                     "wealth_tier": p.wealth_tier,
                     "prosperity": p.prosperity,
@@ -1128,6 +1366,8 @@ impl GameEngine {
                 "total_storage_fees": from_money_i128(self.world.ledger.total_storage_fees),
                 "total_wages_paid": from_money_i128(self.world.ledger.total_wages_paid),
             },
+            "systems": self.system_summaries(),
+            "hub_orbit_radius": self.world.hub_orbit_radius,
             "planets": planets_detail,
             "stations": station_stats,
             "companies": companies_sorted,
@@ -1144,6 +1384,10 @@ impl GameEngine {
             tick_ms: self.tick_ms,
             conservation_error: self.world.conservation_error(),
             total_minted: from_money_i128(self.world.ledger.expected_circulation()),
+            hub_orbit_radius: self.world.hub_orbit_radius,
+            hub_orbit_days: self.world.hub_orbit_days,
+            hub_orbit_angle: self.world.hub_orbit_angle,
+            systems: self.system_summaries(),
             planets: self.planet_summaries(),
             leaderboard: self.leaderboard(),
             market_tickers: self.market_tickers(),
@@ -1175,11 +1419,28 @@ impl GameEngine {
             bankruptcies: report.bankruptcies.clone(),
             rejected_intents: report.rejected_intents,
             conservation_error: self.world.conservation_error(),
+            hub_orbit_radius: self.world.hub_orbit_radius,
+            hub_orbit_days: self.world.hub_orbit_days,
+            hub_orbit_angle: self.world.hub_orbit_angle,
             planets: self.planet_summaries(),
             leaderboard: self.leaderboard(),
             player_outputs: self.runner.last_player_outputs.clone(),
         }
     }
+}
+
+static WORLD_SEED_SEQ: AtomicU64 = AtomicU64::new(1);
+
+pub fn generate_world_seed() -> u64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x4D45_5249_4449_414E);
+    let seq = WORLD_SEED_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut z = nanos ^ seq.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
 }
 
 #[inline]

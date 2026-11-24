@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::planet::Planet;
+use crate::planet::{Planet, StarSystem};
 use crate::types::{CompanyId, ItemId, LocationId, PlanetId, ShipId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +102,7 @@ pub enum RouteKind {
     GroundToStation,
     StationToGround,
     Interplanetary,
+    Interstellar,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,6 +110,25 @@ pub struct RouteSpec {
     pub kind: RouteKind,
     pub ticks: u32,
     pub fuel: u32,
+}
+
+pub fn station_coords_in_systems(
+    sid: &str,
+    planets: &HashMap<PlanetId, Planet>,
+    systems: &HashMap<String, StarSystem>,
+) -> Option<(f64, f64)> {
+    if let Some(sys) = systems.values().find(|s| s.hub_station_id == sid) {
+        return Some((
+            sys.hub_orbit_radius * sys.hub_orbit_angle.cos(),
+            sys.hub_orbit_radius * sys.hub_orbit_angle.sin(),
+        ));
+    }
+    let pid = sid.strip_prefix("ST:")?;
+    let p = planets.get(pid)?;
+    Some((
+        p.orbit_radius * p.orbit_angle.cos(),
+        p.orbit_radius * p.orbit_angle.sin(),
+    ))
 }
 
 pub fn station_coords(
@@ -126,6 +146,123 @@ pub fn station_coords(
         p.orbit_radius * p.orbit_angle.cos(),
         p.orbit_radius * p.orbit_angle.sin(),
     ))
+}
+
+/// Multi-system-aware physical route calculator:
+/// - Planet ground (`P*`) <-> its local orbit station (`ST:P*`)
+/// - Same-system station (`ST:P*`) <-> system trade Hub (`ST:HUB` / `ST:HUB:S*`)
+/// - Inter-system Hub <-> Hub jump when multiple star systems exist
+pub fn compute_route_in_systems(
+    from: &str,
+    to: &str,
+    ship_size: ShipSize,
+    durability: f64,
+    planets: &HashMap<PlanetId, Planet>,
+    systems: &HashMap<String, StarSystem>,
+    fallback_hub_radius: f64,
+    fallback_hub_angle: f64,
+) -> Option<RouteSpec> {
+    if systems.is_empty() {
+        return compute_route(
+            from,
+            to,
+            ship_size,
+            durability,
+            planets,
+            fallback_hub_radius,
+            fallback_hub_angle,
+        );
+    }
+    if from == to {
+        return None;
+    }
+
+    // 1. Ground <-> Local station
+    if let Some(pid) = to.strip_prefix("ST:") {
+        if from == pid {
+            let p = planets.get(pid)?;
+            let mut ticks = ((ship_size.launch_ticks() as f64) * p.launch_ticks_mult())
+                .round()
+                .max(1.0) as u32;
+            let fuel = ((ship_size.launch_fuel() as f64) * p.launch_fuel_mult())
+                .round()
+                .max(1.0) as u32;
+            if durability <= 0.0 {
+                ticks *= 2;
+            }
+            return Some(RouteSpec {
+                kind: RouteKind::GroundToStation,
+                ticks,
+                fuel,
+            });
+        }
+    }
+    if let Some(pid) = from.strip_prefix("ST:") {
+        if to == pid {
+            let p = planets.get(pid)?;
+            let mut ticks = ((ship_size.launch_ticks() as f64) * p.launch_ticks_mult())
+                .round()
+                .max(1.0) as u32;
+            let fuel = ((ship_size.launch_fuel() as f64) * p.launch_fuel_mult())
+                .round()
+                .max(1.0) as u32;
+            if durability <= 0.0 {
+                ticks *= 2;
+            }
+            return Some(RouteSpec {
+                kind: RouteKind::StationToGround,
+                ticks,
+                fuel,
+            });
+        }
+    }
+
+    // 2. Inter-system Hub <-> Hub
+    let sys_from = systems.values().find(|s| s.hub_station_id == from);
+    let sys_to = systems.values().find(|s| s.hub_station_id == to);
+    if let (Some(sf), Some(st)) = (sys_from, sys_to) {
+        if sf.id == st.id {
+            return None;
+        }
+        let dist = ((sf.x - st.x).powi(2) + (sf.y - st.y).powi(2)).sqrt().max(1.0);
+        let mut ticks = (dist * 4.0).round().max(12.0) as u32;
+        let fuel = (dist * 6.0).round().max(10.0) as u32;
+        if durability <= 0.0 {
+            ticks *= 2;
+        }
+        return Some(RouteSpec {
+            kind: RouteKind::Interstellar,
+            ticks,
+            fuel,
+        });
+    }
+
+    // 3. Same-system station <-> system Hub
+    let (hub_sid, planet_pid) = if let Some(sf) = sys_from {
+        (sf.hub_station_id.as_str(), to.strip_prefix("ST:")?)
+    } else if let Some(st) = sys_to {
+        (st.hub_station_id.as_str(), from.strip_prefix("ST:")?)
+    } else {
+        return None;
+    };
+    let p = planets.get(planet_pid)?;
+    let p_sys = systems.get(&p.system_id)?;
+    if p_sys.hub_station_id != hub_sid {
+        return None;
+    }
+    let (x1, y1) = station_coords_in_systems(from, planets, systems)?;
+    let (x2, y2) = station_coords_in_systems(to, planets, systems)?;
+    let dist = ((x1 - x2).powi(2) + (y1 - y2).powi(2)).sqrt();
+    let mut ticks = (dist * 6.0).round().max(3.0) as u32;
+    let fuel = (dist * 3.0).round().max(2.0) as u32;
+    if durability <= 0.0 {
+        ticks *= 2;
+    }
+    Some(RouteSpec {
+        kind: RouteKind::Interplanetary,
+        ticks,
+        fuel,
+    })
 }
 
 /// Computes physical transit time and fuel cost for valid legs:

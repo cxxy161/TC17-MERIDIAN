@@ -105,20 +105,50 @@ pub struct LandListing {
     pub debt_recovery: Money,
 }
 
+fn default_system_id() -> String {
+    "S1".to_string()
+}
+
+fn default_rotation_days() -> f64 {
+    6.0
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StarSystem {
+    pub id: String,
+    pub name: String,
+    pub star_class: String,
+    pub luminosity: f64,
+    pub x: f64,
+    pub y: f64,
+    pub hub_station_id: StationId,
+    pub hub_orbit_radius: f64,
+    pub hub_orbit_days: f64,
+    pub hub_orbit_angle: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Planet {
     pub id: PlanetId,
+    #[serde(default = "default_system_id")]
+    pub system_id: String,
     pub name: String,
     pub archetype: String,
     pub station_id: StationId,
     pub orbit_radius: f64,
     pub orbit_period_days: f64,
     pub orbit_angle: f64,
+    #[serde(default = "default_rotation_days")]
+    pub rotation_days: f64,
+    #[serde(default)]
+    pub visual_seed: u32,
     pub gravity: f64,
     pub solar_mult: f64,
     pub mineral_mult: f64,
     pub water_mult: f64,
     pub ocean_ratio: f64,
+    #[serde(default)]
+    pub habitability: f64,
 
     pub city_count: u32,
     pub city_level: u32,
@@ -225,9 +255,17 @@ impl Planet {
         if self.city_count == 0 || self.population <= 0.0 {
             return demands;
         }
+        // Harsher inhabited colonies require slightly more life-support supplies per capita.
+        let hab = if self.habitability > 0.0 {
+            self.habitability.clamp(0.05, 1.0)
+        } else {
+            0.85
+        };
+        let env_mult = 1.0 + (1.0 - hab).max(0.0) * 0.35;
         for it in catalog.items.values() {
             if it.wealth_tier <= self.wealth_tier && it.base_demand_per_1k > 0.0 {
-                let mut qty = ((self.population / 1000.0) * it.base_demand_per_1k).round() as u32;
+                let mut qty = ((self.population / 1000.0) * it.base_demand_per_1k * env_mult)
+                    .round() as u32;
                 if it.id == "disposal_cert" {
                     // Waste accumulation boosts disposal certificate demand
                     let extra = (self.waste_backlog / 12).min(qty.saturating_mul(2) + 4);

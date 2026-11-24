@@ -36,14 +36,18 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
   const catalog = useGameStore((s) => s.catalog);
   const sendIntent = useGameStore((s) => s.sendIntent);
 
-  const [planetId, setPlanetId] = useState<string>(params.planetId || 'P2');
+  const [planetId, setPlanetId] = useState<string>(params.planetId || '');
 
   useEffect(() => {
     if (params.planetId) setPlanetId(params.planetId);
   }, [params.planetId]);
 
   const planets = state?.planets ?? [];
-  const pSum = planets.find((p) => p.id === planetId) ?? planets[0];
+  const defaultPlanet =
+    planets.find((p) => p.id === state?.player_snapshot?.company.home_planet_id) ??
+    planets.find((p) => p.population > 0) ??
+    planets[0];
+  const pSum = (planetId ? planets.find((p) => p.id === planetId) : undefined) ?? defaultPlanet;
   const pView = pSum ? state?.player_snapshot?.planets[pSum.id] : undefined;
   const routes = state?.player_snapshot?.routes ?? {};
 
@@ -61,7 +65,9 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
   const rCost = routes[pSum.id]?.[`ST:${pSum.id}`];
   const demandCount = Object.keys(pSum.demands ?? {}).length;
   const ticksPerDay = catalog?.meta.ticks_per_day || 24;
-  const rotDays = PLANET_ROTATION_DAYS[pSum.id] ?? 1.0;
+  const rotDays = pSum.rotation_days && pSum.rotation_days > 0
+    ? pSum.rotation_days
+    : (PLANET_ROTATION_DAYS[pSum.id] ?? 1.0);
   const rotHours = Math.round(rotDays * ticksPerDay);
 
   return (
@@ -104,10 +110,15 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
 
           <div className="flex">
             <div className="w-[29%] min-w-[78px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
-              类型 / 轨道
+              类型 / 宜居
             </div>
             <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200 truncate">
               {pSum.archetype} · <span className="mono">{pSum.orbit_radius.toFixed(2)} AU</span>
+              {pSum.habitability !== undefined && (
+                <span className="ml-1.5 mono text-emerald-300">
+                  宜居 {Math.round(pSum.habitability * 100)}%
+                </span>
+              )}
             </div>
           </div>
 
@@ -258,6 +269,7 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
         <div className="flex-1 min-h-[200px]">
           <Planet3DCanvas
             planetId={pSum.id}
+            planet={pSum}
             tick={state?.tick ?? 0}
             paused={state?.paused ?? false}
             tickMs={state?.tick_ms ?? 2000}

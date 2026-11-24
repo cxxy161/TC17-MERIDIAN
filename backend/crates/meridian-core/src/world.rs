@@ -7,18 +7,39 @@ use serde::{Deserialize, Serialize};
 use crate::company::Company;
 use crate::exchange::{CLOBStation, Order, TradeFill};
 use crate::ledger::MoneyLedger;
-use crate::logistics::{compute_route, RouteKind, Ship, ShipInFlight, ShipSize};
-use crate::planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob};
+use crate::logistics::{compute_route_in_systems, RouteKind, Ship, ShipInFlight, ShipSize};
+use crate::planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem};
 use crate::schema::{ItemRole, ProductionCatalog};
 use crate::snapshot::{
     BuildingView, LandListingView, PlanetView, PlotView, SelfView, SharedSnapshot, ShipView,
-    WorldSnapshot,
+    StarSystemView, WorldSnapshot,
 };
 use crate::types::{
     bps_of, from_money, to_money, BankOpKind, BuildingId, CompanyId, Intent, ItemId, ListingId,
     Money, OrderId, OrderSide, PlanetId, PlotId, ShipId, StationId,
     MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK,
 };
+
+struct SplitMix(u64);
+
+impl SplitMix {
+    fn new(seed: u64) -> Self {
+        let s = seed ^ 0x9E37_79B9_7F4A_7C15;
+        Self(if s == 0 { 0xD1B5_4A32_D192_ED03 } else { s })
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn next_f64(&mut self) -> f64 {
+        ((self.next_u64() >> 11) as f64) / ((1u64 << 53) as f64)
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TickReport {
@@ -34,6 +55,10 @@ pub struct World {
     pub catalog: ProductionCatalog,
     pub tick: u64,
     pub cpi: f64,
+    #[serde(default)]
+    pub world_seed: u64,
+    #[serde(default)]
+    pub systems: HashMap<String, StarSystem>,
     pub hub_orbit_radius: f64,
     pub hub_orbit_days: f64,
     pub hub_orbit_angle: f64,
@@ -64,25 +89,42 @@ impl World {
         }
         stations.insert("ST:HUB".to_string(), hub);
 
+        let mut systems = HashMap::new();
+        systems.insert(
+            "S1".to_string(),
+            StarSystem {
+                id: "S1".to_string(),
+                name: "新伊甸星系".to_string(),
+                star_class: "G2V 黄矮星".to_string(),
+                luminosity: 1.0,
+                x: 0.0,
+                y: 0.0,
+                hub_station_id: "ST:HUB".to_string(),
+                hub_orbit_radius: 1.45,
+                hub_orbit_days: 200.0,
+                hub_orbit_angle: 0.0,
+            },
+        );
+
         let planet_specs = vec![
             (
-                "P1", "灼热矿星-I", "矿业岩星", 0.90, 95.0, 0.5, 1.40, 1.60, 1.65, 0.65, 0.05, 0,
-                0.0, 20000.0, 30000.0,
+                "P1", "灼热矿星-I", "矿业岩星", 0.90, 95.0, 0.5, 2.6, 101_u32, 1.40, 1.60, 1.65,
+                0.65, 0.05, 0.28, 0, 0.0, 20000.0, 30000.0,
             ),
             (
-                "P2", "新伊甸-II", "宜居主星", 1.85, 320.0, 2.1, 1.00, 1.00, 0.85, 1.35, 0.45, 3,
-                4500.0, 35000.0, 60000.0,
+                "P2", "新伊甸-II", "宜居主星", 1.85, 320.0, 2.1, 4.2, 202_u32, 1.00, 1.00, 0.85,
+                1.35, 0.45, 0.92, 3, 4500.0, 35000.0, 60000.0,
             ),
             (
-                "P3", "凛冬外星-III", "寒冷低重星", 2.75, 580.0, 4.4, 0.55, 0.45, 1.05, 1.65, 0.25, 0,
-                0.0, 20000.0, 30000.0,
+                "P3", "凛冬外星-III", "寒冷低重星", 2.75, 580.0, 4.4, 8.9, 303_u32, 0.55, 0.45, 1.05,
+                1.65, 0.25, 0.34, 0, 0.0, 20000.0, 30000.0,
             ),
         ];
 
         let mut planets = HashMap::new();
         for (
-            pid, name, arch, orb_r, orb_d, orb_a, grav, solar, mineral, water, ocean, cities, pop,
-            treasury_f, reserves_f,
+            pid, name, arch, orb_r, orb_d, orb_a, rot_d, v_seed, grav, solar, mineral, water,
+            ocean, hab, cities, pop, treasury_f, reserves_f,
         ) in planet_specs
         {
             let treasury = to_money(treasury_f);
@@ -104,17 +146,21 @@ impl World {
                 pid.to_string(),
                 Planet {
                     id: pid.to_string(),
+                    system_id: "S1".to_string(),
                     name: name.to_string(),
                     archetype: arch.to_string(),
                     station_id: sid,
                     orbit_radius: orb_r,
                     orbit_period_days: orb_d,
                     orbit_angle: orb_a,
+                    rotation_days: rot_d,
+                    visual_seed: v_seed,
                     gravity: grav,
                     solar_mult: solar,
                     mineral_mult: mineral,
                     water_mult: water,
                     ocean_ratio: ocean,
+                    habitability: hab,
                     city_count: cities,
                     city_level: 1,
                     city_capacity: (cities * 3000) as f64,
@@ -142,6 +188,8 @@ impl World {
             catalog,
             tick: 0,
             cpi: 1.0,
+            world_seed: 0,
+            systems,
             hub_orbit_radius: 1.45,
             hub_orbit_days: 200.0,
             hub_orbit_angle: 0.0,
@@ -159,6 +207,338 @@ impl World {
             next_listing_id: 1,
             rng_state: 0x9E37_79B9_7F4A_7C15,
         }
+    }
+
+    /// Generate a procedural single-system (`S1`) world with `3..=9` planets, physical
+    /// habitability driving city counts, and ~10,000 initial urban residents (no forced utopia).
+    pub fn new_generated(catalog: ProductionCatalog, seed: u64) -> Self {
+        let mut rng = SplitMix::new(seed);
+        let next_u64 = |r: &mut SplitMix| r.next_u64();
+        let rand_f64 = |r: &mut SplitMix| r.next_f64();
+
+        let mut ledger = MoneyLedger::default();
+        let mut stations = HashMap::new();
+        let mut hub = CLOBStation::new("ST:HUB");
+        for it in catalog.items.values() {
+            hub.seed_reference_price(&it.id, to_money(it.ref_price.max(0.01)));
+        }
+        stations.insert("ST:HUB".to_string(), hub);
+
+        let star_classes = [
+            ("F7V 黄白矮星", 1.24),
+            ("G2V 黄矮星", 1.00),
+            ("G8V 暖黄星", 0.88),
+            ("K1V 橙矮星", 0.78),
+        ];
+        let star_names = [
+            "天苑四", "南门二", "天仓五", "波江座ε", "蛇夫座70", "孔雀座δ", "天龙座σ", "轩辕增九",
+        ];
+        let (star_class, lum_base) = star_classes[(next_u64(&mut rng) as usize) % star_classes.len()];
+        let luminosity = (lum_base * (0.90 + rand_f64(&mut rng) * 0.22)).clamp(0.68, 1.40);
+        let star_name = star_names[(next_u64(&mut rng) as usize) % star_names.len()];
+        let hub_orbit_radius = 1.20 + rand_f64(&mut rng) * 0.65;
+        let hub_orbit_days = 160.0 + rand_f64(&mut rng) * 110.0;
+
+        let mut systems = HashMap::new();
+        systems.insert(
+            "S1".to_string(),
+            StarSystem {
+                id: "S1".to_string(),
+                name: format!("{star_name}星系"),
+                star_class: star_class.to_string(),
+                luminosity,
+                x: 0.0,
+                y: 0.0,
+                hub_station_id: "ST:HUB".to_string(),
+                hub_orbit_radius,
+                hub_orbit_days,
+                hub_orbit_angle: 0.0,
+            },
+        );
+
+        let planet_count = 3 + ((next_u64(&mut rng) % 7) as usize); // 3..=9 planets
+        let roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
+        let name_pool = [
+            "炽岩", "赤砂", "金晖", "晨曦", "新伊甸", "翠微", "苍岚", "青冥",
+            "望舒", "霜华", "寒渊", "冥冰", "玄石", "星港", "碧落", "流火",
+        ];
+        // Pick distinct planet base names using partial Fisher-Yates indices
+        let mut pool_idx: Vec<usize> = (0..name_pool.len()).collect();
+        for i in (1..pool_idx.len()).rev() {
+            let j = (next_u64(&mut rng) as usize) % (i + 1);
+            pool_idx.swap(i, j);
+        }
+
+        struct DraftPlanet {
+            pid: String,
+            name: String,
+            archetype: String,
+            orbit_radius: f64,
+            orbit_period_days: f64,
+            orbit_angle: f64,
+            rotation_days: f64,
+            visual_seed: u32,
+            gravity: f64,
+            solar_mult: f64,
+            mineral_mult: f64,
+            water_mult: f64,
+            ocean_ratio: f64,
+            habitability: f64,
+            city_count: u32,
+        }
+
+        let mut drafts = Vec::with_capacity(planet_count);
+        let mut orbit_r = 0.58 + rand_f64(&mut rng) * 0.28;
+        let star_mass_sqrt = luminosity.powf(0.22);
+
+        for i in 0..planet_count {
+            let pid = format!("P{}", i + 1);
+            if i > 0 {
+                let step = 0.36 + rand_f64(&mut rng) * 0.32;
+                orbit_r += step;
+            }
+            let orbit_period_days =
+                ((orbit_r.powf(1.5) * 145.0 / star_mass_sqrt).clamp(55.0, 1400.0) * 10.0).round()
+                    / 10.0;
+            let orbit_angle = rand_f64(&mut rng) * std::f64::consts::TAU;
+            let rotation_days = (1.2 + rand_f64(&mut rng) * 14.5).clamp(1.2, 16.0);
+            let visual_seed = (next_u64(&mut rng) & 0xFFFF_FFFF) as u32;
+
+            let insolation = luminosity / (orbit_r * orbit_r);
+            let solar_mult = (insolation.powf(0.52)).clamp(0.32, 2.25);
+
+            // Gravity tends higher for rocky/super-earth planets, varied cleanly across orbits
+            let gravity = (0.48 + rand_f64(&mut rng) * 1.18).clamp(0.45, 1.75);
+
+            // Mineral richness tends higher closer to the star and on denser worlds
+            let inner_metal_bonus = (1.15 - orbit_r * 0.16).clamp(0.75, 1.25);
+            let mineral_mult = ((0.62 + rand_f64(&mut rng) * 1.10) * inner_metal_bonus).clamp(0.55, 1.95);
+
+            // Water availability: scorching inner orbits bake off volatiles; temperate/outer keep more
+            let temp_water_factor = if insolation > 2.2 {
+                0.35 + rand_f64(&mut rng) * 0.35
+            } else if insolation > 0.45 {
+                0.78 + rand_f64(&mut rng) * 0.72
+            } else {
+                0.95 + rand_f64(&mut rng) * 0.75
+            };
+            let water_mult = temp_water_factor.clamp(0.25, 1.85);
+            let raw_ocean = if insolation > 2.4 {
+                rand_f64(&mut rng) * 0.08
+            } else if insolation >= 0.45 {
+                0.10 + (water_mult - 0.65).max(0.0) * 0.48 + rand_f64(&mut rng) * 0.15
+            } else {
+                0.08 + rand_f64(&mut rng) * 0.35
+            };
+            let ocean_ratio = raw_ocean.clamp(0.02, 0.72);
+
+            // Physical habitability (0..=1) from thermal band, gravity, and surface volatiles
+            let thermal_log_diff = insolation.max(0.08).ln().abs();
+            let temp_score = (1.0 - thermal_log_diff / 1.35).clamp(0.0, 1.0);
+            let grav_score = (1.0 - (gravity - 0.98).abs() / 0.85).clamp(0.08, 1.0);
+            let water_score = if water_mult < 0.5 {
+                (water_mult / 0.5) * 0.45
+            } else {
+                (1.0 - (ocean_ratio - 0.42).abs() / 0.55).clamp(0.25, 1.0)
+            };
+            let habitability =
+                ((0.48 * temp_score + 0.28 * water_score + 0.24 * grav_score) * 1.04)
+                    .clamp(0.05, 0.98);
+
+            let city_count = if habitability < 0.34 {
+                0
+            } else if habitability < 0.56 {
+                1
+            } else if habitability < 0.78 {
+                2
+            } else {
+                3
+            };
+
+            let archetype = if insolation > 2.2 && city_count == 0 {
+                "熔岩矿星"
+            } else if insolation > 1.7 {
+                if city_count > 0 { "炙热绿洲星" } else { "灼热岩星" }
+            } else if habitability >= 0.75 && ocean_ratio >= 0.52 {
+                "海洋宜居星"
+            } else if habitability >= 0.72 {
+                "温带宜居星"
+            } else if city_count > 0 && insolation < 0.55 {
+                "冷温开拓星"
+            } else if city_count > 0 {
+                "边疆殖民星"
+            } else if insolation < 0.45 {
+                "极寒低重星"
+            } else {
+                "贫瘠岩星"
+            };
+
+            let pname = format!("{}-{}", name_pool[pool_idx[i]], roman[i]);
+            drafts.push(DraftPlanet {
+                pid,
+                name: pname,
+                archetype: archetype.to_string(),
+                orbit_radius: (orbit_r * 100.0).round() / 100.0,
+                orbit_period_days,
+                orbit_angle,
+                rotation_days,
+                visual_seed,
+                gravity: (gravity * 100.0).round() / 100.0,
+                solar_mult: (solar_mult * 100.0).round() / 100.0,
+                mineral_mult: (mineral_mult * 100.0).round() / 100.0,
+                water_mult: (water_mult * 100.0).round() / 100.0,
+                ocean_ratio: (ocean_ratio * 100.0).round() / 100.0,
+                habitability: (habitability * 1000.0).round() / 1000.0,
+                city_count,
+            });
+        }
+
+        // Distribute ~10,000 initial urban population proportionally across inhabited planets.
+        let pop_weights: Vec<f64> = drafts
+            .iter()
+            .map(|d| {
+                if d.city_count > 0 {
+                    (d.city_count as f64) * d.habitability.powf(1.25)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let total_weight: f64 = pop_weights.iter().sum();
+
+        let mut planets = HashMap::with_capacity(planet_count);
+        for (idx, d) in drafts.into_iter().enumerate() {
+            let pop = if total_weight > 0.0 && d.city_count > 0 {
+                (10_000.0 * (pop_weights[idx] / total_weight)).round().max(400.0)
+            } else {
+                0.0
+            };
+            let city_capacity = if d.city_count > 0 {
+                (pop * 1.55).max((d.city_count * 3200) as f64).round()
+            } else {
+                0.0
+            };
+            let treasury_f = 18_000.0 + pop * 3.8 + d.mineral_mult * 2_000.0;
+            let reserves_f = 26_000.0 + pop * 6.0;
+            let treasury = to_money(treasury_f);
+            let reserves = to_money(reserves_f);
+            ledger.record_mint(treasury + reserves);
+
+            let sid = format!("ST:{}", d.pid);
+            let mut st = CLOBStation::new(&sid);
+            for it in catalog.items.values() {
+                st.seed_reference_price(&it.id, to_money(it.ref_price.max(0.01)));
+            }
+            stations.insert(sid.clone(), st);
+
+            let total_plots = ((252.0 * (1.0 - d.ocean_ratio)) as u32)
+                .saturating_sub(d.city_count)
+                .max(48);
+            let mut pw = VecDeque::with_capacity(240);
+            pw.push_back((0.76 + d.habitability * 0.14).clamp(0.65, 0.92));
+
+            planets.insert(
+                d.pid.clone(),
+                Planet {
+                    id: d.pid.clone(),
+                    system_id: "S1".to_string(),
+                    name: d.name,
+                    archetype: d.archetype,
+                    station_id: sid,
+                    orbit_radius: d.orbit_radius,
+                    orbit_period_days: d.orbit_period_days,
+                    orbit_angle: d.orbit_angle,
+                    rotation_days: d.rotation_days,
+                    visual_seed: d.visual_seed,
+                    gravity: d.gravity,
+                    solar_mult: d.solar_mult,
+                    mineral_mult: d.mineral_mult,
+                    water_mult: d.water_mult,
+                    ocean_ratio: d.ocean_ratio,
+                    habitability: d.habitability,
+                    city_count: d.city_count,
+                    city_level: if d.city_count > 0 { 1 } else { 0 },
+                    city_capacity,
+                    population: pop,
+                    wealth_tier: 1,
+                    prosperity: (0.78 + d.habitability * 0.12).clamp(0.70, 0.92),
+                    prosperity_window: pw,
+                    treasury,
+                    civic_output_per_capita: 0.08,
+                    waste_backlog: 0,
+                    bank: PlanetBank::new(&d.pid, reserves),
+                    total_developable_plots: total_plots,
+                    unclaimed_plots_remaining: total_plots,
+                    next_local_plot_seq: 1,
+                    land_listings: Vec::new(),
+                    last_demands: HashMap::new(),
+                    last_bought: HashMap::new(),
+                    bought_this_tick: HashMap::new(),
+                    prev_bids: HashMap::new(),
+                },
+            );
+        }
+
+        let rng_state = next_u64(&mut rng) | 1;
+        Self {
+            catalog,
+            tick: 0,
+            cpi: 1.0,
+            world_seed: seed,
+            systems,
+            hub_orbit_radius,
+            hub_orbit_days,
+            hub_orbit_angle: 0.0,
+            planets,
+            stations,
+            companies: HashMap::new(),
+            plots: HashMap::new(),
+            buildings: HashMap::new(),
+            in_flight: Vec::new(),
+            ledger,
+            next_order_id: 1,
+            next_plot_id: 1,
+            next_building_id: 1,
+            next_ship_id: 1,
+            next_listing_id: 1,
+            rng_state,
+        }
+    }
+
+    pub fn system_by_hub(&self, station_id: &str) -> Option<String> {
+        if let Some(sys) = self.systems.values().find(|s| s.hub_station_id == station_id) {
+            return Some(sys.id.clone());
+        }
+        if station_id == "ST:HUB" {
+            return Some("S1".to_string());
+        }
+        None
+    }
+
+    /// Best planet to settle BANK reserve flows for any station (local planet if orbital,
+    /// otherwise primary/most-populous planet in the hub's system).
+    pub fn default_bank_planet_id(&self, station_id: &str) -> Option<PlanetId> {
+        if let Some(pid) = station_id.strip_prefix("ST:") {
+            if self.planets.contains_key(pid) {
+                return Some(pid.to_string());
+            }
+        }
+        let sys_id = self.system_by_hub(station_id);
+        let mut candidates: Vec<&Planet> = self
+            .planets
+            .values()
+            .filter(|p| sys_id.as_deref().is_none_or(|sid| p.system_id == sid))
+            .collect();
+        if candidates.is_empty() {
+            candidates = self.planets.values().collect();
+        }
+        candidates.sort_by(|a, b| {
+            b.population
+                .partial_cmp(&a.population)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        candidates.first().map(|p| p.id.clone())
     }
 
     fn next_rand(&mut self) -> u64 {
@@ -468,6 +848,16 @@ impl World {
         self.hub_orbit_angle =
             (self.hub_orbit_angle + std::f64::consts::TAU * dt_days / self.hub_orbit_days)
                 % std::f64::consts::TAU;
+        for sys in self.systems.values_mut() {
+            sys.hub_orbit_angle = (sys.hub_orbit_angle
+                + std::f64::consts::TAU * dt_days / sys.hub_orbit_days.max(1.0))
+                % std::f64::consts::TAU;
+        }
+        if let Some(s1) = self.systems.get("S1") {
+            self.hub_orbit_angle = s1.hub_orbit_angle;
+            self.hub_orbit_radius = s1.hub_orbit_radius;
+            self.hub_orbit_days = s1.hub_orbit_days;
+        }
         for p in self.planets.values_mut() {
             p.orbit_angle = (p.orbit_angle + std::f64::consts::TAU * dt_days / p.orbit_period_days)
                 % std::f64::consts::TAU;
@@ -738,19 +1128,52 @@ impl World {
     }
 
     fn credit_habitable_cities(&mut self, amount: Money) {
+        self.credit_habitable_cities_for_system(None, amount);
+    }
+
+    fn credit_habitable_cities_for_system(&mut self, system_id: Option<&str>, amount: Money) {
         if amount <= 0 {
             return;
         }
-        let cities: Vec<(PlanetId, f64)> = self
+        let mut cities: Vec<(PlanetId, f64)> = self
             .planets
             .values()
-            .filter(|p| p.city_count > 0 && p.population > 0.0)
+            .filter(|p| {
+                p.city_count > 0
+                    && p.population > 0.0
+                    && system_id.is_none_or(|sid| p.system_id == sid)
+            })
             .map(|p| (p.id.clone(), p.population))
             .collect();
+        if cities.is_empty() && system_id.is_some() {
+            cities = self
+                .planets
+                .values()
+                .filter(|p| p.city_count > 0 && p.population > 0.0)
+                .map(|p| (p.id.clone(), p.population))
+                .collect();
+        }
         let tot_pop: f64 = cities.iter().map(|(_, pop)| *pop).sum();
         if tot_pop <= 0.0 {
+            // Even in extreme uninhabited seeds (0 cities everywhere), remit to first planet's
+            // treasury so currency conservation holds strictly (`conservation_error == 0`).
+            let fallback_pid = system_id
+                .and_then(|sid| {
+                    self.planets
+                        .values()
+                        .filter(|p| p.system_id == sid)
+                        .map(|p| p.id.clone())
+                        .min()
+                })
+                .or_else(|| self.planets.keys().min().cloned());
+            if let Some(pid) = fallback_pid {
+                if let Some(p) = self.planets.get_mut(&pid) {
+                    p.treasury += amount;
+                }
+            }
             return;
         }
+        cities.sort_by(|a, b| a.0.cmp(&b.0));
         let mut distributed = 0;
         for (idx, (pid, pop)) in cities.iter().enumerate() {
             let share = if idx + 1 == cities.len() {
@@ -1327,12 +1750,13 @@ impl World {
                 if ship_snap.is_busy(tick) || ship_snap.location != from || cargo.is_empty() {
                     return false;
                 }
-                let Some(route) = compute_route(
+                let Some(route) = compute_route_in_systems(
                     &from,
                     &to,
                     ship_snap.size,
                     ship_snap.durability,
                     &self.planets,
+                    &self.systems,
                     self.hub_orbit_radius,
                     self.hub_orbit_angle,
                 ) else {
@@ -1530,22 +1954,24 @@ impl World {
 
         // 2. Credit seller proceeds
         if fill.seller_id == "BANK" {
-            let pid = fill.station_id.strip_prefix("ST:").unwrap_or("P2");
-            let bank_pid = if self.planets.contains_key(pid) { pid } else { "P2" };
-            if let Some(p) = self.planets.get_mut(bank_pid) {
-                p.bank.reserves += fill.seller_proceeds;
+            if let Some(bank_pid) = self.default_bank_planet_id(&fill.station_id) {
+                if let Some(p) = self.planets.get_mut(&bank_pid) {
+                    p.bank.reserves += fill.seller_proceeds;
+                }
             }
         } else if let Some(s) = self.companies.get_mut(&fill.seller_id) {
             s.cash += fill.seller_proceeds;
         }
 
-        // 3. Credit trade station fee (0.5%) to station planet treasury (Hub -> habitable cities)
+        // 3. Credit trade station fee (0.5%) to station planet treasury (Hub -> system habitable cities)
         self.ledger.total_trade_fees += fill.fee as i128;
-        if let Some(pid) = fill.station_id.strip_prefix("ST:") {
-            if pid == "HUB" {
-                self.credit_habitable_cities(fill.fee);
-            } else if let Some(p) = self.planets.get_mut(pid) {
+        if let Some(sys_id) = self.system_by_hub(&fill.station_id) {
+            self.credit_habitable_cities_for_system(Some(&sys_id), fill.fee);
+        } else if let Some(pid) = fill.station_id.strip_prefix("ST:") {
+            if let Some(p) = self.planets.get_mut(pid) {
                 p.treasury += fill.fee;
+            } else {
+                self.credit_habitable_cities(fill.fee);
             }
         }
 
@@ -1599,34 +2025,49 @@ impl World {
     }
 
     fn charge_hub_storage_rent(&mut self) {
-        let mut rent_collected = 0;
-        let hub = &self.stations["ST:HUB"];
-        for comp in self.companies.values_mut() {
-            let Some(inv) = comp.station_inv.get("ST:HUB") else {
+        let mut hub_pairs: Vec<(Option<String>, StationId)> = self
+            .systems
+            .values()
+            .map(|s| (Some(s.id.clone()), s.hub_station_id.clone()))
+            .collect();
+        if hub_pairs.is_empty() && self.stations.contains_key("ST:HUB") {
+            hub_pairs.push((Some("S1".to_string()), "ST:HUB".to_string()));
+        }
+
+        for (sys_id, hub_sid) in hub_pairs {
+            let Some(hub) = self.stations.get(&hub_sid) else {
                 continue;
             };
-            let mut due = 0;
-            for (it, &qty) in inv {
-                if qty == 0 {
+            let mut rent_collected = 0;
+            for comp in self.companies.values_mut() {
+                let Some(inv) = comp.station_inv.get(&hub_sid) else {
                     continue;
+                };
+                let mut due = 0;
+                for (it, &qty) in inv {
+                    if qty == 0 {
+                        continue;
+                    }
+                    let px = *hub
+                        .last_trade_price
+                        .get(it)
+                        .unwrap_or(&to_money(
+                            self.catalog.items.get(it).map(|x| x.ref_price).unwrap_or(1.0),
+                        ));
+                    let val = (qty as i128 * px as i128) as Money;
+                    // Light 0.8% Hub storage rent every 12 ticks (~1.6%/day)
+                    due += bps_of(val, 80);
                 }
-                let px = *hub
-                    .last_trade_price
-                    .get(it)
-                    .unwrap_or(&to_money(self.catalog.items.get(it).map(|x| x.ref_price).unwrap_or(1.0)));
-                let val = (qty as i128 * px as i128) as Money;
-                // Light 0.8% Hub storage rent every 12 ticks (~1.6%/day)
-                due += bps_of(val, 80);
+                let paid = comp.cash.min(due);
+                if paid > 0 {
+                    comp.cash -= paid;
+                    rent_collected += paid;
+                }
             }
-            let paid = comp.cash.min(due);
-            if paid > 0 {
-                comp.cash -= paid;
-                rent_collected += paid;
+            if rent_collected > 0 {
+                self.ledger.total_storage_fees += rent_collected as i128;
+                self.credit_habitable_cities_for_system(sys_id.as_deref(), rent_collected);
             }
-        }
-        if rent_collected > 0 {
-            self.ledger.total_storage_fees += rent_collected as i128;
-            self.credit_habitable_cities(rent_collected);
         }
     }
 
@@ -1825,16 +2266,55 @@ impl World {
             }
         }
 
+        let mut systems_view: HashMap<String, StarSystemView> =
+            HashMap::with_capacity(self.systems.len());
+        for (sid, s) in &self.systems {
+            systems_view.insert(
+                sid.clone(),
+                StarSystemView {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    star_class: s.star_class.clone(),
+                    luminosity: s.luminosity,
+                    x: s.x,
+                    y: s.y,
+                    hub_station_id: s.hub_station_id.clone(),
+                    hub_orbit_radius: s.hub_orbit_radius,
+                    hub_orbit_days: s.hub_orbit_days,
+                    hub_orbit_angle: s.hub_orbit_angle,
+                },
+            );
+        }
+        if systems_view.is_empty() && self.stations.contains_key("ST:HUB") {
+            systems_view.insert(
+                "S1".to_string(),
+                StarSystemView {
+                    id: "S1".to_string(),
+                    name: "新伊甸星系".to_string(),
+                    star_class: "G2V 黄矮星".to_string(),
+                    luminosity: 1.0,
+                    x: 0.0,
+                    y: 0.0,
+                    hub_station_id: "ST:HUB".to_string(),
+                    hub_orbit_radius: self.hub_orbit_radius,
+                    hub_orbit_days: self.hub_orbit_days,
+                    hub_orbit_angle: self.hub_orbit_angle,
+                },
+            );
+        }
+
         let mut planet_templates = Vec::with_capacity(self.planets.len());
         for (pid, p) in &self.planets {
             let demands = p.compute_demands(&self.catalog);
             let view = PlanetView {
                 id: p.id.clone(),
+                system_id: p.system_id.clone(),
                 name: p.name.clone(),
                 wealth_tier: p.wealth_tier,
                 prosperity: p.prosperity,
                 population: p.population,
                 gravity: p.gravity,
+                habitability: p.habitability,
                 waste_backlog: p.waste_backlog,
                 primary_land_price: if p.unclaimed_plots_remaining > 0 {
                     Some(p.primary_land_price(self.cpi))
@@ -1860,20 +2340,25 @@ impl World {
         }
 
         let mut routes: HashMap<String, HashMap<String, (u32, u32)>> = HashMap::new();
-        for pid in self.planets.keys() {
-            let sid = format!("ST:{pid}");
+        for (pid, p) in &self.planets {
+            let sid = p.station_id.as_str();
+            let hub_id = systems_view
+                .get(&p.system_id)
+                .map(|s| s.hub_station_id.as_str())
+                .unwrap_or("ST:HUB");
             for (a, b) in [
-                (pid.as_str(), sid.as_str()),
-                (sid.as_str(), pid.as_str()),
-                (sid.as_str(), "ST:HUB"),
-                ("ST:HUB", sid.as_str()),
+                (pid.as_str(), sid),
+                (sid, pid.as_str()),
+                (sid, hub_id),
+                (hub_id, sid),
             ] {
-                if let Some(r) = compute_route(
+                if let Some(r) = compute_route_in_systems(
                     a,
                     b,
                     ShipSize::Small,
                     100.0,
                     &self.planets,
+                    &self.systems,
                     self.hub_orbit_radius,
                     self.hub_orbit_angle,
                 ) {
@@ -1884,12 +2369,40 @@ impl World {
                 }
             }
         }
+        // Precompute Hub-to-Hub routes when multiple systems exist
+        let hubs: Vec<String> = systems_view
+            .values()
+            .map(|s| s.hub_station_id.clone())
+            .collect();
+        for i in 0..hubs.len() {
+            for j in 0..hubs.len() {
+                if i == j {
+                    continue;
+                }
+                if let Some(r) = compute_route_in_systems(
+                    &hubs[i],
+                    &hubs[j],
+                    ShipSize::Small,
+                    100.0,
+                    &self.planets,
+                    &self.systems,
+                    self.hub_orbit_radius,
+                    self.hub_orbit_angle,
+                ) {
+                    routes
+                        .entry(hubs[i].clone())
+                        .or_default()
+                        .insert(hubs[j].clone(), (r.ticks, r.fuel));
+                }
+            }
+        }
 
         SharedSnapshot {
             quotes,
             depths,
             all_orders,
             open_orders_by_owner,
+            systems: systems_view,
             planet_templates,
             routes,
         }
@@ -2001,6 +2514,7 @@ impl World {
                 station_stores: comp.station_inv.clone(),
                 open_orders,
             },
+            systems: shared.systems.clone(),
             planets: planets_view,
             quotes: shared.quotes.clone(),
             depths,

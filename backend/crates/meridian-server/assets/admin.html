@@ -209,9 +209,7 @@
             <button data-f="ALL" class="active">全部</button>
             <button data-f="PLAYER">仅玩家</button>
             <button data-f="NPC">仅 NPC</button>
-            <button data-f="P1">P1</button>
-            <button data-f="P2">P2</button>
-            <button data-f="P3">P3</button>
+            <span id="planetFilterBtns" style="display:inline-flex;gap:4px;"></span>
             <input id="compSearch" class="ms-in" style="width:120px;" placeholder="搜索名称/ID..." />
           </div>
         </div>
@@ -251,17 +249,13 @@
     <div class="split-2">
       <div class="card">
         <div class="card-hd">
-          <span>16×4 全站即时报价与 50 回合量矩阵（买一 / 卖一 / 最新价 / 50T量）</span>
+          <span id="matrixTitle">全站即时报价与 50 回合量矩阵（买一 / 卖一 / 最新价 / 50T量）</span>
         </div>
         <div class="table-scroll">
           <table>
-            <thead>
+            <thead id="matrixHead">
               <tr>
                 <th>物资</th>
-                <th class="num">ST:P1</th>
-                <th class="num">ST:HUB</th>
-                <th class="num">ST:P2</th>
-                <th class="num">ST:P3</th>
                 <th class="num">50T总量</th>
               </tr>
             </thead>
@@ -589,11 +583,26 @@
       document.getElementById('lTradeFee').textContent = fmt(l.total_trade_fees, 1);
       document.getElementById('lStoreFee').textContent = fmt(l.total_storage_fees, 1);
 
+      renderPlanetFilters();
       renderPlanets();
       renderCompanies();
       renderMatrix();
       renderFlights();
       renderDetail();
+    }
+
+    function renderPlanetFilters() {
+      const wrap = document.getElementById('planetFilterBtns');
+      const pids = (overview.planets || []).map((p) => p.id);
+      if (!['ALL', 'PLAYER', 'NPC'].includes(compFilter) && !pids.includes(compFilter)) {
+        compFilter = 'ALL';
+      }
+      wrap.innerHTML = pids
+        .map((pid) => `<button data-f="${esc(pid)}" class="${compFilter === pid ? 'active' : ''}">${esc(pid)}</button>`)
+        .join('');
+      document.querySelectorAll('#compFilters button').forEach((b) => {
+        b.classList.toggle('active', b.dataset.f === compFilter);
+      });
     }
 
     function renderPlanets() {
@@ -602,12 +611,14 @@
       const cards = (overview.planets || []).map((p) => {
         const st = stations['ST:' + p.id] || { bid_orders: 0, ask_orders: 0 };
         const demCount = Object.keys(p.demands || {}).length;
+        const habPct = Math.round(Number(p.habitability || 0) * 100);
         return `<div class="card">
           <div class="card-hd">
             <span>${esc(p.name)} (${esc(p.id)})</span>
             <span class="mono muted">${esc(p.archetype)}</span>
           </div>
           <div class="card-bd mono">
+            <div class="kv"><span>宜居度 / 城市数</span><b>${habPct}% · ${Number(p.city_count || 0)} 城</b></div>
             <div class="kv"><span>人口 / 繁荣</span><b>${Math.round(p.population).toLocaleString()} · ${Number(p.prosperity).toFixed(2)}x</b></div>
             <div class="kv"><span>星球金库</span><b class="blue">${fmt(p.treasury, 0)}</b></div>
             <div class="kv"><span>准备金 / 存 / 贷</span><b>${fmt(p.bank_reserves, 0)} / ${fmt(p.bank_deposits, 0)} / ${fmt(p.bank_loans, 0)}</b></div>
@@ -618,14 +629,17 @@
         </div>`;
       });
 
-      const hub = stations['ST:HUB'] || { bid_orders: 0, ask_orders: 0 };
+      const primarySys = (overview.systems || [])[0] || {};
+      const hubSid = primarySys.hub_station_id || 'ST:HUB';
+      const hubRadius = Number(overview.hub_orbit_radius ?? primarySys.hub_orbit_radius ?? 1.45).toFixed(2);
+      const hub = stations[hubSid] || { bid_orders: 0, ask_orders: 0 };
       const hubVol = (overview.market_tickers || [])
-        .filter((t) => t.station_id === 'ST:HUB')
+        .filter((t) => t.station_id === hubSid)
         .reduce((a, b) => a + (b.vol_50t || 0), 0);
       cards.push(`<div class="card">
         <div class="card-hd">
-          <span class="blue">中心贸易枢纽 (ST:HUB)</span>
-          <span class="mono muted">1.45 AU</span>
+          <span class="blue">${esc(primarySys.name || '中心贸易枢纽')} (${esc(hubSid)})</span>
+          <span class="mono muted">${hubRadius} AU · ${(overview.planets || []).length} 星球</span>
         </div>
         <div class="card-bd mono">
           <div class="kv"><span>Hub 买单数</span><b>${hub.bid_orders}</b></div>
@@ -638,10 +652,11 @@
     }
 
     function renderCompanies() {
+      const planetIds = new Set((overview.planets || []).map((p) => p.id));
       const comps = (overview.companies || []).filter((c) => {
         if (compFilter === 'PLAYER' && !c.is_player) return false;
         if (compFilter === 'NPC' && c.is_player) return false;
-        if (['P1', 'P2', 'P3'].includes(compFilter) && c.home_planet_id !== compFilter) return false;
+        if (planetIds.has(compFilter) && c.home_planet_id !== compFilter) return false;
         if (compSearch) {
           const q = compSearch.toLowerCase();
           if (!c.id.toLowerCase().includes(q) && !c.name.toLowerCase().includes(q)) return false;
@@ -727,7 +742,20 @@
         itemsSet.add(t.item_id);
       }
       const items = Array.from(itemsSet).sort();
-      const sids = ['ST:P1', 'ST:HUB', 'ST:P2', 'ST:P3'];
+      const hubSids = (overview.systems || []).map((s) => s.hub_station_id);
+      const sids = [
+        ...(hubSids.length ? hubSids : ['ST:HUB']),
+        ...(overview.planets || []).map((p) => 'ST:' + p.id),
+      ];
+      const titleEl = document.getElementById('matrixTitle');
+      if (titleEl) {
+        titleEl.textContent = `${items.length}×${sids.length} 全站即时报价与 50 回合量矩阵（买一 / 卖一 / 最新价 / 50T量）`;
+      }
+      document.getElementById('matrixHead').innerHTML = `<tr>
+        <th>物资</th>
+        ${sids.map((sid) => `<th class="num">${esc(sid)}</th>`).join('')}
+        <th class="num">50T总量</th>
+      </tr>`;
 
       const cellHtml = (t) => {
         if (!t) return '<td class="num muted">--</td>';
@@ -782,12 +810,12 @@
       const v = Number(document.getElementById('customMs').value);
       if (Number.isFinite(v) && v >= 0) simCtrl('speed', v);
     };
-    document.querySelectorAll('#compFilters button').forEach((b) => {
-      b.onclick = () => {
-        compFilter = b.dataset.f;
-        document.querySelectorAll('#compFilters button').forEach((x) => x.classList.toggle('active', x === b));
-        renderCompanies();
-      };
+    document.getElementById('compFilters').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-f]');
+      if (!b) return;
+      compFilter = b.dataset.f;
+      document.querySelectorAll('#compFilters button').forEach((x) => x.classList.toggle('active', x === b));
+      renderCompanies();
     });
     document.getElementById('compSearch').oninput = (e) => {
       compSearch = e.target.value.trim();
