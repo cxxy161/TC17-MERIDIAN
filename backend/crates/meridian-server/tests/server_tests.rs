@@ -1113,3 +1113,34 @@ fn test_manual_intent_queue_has_per_company_cap() {
         Err(IntentQueueError::UnknownCompany(_))
     ));
 }
+
+#[tokio::test]
+async fn test_auth_config_endpoint_returns_no_store_json() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/auth/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("cache-control")
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    let (_, body) = read_json(resp).await;
+    assert!(body["turnstile_site_key"].is_string());
+    assert!(body["turnstile_required"].is_boolean());
+    assert!(body["turnstile_bypassed"].is_boolean());
+}

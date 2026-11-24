@@ -113,7 +113,17 @@ export function getCurrentCompany(): string {
   return currentCompanyId;
 }
 
+export interface AuthConfig {
+  turnstile_site_key: string;
+  turnstile_required: boolean;
+  turnstile_bypassed?: boolean;
+}
+
 export const authApi = {
+  config(): Promise<AuthConfig> {
+    return jsonRequest<AuthConfig>('/api/auth/config');
+  },
+
   me(): Promise<SessionUser> {
     return jsonRequest<SessionUser>('/api/auth/me');
   },

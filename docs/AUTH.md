@@ -119,6 +119,9 @@ POST  /api/account/sessions/revoke  {session_id} 或 {all:true}           → {o
 | `MERIDIAN_ALLOWED_ORIGINS` | 空 | CORS/CSRF 白名单（逗号分隔完整 Origin）；为空不启用跨域 |
 | `MERIDIAN_COOKIE_SECURE` | 未设置（按请求 XFP 判断） | `1`=总是 Secure，`0`=从不 |
 | `MERIDIAN_TURNSTILE_SECRET` | 空 | 配置后注册强制 Cloudflare Turnstile 校验 |
+| `MERIDIAN_TURNSTILE_SITE_KEY` | 空 | Turnstile Site Key，通过 `/api/auth/config` 运行时下发给前端 |
+| `MERIDIAN_TURNSTILE_SKIP_PEERS` | 空 | 直连免 Turnstile 的来源 peer CIDR（逗号分隔，如 `100.64.0.0/10`） |
+| `MERIDIAN_TURNSTILE_SKIP_HOSTS` | 空 | 直连免 Turnstile 的 `Host` 白名单（逗号分隔）；同时配置时与 peer 取交集 |
 | `MERIDIAN_ADMIN_EMAIL` / `MERIDIAN_ADMIN_PASSWORD` / `MERIDIAN_ADMIN_NICKNAME` | 空 | 可选：启动时幂等创建初始管理员（不要用弱口令） |
 
 ## 六、排障

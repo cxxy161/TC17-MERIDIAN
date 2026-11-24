@@ -410,6 +410,103 @@ impl AuthLimiter {
 
 /* ------------------------------------------------------ Turnstile 校验 */
 
+/// 读取环境变量中的 Turnstile Site Key（供前端运行时拉取，避免写死在静态构建产物里）。
+pub fn turnstile_site_key() -> String {
+    std::env::var("MERIDIAN_TURNSTILE_SITE_KEY")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 后端是否已配置 Turnstile Secret（未配置时本地开发免校验）。
+pub fn turnstile_secret_configured() -> bool {
+    std::env::var("MERIDIAN_TURNSTILE_SECRET")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// 从 `Host` 请求头剥离端口（兼容 IPv4 / 域名 / `[IPv6]:port`）。
+fn strip_host_port(raw: &str) -> &str {
+    let s = raw.trim();
+    if let Some(rest) = s.strip_prefix('[') {
+        if let Some((ip6, _)) = rest.split_once(']') {
+            return ip6;
+        }
+    }
+    match s.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') && port.chars().all(|c| c.is_ascii_digit()) => {
+            host
+        }
+        _ => s,
+    }
+}
+
+static TURNSTILE_SKIP_PEERS: LazyLock<Vec<Cidr>> = LazyLock::new(|| {
+    let raw = std::env::var("MERIDIAN_TURNSTILE_SKIP_PEERS").unwrap_or_default();
+    parse_cidr_list(&raw, "MERIDIAN_TURNSTILE_SKIP_PEERS")
+});
+
+static TURNSTILE_SKIP_HOSTS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    std::env::var("MERIDIAN_TURNSTILE_SKIP_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| strip_host_port(s).to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+});
+
+/// 判断当前请求是否命中「免 Turnstile 白名单」（如 Tailscale 内网直连 IP）。
+///
+/// 安全约束：
+/// - 只要请求携带了代理转发头（`cf-connecting-ip` / `cf-ray` / `x-forwarded-for` / `forwarded`），
+///   一律不得跳过，防止通过 Cloudflare 或反代进来的流量伪造 `Host` 绕过；
+/// - 若同时配置了 `skip_peers` 和 `skip_hosts`，要求 TCP peer 与 `Host` 同时命中
+///   （公网直连即使伪造 `Host` 也无法匹配私网 TCP peer CIDR）；
+/// - 两者都未配置时返回 `false`。
+fn should_bypass_turnstile_with(
+    headers: &HeaderMap,
+    peer: Option<IpAddr>,
+    skip_peers: &[Cidr],
+    skip_hosts: &[String],
+) -> bool {
+    if skip_peers.is_empty() && skip_hosts.is_empty() {
+        return false;
+    }
+    const PROXY_HEADERS: [&str; 4] = ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded"];
+    if PROXY_HEADERS.iter().any(|name| headers.contains_key(*name)) {
+        return false;
+    }
+    if !skip_peers.is_empty() {
+        let Some(peer_ip) = peer else {
+            return false;
+        };
+        let normalized = normalize_ip(peer_ip);
+        if !skip_peers.iter().any(|c| cidr_contains(*c, normalized)) {
+            return false;
+        }
+    }
+    if !skip_hosts.is_empty() {
+        let Some(host) = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(strip_host_port)
+            .filter(|s| !s.is_empty())
+        else {
+            return false;
+        };
+        if !skip_hosts
+            .iter()
+            .any(|allowed| allowed.eq_ignore_ascii_case(host))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn should_bypass_turnstile(headers: &HeaderMap, peer: Option<IpAddr>) -> bool {
+    should_bypass_turnstile_with(headers, peer, &TURNSTILE_SKIP_PEERS, &TURNSTILE_SKIP_HOSTS)
+}
+
 /// 未配置 secret 时直接放行（本地开发）；配置后调用 Cloudflare siteverify。
 pub async fn verify_turnstile(token: &str, remote_ip: Option<&str>) -> Result<(), String> {
     let secret = match std::env::var("MERIDIAN_TURNSTILE_SECRET") {
@@ -458,9 +555,7 @@ struct Cidr {
     prefix: u8,
 }
 
-/// MERIDIAN_TRUSTED_PROXIES（逗号分隔 CIDR）解析结果，进程内只读一次。
-static TRUSTED_PROXIES: LazyLock<Vec<Cidr>> = LazyLock::new(|| {
-    let raw = std::env::var("MERIDIAN_TRUSTED_PROXIES").unwrap_or_default();
+fn parse_cidr_list(raw: &str, env_name: &str) -> Vec<Cidr> {
     let mut out = Vec::new();
     for item in raw.split(',') {
         let item = item.trim();
@@ -469,10 +564,16 @@ static TRUSTED_PROXIES: LazyLock<Vec<Cidr>> = LazyLock::new(|| {
         }
         match parse_cidr(item) {
             Some(cidr) => out.push(cidr),
-            None => tracing::warn!(entry = item, "MERIDIAN_TRUSTED_PROXIES 含无效 CIDR，已忽略"),
+            None => tracing::warn!(env = env_name, entry = item, "CIDR 名单含无效项，已忽略"),
         }
     }
     out
+}
+
+/// MERIDIAN_TRUSTED_PROXIES（逗号分隔 CIDR）解析结果，进程内只读一次。
+static TRUSTED_PROXIES: LazyLock<Vec<Cidr>> = LazyLock::new(|| {
+    let raw = std::env::var("MERIDIAN_TRUSTED_PROXIES").unwrap_or_default();
+    parse_cidr_list(&raw, "MERIDIAN_TRUSTED_PROXIES")
 });
 
 static WARNED_NO_PEER: AtomicBool = AtomicBool::new(false);
@@ -769,5 +870,80 @@ mod tests {
         limiter.clear_login_failures(account);
         assert_eq!(limiter.account_lock_until(account), None);
         assert!(limiter.record_login_failure(account).is_none());
+    }
+
+    #[test]
+    fn turnstile_bypass_requires_both_peer_and_host_when_both_configured() {
+        let skip_peers = cidrs(&["100.64.0.0/10", "127.0.0.1/32"]);
+        let skip_hosts = vec!["100.84.136.78".to_string()];
+
+        let mut ok_headers = HeaderMap::new();
+        ok_headers.insert(header::HOST, "100.84.136.78:18420".parse().unwrap());
+        assert!(should_bypass_turnstile_with(
+            &ok_headers,
+            Some(ip("100.84.1.23")),
+            &skip_peers,
+            &skip_hosts,
+        ));
+        assert!(should_bypass_turnstile_with(
+            &ok_headers,
+            Some(ip("::ffff:100.84.1.23")),
+            &skip_peers,
+            &skip_hosts,
+        ));
+
+        // 公网 IP 即使伪造 Host 也不允许跳过
+        assert!(!should_bypass_turnstile_with(
+            &ok_headers,
+            Some(ip("203.0.113.9")),
+            &skip_peers,
+            &skip_hosts,
+        ));
+
+        // 缺少 ConnectInfo peer 时不允许跳过
+        assert!(!should_bypass_turnstile_with(
+            &ok_headers,
+            None,
+            &skip_peers,
+            &skip_hosts,
+        ));
+
+        // 带着 Cloudflare/反代头不允许跳过
+        for proxy_hdr in ["cf-connecting-ip", "cf-ray", "x-forwarded-for", "forwarded"] {
+            let mut proxied = ok_headers.clone();
+            proxied.insert(proxy_hdr, "1.1.1.1".parse().unwrap());
+            assert!(!should_bypass_turnstile_with(
+                &proxied,
+                Some(ip("100.84.1.23")),
+                &skip_peers,
+                &skip_hosts,
+            ));
+        }
+
+        // 未命中 Host（即使在 Tailscale peer 内走公网域名）也不跳过
+        let mut domain_headers = HeaderMap::new();
+        domain_headers.insert(header::HOST, "play.example.com".parse().unwrap());
+        assert!(!should_bypass_turnstile_with(
+            &domain_headers,
+            Some(ip("100.84.1.23")),
+            &skip_peers,
+            &skip_hosts,
+        ));
+
+        // 两个列表均为空时永不跳过
+        assert!(!should_bypass_turnstile_with(
+            &ok_headers,
+            Some(ip("100.84.1.23")),
+            &[],
+            &[],
+        ));
+    }
+
+    #[test]
+    fn strip_host_port_handles_v4_domain_and_v6() {
+        assert_eq!(strip_host_port("100.84.136.78:18420"), "100.84.136.78");
+        assert_eq!(strip_host_port("100.84.136.78"), "100.84.136.78");
+        assert_eq!(strip_host_port("play.example.com:443"), "play.example.com");
+        assert_eq!(strip_host_port("[::1]:18420"), "::1");
     }
 }

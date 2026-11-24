@@ -91,6 +91,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/intent", post(post_intent_handler))
         .route("/api/sim/control", post(sim_control_handler))
         .route("/api/companies", post(create_company_handler))
+        .route("/api/auth/config", get(auth_config_handler))
         .route("/api/auth/register", post(register_handler))
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
@@ -1246,6 +1247,22 @@ async fn verify_blocking(
         .map_err(ApiError::internal)
 }
 
+async fn auth_config_handler(headers: HeaderMap, client: ClientAddr) -> Json<serde_json::Value> {
+    let secret_configured = auth::turnstile_secret_configured();
+    let bypass = auth::should_bypass_turnstile(&headers, client.connect_info().map(|c| c.0.ip()));
+    let turnstile_required = secret_configured && !bypass;
+    let turnstile_site_key = if turnstile_required {
+        auth::turnstile_site_key()
+    } else {
+        String::new()
+    };
+    Json(serde_json::json!({
+        "turnstile_site_key": turnstile_site_key,
+        "turnstile_required": turnstile_required,
+        "turnstile_bypassed": secret_configured && bypass,
+    }))
+}
+
 #[derive(Deserialize)]
 struct RegisterReq {
     email: String,
@@ -1288,14 +1305,17 @@ async fn register_handler(
         }
     }
 
-    let remote_ip = if ip == auth::UNKNOWN_CLIENT {
-        None
-    } else {
-        Some(ip.as_str())
-    };
-    verify_turnstile(&req.turnstile_token, remote_ip)
-        .await
-        .map_err(|m| ApiError::new(StatusCode::FORBIDDEN, m))?;
+    let peer_ip = client.connect_info().map(|c| c.0.ip());
+    if !auth::should_bypass_turnstile(&headers, peer_ip) {
+        let remote_ip = if ip == auth::UNKNOWN_CLIENT {
+            None
+        } else {
+            Some(ip.as_str())
+        };
+        verify_turnstile(&req.turnstile_token, remote_ip)
+            .await
+            .map_err(|m| ApiError::new(StatusCode::FORBIDDEN, m))?;
+    }
 
     let (salt, hash) = hash_blocking(req.password.clone()).await?;
 

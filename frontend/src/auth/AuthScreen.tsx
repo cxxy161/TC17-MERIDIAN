@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   User,
 } from 'lucide-react';
-import { ApiError, authApi, setCurrentCompany, type SessionUser } from '../api/client';
+import { ApiError, authApi, setCurrentCompany, type AuthConfig, type SessionUser } from '../api/client';
 
 type Mode = 'login' | 'register';
 
@@ -22,8 +22,7 @@ export interface AuthScreenProps {
   onAuthed: (user: SessionUser) => void;
 }
 
-const TURNSTILE_SITE_KEY =
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_TURNSTILE_SITE_KEY ?? '';
+const BUILD_TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY ?? '';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const NICKNAME_RE = /^[^\s].*[^\s]$|^[^\s]$/;
@@ -48,10 +47,14 @@ function loadTurnstile(): Promise<void> {
   return turnstileLoader;
 }
 
-const TurnstileWidget: React.FC<{ onToken: (token: string) => void; resetSignal: number }> = ({
-  onToken,
-  resetSignal,
-}) => {
+const TurnstileWidget: React.FC<{
+  siteKey: string;
+  required: boolean;
+  bypassed: boolean;
+  loading: boolean;
+  onToken: (token: string) => void;
+  resetSignal: number;
+}> = ({ siteKey, required, bypassed, loading, onToken, resetSignal }) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const widgetId = useRef<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -59,15 +62,16 @@ const TurnstileWidget: React.FC<{ onToken: (token: string) => void; resetSignal:
   tokenRef.current = onToken;
 
   useEffect(() => {
-    if (!TURNSTILE_SITE_KEY) return;
+    if (!required || !siteKey) return;
     let cancelled = false;
+    setFailed(false);
     loadTurnstile()
       .then(() => {
         if (cancelled || !hostRef.current) return;
         const ts = (window as { turnstile?: any }).turnstile;
         if (!ts?.render) return;
         widgetId.current = ts.render(hostRef.current, {
-          sitekey: TURNSTILE_SITE_KEY,
+          sitekey: siteKey,
           theme: 'dark',
           size: 'flexible',
           callback: (token: string) => tokenRef.current(token),
@@ -85,7 +89,7 @@ const TurnstileWidget: React.FC<{ onToken: (token: string) => void; resetSignal:
       if (ts?.remove && widgetId.current) ts.remove(widgetId.current);
       widgetId.current = null;
     };
-  }, []);
+  }, [required, siteKey]);
 
   useEffect(() => {
     if (resetSignal === 0) return;
@@ -96,12 +100,33 @@ const TurnstileWidget: React.FC<{ onToken: (token: string) => void; resetSignal:
     }
   }, [resetSignal]);
 
-  if (!TURNSTILE_SITE_KEY) {
+  if (loading) {
     return (
       <div className="border border-dashed border-[rgba(56,189,248,0.18)] px-3 py-3 text-[10px] leading-relaxed text-slate-500">
-        TURNSTILE 未配置<span className="text-slate-600">（VITE_TURNSTILE_SITE_KEY）</span>
+        正在检查人机验证配置…
+      </div>
+    );
+  }
+  if (bypassed) {
+    return (
+      <div className="border border-dashed border-emerald-500/30 bg-emerald-500/[0.04] px-3 py-2.5 text-[10px] leading-relaxed text-emerald-300/80">
+        内网直连已跳过人机验证
+      </div>
+    );
+  }
+  if (!required) {
+    return (
+      <div className="border border-dashed border-[rgba(56,189,248,0.18)] px-3 py-3 text-[10px] leading-relaxed text-slate-500">
+        TURNSTILE 未启用<span className="text-slate-600">（MERIDIAN_TURNSTILE_SECRET）</span>
         <br />
         本地开发跳过人机验证，生产环境必须配置。
+      </div>
+    );
+  }
+  if (!siteKey) {
+    return (
+      <div className="flex items-center gap-2 border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+        <AlertTriangle size={13} /> 已启用人机验证，但未配置 MERIDIAN_TURNSTILE_SITE_KEY
       </div>
     );
   }
@@ -156,6 +181,36 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [ttToken, setTtToken] = useState('');
   const [ttReset, setTtReset] = useState(0);
+  const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    authApi
+      .config()
+      .then((cfg) => {
+        if (!alive) return;
+        setAuthConfig(cfg);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setAuthConfig({
+          turnstile_site_key: BUILD_TURNSTILE_SITE_KEY,
+          turnstile_required: Boolean(BUILD_TURNSTILE_SITE_KEY),
+          turnstile_bypassed: false,
+        });
+      })
+      .finally(() => {
+        if (alive) setConfigLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const turnstileRequired = authConfig?.turnstile_required ?? Boolean(BUILD_TURNSTILE_SITE_KEY);
+  const turnstileBypassed = Boolean(authConfig?.turnstile_bypassed);
+  const turnstileSiteKey = authConfig?.turnstile_site_key || BUILD_TURNSTILE_SITE_KEY;
 
   const isRegister = mode === 'register';
   const score = passwordScore(password);
@@ -195,6 +250,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
       return;
     }
     setFieldErrors({});
+    if (isRegister && turnstileRequired && turnstileSiteKey && !ttToken) {
+      setBanner('请先完成人机验证');
+      return;
+    }
     setBusy(true);
     try {
       const user = isRegister
@@ -409,6 +468,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
 
               {isRegister ? (
                 <TurnstileWidget
+                  siteKey={turnstileSiteKey}
+                  required={turnstileRequired}
+                  bypassed={turnstileBypassed}
+                  loading={configLoading}
                   onToken={(t) => setTtToken(t)}
                   resetSignal={ttReset}
                 />

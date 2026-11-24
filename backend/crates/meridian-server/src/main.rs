@@ -119,6 +119,20 @@ async fn main() {
     } else {
         info!(allowed_origins = %allowed_origins, "CORS 白名单已启用");
     }
+    let tt_secret_set = meridian_server::auth::turnstile_secret_configured();
+    let tt_site_key = meridian_server::auth::turnstile_site_key();
+    let tt_skip_peers = std::env::var("MERIDIAN_TURNSTILE_SKIP_PEERS").unwrap_or_default();
+    let tt_skip_hosts = std::env::var("MERIDIAN_TURNSTILE_SKIP_HOSTS").unwrap_or_default();
+    if tt_secret_set {
+        info!(
+            site_key_set = !tt_site_key.is_empty(),
+            skip_peers = %tt_skip_peers,
+            skip_hosts = %tt_skip_hosts,
+            "Cloudflare Turnstile 注册验证已启用"
+        );
+    } else {
+        info!("MERIDIAN_TURNSTILE_SECRET 未配置：注册跳过人机验证");
+    }
 
     info!(
         "Meridian server listening on http://{bind_addr} (data={:?}, db={:?})",
