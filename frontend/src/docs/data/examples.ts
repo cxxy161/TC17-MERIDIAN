@@ -15,25 +15,26 @@ export const EXAMPLE_ENTRIES: DocEntry[] = [
     blocks: [
       {
         kind: 'prose',
-        text: '开局只有一块地和一点现金。先用 `Game.buyPlot` 买下母星的一手地块（不传 `listingId` 就是按 `primaryLandPrice` 买一手地），下一 tick 地块才出现在 `Game.plots` 里，这时才能 `Game.buildFacility` 往上盖厂。脚本用 `Memory` 存一个两段式状态机，每 tick 只推进一步、只发 1 条写操作。',
+        text: '开局只有一块地和一点现金。先用 `Game.market.getLandPlots` 挑出矿冶加成高且未开发的 `slotId`，再用 `Game.buyPlot(planetId, { slotId })` 定向买下，下一 tick 地块出现在 `Game.plots` 里后即可 `Game.buildFacility` 建厂。脚本用 `Memory` 存两段式状态机，每 tick 只发 1 条写操作。',
       },
       {
         kind: 'example',
         caption: 'main.js —— 每 tick 最多 1 条写操作',
-        code: `// 开局：买一手地 → 下一 tick 地在 Game.plots 里出现 → 建厂。
-// 每 tick 只发 1 条写操作，天然不会撞上 32 条上限。
+        code: `// 开局：查公开地块挑 slotId → 定向买地 → 下一 tick 出现在 Game.plots → 建厂。
 module.exports.loop = function () {
   const m = (Memory.open = Memory.open || { step: 'buy', planet: Game.company.homePlanetId });
-  const planet = Game.planets[m.planet];
   const plots = Object.keys(Game.plots).map((id) => Game.plots[id]);
 
   if (m.step === 'buy') {
-    if (planet.primaryLandPrice === null) return console.log('一手地售罄，看挂牌', planet.landListings.length);
+    const target = (Game.market.getLandPlots(m.planet) || [])
+      .filter((t) => t.status === 'unclaimed' && t.capacity >= 4)
+      .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
+    if (!target || target.price === null) return console.log('无可用一手空地');
     // 留 20% 缓冲：现金校验发生在下一 tick 的 Phase 2
-    if (Game.company.cash < planet.primaryLandPrice * 1.2) return console.log('现金不够买地');
-    const ret = Game.buyPlot(m.planet);      // 写操作 1/32（不传 listingId = 买一手地）
+    if (Game.company.cash < target.price * 1.2) return console.log('现金不够买地');
+    const ret = Game.buyPlot(m.planet, { slotId: target.slotId }); // 写操作 1/32
     if (ret === OK) { m.step = 'wait'; m.at = Game.time; m.plotsBefore = plots.length; }
-    else console.log('buyPlot 返回', ret);   // 只拦 -10 入参 / -5 星球不存在，缺钱不在这里报
+    else console.log('buyPlot 返回', ret);
     return;
   }
 

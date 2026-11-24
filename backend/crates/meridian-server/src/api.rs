@@ -34,6 +34,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/health", get(health_handler))
         .route("/api/catalog", get(catalog_handler))
         .route("/api/state", get(state_handler))
+        .route("/api/planets/{planet_id}/plots", get(planet_plots_handler))
         .route("/api/market/book", get(market_book_handler))
         .route("/api/market/candles", get(market_candles_handler))
         .route("/api/scripts/{company_id}", get(get_scripts_handler))
@@ -120,6 +121,68 @@ async fn state_handler(
     ensure_owner(&user, &cid)?;
     let eng = engine.lock().await;
     Ok(Json(eng.state_response(&cid)))
+}
+
+async fn planet_plots_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Path(planet_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eng = engine.lock().await;
+    let Some(p) = eng.world.planets.get(&planet_id) else {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown planet '{planet_id}'")));
+    };
+    let Some(tiles) = eng.world.planet_public_tiles(&planet_id) else {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown planet '{planet_id}'")));
+    };
+    let my_cid = user.user.company_id.as_str();
+    let tiles_json: Vec<serde_json::Value> = tiles
+        .into_iter()
+        .map(|t| {
+            let is_mine = t.owner_id.as_deref() == Some(my_cid);
+            serde_json::json!({
+                "slot_id": t.slot_id,
+                "planet_id": t.planet_id,
+                "lat": t.lat,
+                "lon": t.lon,
+                "terrain_name": t.terrain_name,
+                "capacity": t.capacity,
+                "used_slots": t.used_slots,
+                "building_mods": t.building_mods,
+                "status": t.status,
+                "is_city": t.is_city,
+                "city_name": t.city_name,
+                "owner_id": t.owner_id,
+                "owner_name": t.owner_name,
+                "is_player_owner": t.is_player_owner,
+                "is_mine": is_mine,
+                "plot_id": t.plot_id,
+                "listing_id": t.listing_id,
+                "price": t.price.map(from_money),
+                "buildings": t.buildings,
+            })
+        })
+        .collect();
+    let primary_price = if p.unclaimed_plots_remaining > 0 {
+        Some(from_money(p.primary_land_price(eng.world.cpi)))
+    } else {
+        None
+    };
+    Ok(Json(serde_json::json!({
+        "planet": {
+            "id": p.id,
+            "name": p.name,
+            "archetype": p.archetype,
+            "habitability": p.habitability,
+            "city_count": p.city_count,
+            "primary_land_price": primary_price,
+            "total_developable_plots": p.total_developable_plots,
+            "unclaimed_plots": p.unclaimed_plots_remaining,
+            "npc_plot_count": eng.world.npc_plot_count_on(&planet_id),
+            "npc_plot_cap": eng.world.npc_plot_cap_on(&planet_id),
+        },
+        "tiles": tiles_json,
+    })))
 }
 
 #[derive(Deserialize)]

@@ -148,7 +148,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         let intent_body = serde_json::json!({
             "company_id": "player1",
             "intent": Intent::BankOp {
-                planet_id: home_pid,
+                planet_id: home_pid.clone(),
                 op: BankOpKind::Deposit,
                 amount: to_money(50.0),
             }
@@ -238,6 +238,27 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(book_res["station_id"], "ST:HUB");
+
+        // 6a2. Inspect /api/planets/{planet_id}/plots public land grid endpoint
+        let (st, plots_res) = read_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .header("cookie", &cookie)
+                        .uri(format!("/api/planets/{home_pid}/plots"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert_eq!(plots_res["planet"]["id"], home_pid);
+        let tiles_arr = plots_res["tiles"].as_array().unwrap();
+        assert!(tiles_arr.len() >= 48);
+        assert!(tiles_arr.iter().any(|t| t["is_mine"] == true));
+        assert!(tiles_arr.iter().any(|t| t["status"] == "unclaimed" && t["slot_id"].is_number()));
         assert_eq!(book_res["item_id"], "steel");
 
         // 6b. Inspect admin overview & /admin page endpoints

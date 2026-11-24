@@ -401,12 +401,14 @@ fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
         .expect("spawn npc");
     assert_eq!(world.npc_plot_count_on("P2"), 1);
 
-    // Have the NPC buy plots until hitting the 90% ceiling
+    // Have the NPC buy explicit unclaimed slots until hitting the 90% ceiling
     for _ in 1..cap {
+        let next_slot = world.planets["P2"].unclaimed_slot_ids()[0];
         let rep = world.step_tick(vec![(
             "npc_landlord".to_string(),
             vec![Intent::BuyPlot {
                 planet_id: "P2".to_string(),
+                slot_id: Some(next_slot),
                 listing_id: None,
             }],
         )]);
@@ -415,10 +417,12 @@ fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
     assert_eq!(world.npc_plot_count_on("P2"), cap);
 
     // Next NPC BuyPlot AND spawning another NPC on P2 must BOTH be blocked!
+    let extra_slot = world.planets["P2"].unclaimed_slot_ids()[0];
     let rep_over = world.step_tick(vec![(
         "npc_landlord".to_string(),
         vec![Intent::BuyPlot {
             planet_id: "P2".to_string(),
+            slot_id: Some(extra_slot),
             listing_id: None,
         }],
     )]);
@@ -427,10 +431,30 @@ fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
         .spawn_company("npc_blocked", "Blocked", false, "agri_bio", "P2", 8_000.0)
         .is_err());
 
-    // Meanwhile a human player can still claim the reserved 10% plots on P2!
+    // Meanwhile a human player can still claim the reserved 10% plots at an explicit slot!
     world
         .spawn_company("human_p2", "Human Pioneer", true, "agri_bio", "P2", 50_000.0)
         .expect("player must be able to spawn in the reserved 10% land");
+    let chosen_slot = world.planets["P2"].unclaimed_slot_ids()[0];
+    let rep_human = world.step_tick(vec![(
+        "human_p2".to_string(),
+        vec![Intent::BuyPlot {
+            planet_id: "P2".to_string(),
+            slot_id: Some(chosen_slot),
+            listing_id: None,
+        }],
+    )]);
+    assert_eq!(rep_human.rejected_intents, 0);
+    // Double-buying the already-taken slot must fail cleanly (never silent random fallback)
+    let rep_dup = world.step_tick(vec![(
+        "human_p2".to_string(),
+        vec![Intent::BuyPlot {
+            planet_id: "P2".to_string(),
+            slot_id: Some(chosen_slot),
+            listing_id: None,
+        }],
+    )]);
+    assert_eq!(rep_dup.rejected_intents, 1);
     assert_eq!(world.npc_plot_count_on("P2"), cap);
     assert_eq!(world.conservation_error(), 0);
 }

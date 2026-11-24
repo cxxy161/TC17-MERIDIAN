@@ -5,6 +5,7 @@ import { docTitle } from '../docs/apiDocs';
 export type PaneKind =
   | 'orbit'
   | 'planet'
+  | 'land'
   | 'demand'
   | 'factory'
   | 'cargo'
@@ -25,6 +26,7 @@ export type PaneKind =
 
 export interface PaneParams {
   planetId?: string;
+  slotId?: number;
   locationId?: string;
   stationId?: string;
   itemId?: string;
@@ -78,6 +80,7 @@ export interface PaneMeta {
 export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'orbit', label: '星系轨道雷达', description: '观察行星公转与中心枢纽相对位置', group: '观察' },
   { kind: 'planet', label: '行星遥测', description: '星球信息、环境储备与 3D 地貌', group: '观察' },
+  { kind: 'land', label: '行星地块', description: '全星公有空地、城市与企业地块分布及购买 ID', group: '观察', keywords: '地块 土地 坐标 slot listing 地形 加成 购买' },
   { kind: 'demand', label: '城市需求', description: '本回合城市消费需求与本地报价', group: '观察' },
   { kind: 'items', label: '物品总表', description: '全物品检索：持有、挂单、行情、用途', group: '观察', keywords: '物品 目录 索引 搜索 全部' },
   { kind: 'item', label: '物品详情', description: '单个物品的配方、库存分布、全站行情、我的挂单', group: '观察', keywords: '物品 详情 配方 用途' },
@@ -135,6 +138,8 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
       return '星系轨道';
     case 'planet':
       return `行星 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+    case 'land':
+      return `地块 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
     case 'demand':
       return `需求 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
     case 'factory':
@@ -180,6 +185,7 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
 export function focusDefaults(kind: PaneKind, focus: PaneParams): PaneParams {
   switch (kind) {
     case 'planet':
+    case 'land':
     case 'demand':
     case 'factory':
     case 'treasury':

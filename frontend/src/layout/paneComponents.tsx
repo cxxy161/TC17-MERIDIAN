@@ -5,6 +5,7 @@ import { EntitySearchList } from './EntitySearchList';
 
 import { OrbitPanel } from '../panels/OrbitPanel';
 import { PlanetPanel } from '../panels/PlanetPanel';
+import { LandPanel } from '../panels/LandPanel';
 import { DemandPanel } from '../panels/DemandPanel';
 import { FactoryPanel } from '../panels/FactoryPanel';
 import { CargoPanel } from '../panels/CargoPanel';
@@ -26,6 +27,7 @@ import { SettingsPanel } from '../panels/SettingsPanel';
 const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   orbit: OrbitPanel,
   planet: PlanetPanel,
+  land: LandPanel,
   demand: DemandPanel,
   factory: FactoryPanel,
   cargo: CargoPanel,

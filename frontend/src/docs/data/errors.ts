@@ -23,7 +23,7 @@ const MATRIX: DocEntry = {
         ['Game.market.createOrder', 'ERR_INVALID_ARGS · ERR_INVALID_TARGET · ERR_NOT_ENOUGH_CREDITS · ERR_FULL', '字段非法 / 物品或站点无报价 / 买单现金不足 / 挂单或 Intent 满'],
         ['Game.market.cancelOrder', 'ERR_INVALID_ARGS · ERR_NOT_FOUND · ERR_FULL', 'id 非法 / 不在自己的挂单里 / Intent 满'],
         ['Game.market.deal', 'ERR_INVALID_ARGS · ERR_NOT_FOUND · ERR_FULL', '数量或 id 非法 / 订单已不存在 / Intent 满'],
-        ['Game.buyPlot', 'ERR_NOT_FOUND · ERR_INVALID_ARGS · ERR_FULL', '行星不存在 / listingId 非法 / Intent 满'],
+        ['Game.buyPlot', 'ERR_NOT_FOUND · ERR_INVALID_TARGET · ERR_INVALID_ARGS · ERR_FULL', '行星/编号不存在 / 位置已被占或为城市 / 未传目标对象 / Intent 满'],
         ['Game.buildFacility', 'ERR_INVALID_ARGS · ERR_NOT_OWNER · ERR_INVALID_TARGET · ERR_FULL', 'id 非法 / 地块不是自己的 / 建筑类型不存在 / Intent 满'],
         ['Game.demolishFacility', 'ERR_INVALID_ARGS · ERR_NOT_OWNER · ERR_FULL', 'id 非法 / 地块不是自己的 / Intent 满'],
         ['Game.bank', 'ERR_INVALID_ARGS · ERR_FULL', '行星不存在、op 非法或金额 ≤ 0 / Intent 满'],

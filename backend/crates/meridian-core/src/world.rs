@@ -11,12 +11,12 @@ use crate::logistics::{compute_route_in_systems, RouteKind, Ship, ShipInFlight, 
 use crate::planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem};
 use crate::schema::{ItemRole, ProductionCatalog};
 use crate::snapshot::{
-    BuildingView, LandListingView, PlanetView, PlotView, SelfView, SharedSnapshot, ShipView,
-    StarSystemView, WorldSnapshot,
+    BuildingView, LandListingView, PlanetView, PlotView, PublicLandTileView, SelfView,
+    SharedSnapshot, ShipView, StarSystemView, WorldSnapshot,
 };
 use crate::types::{
     bps_of, from_money, to_money, BankOpKind, BuildingId, CompanyId, Intent, ItemId, ListingId,
-    Money, OrderId, OrderSide, PlanetId, PlotId, ShipId, StationId,
+    Money, OrderId, OrderSide, PlanetId, PlotId, ShipId, SlotId, StationId,
     MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK,
 };
 
@@ -142,46 +142,46 @@ impl World {
             let mut pw = VecDeque::with_capacity(240);
             pw.push_back(0.82);
 
-            planets.insert(
-                pid.to_string(),
-                Planet {
-                    id: pid.to_string(),
-                    system_id: "S1".to_string(),
-                    name: name.to_string(),
-                    archetype: arch.to_string(),
-                    station_id: sid,
-                    orbit_radius: orb_r,
-                    orbit_period_days: orb_d,
-                    orbit_angle: orb_a,
-                    rotation_days: rot_d,
-                    visual_seed: v_seed,
-                    gravity: grav,
-                    solar_mult: solar,
-                    mineral_mult: mineral,
-                    water_mult: water,
-                    ocean_ratio: ocean,
-                    habitability: hab,
-                    city_count: cities,
-                    city_level: 1,
-                    city_capacity: (cities * 3000) as f64,
-                    population: pop,
-                    wealth_tier: 1,
-                    prosperity: 0.85,
-                    prosperity_window: pw,
-                    treasury,
-                    civic_output_per_capita: 0.08,
-                    waste_backlog: 0,
-                    bank: PlanetBank::new(pid, reserves),
-                    total_developable_plots: total_plots,
-                    unclaimed_plots_remaining: total_plots,
-                    next_local_plot_seq: 1,
-                    land_listings: Vec::new(),
-                    last_demands: HashMap::new(),
-                    last_bought: HashMap::new(),
-                    bought_this_tick: HashMap::new(),
-                    prev_bids: HashMap::new(),
-                },
-            );
+            let mut pl_obj = Planet {
+                id: pid.to_string(),
+                system_id: "S1".to_string(),
+                name: name.to_string(),
+                archetype: arch.to_string(),
+                station_id: sid,
+                orbit_radius: orb_r,
+                orbit_period_days: orb_d,
+                orbit_angle: orb_a,
+                rotation_days: rot_d,
+                visual_seed: v_seed,
+                gravity: grav,
+                solar_mult: solar,
+                mineral_mult: mineral,
+                water_mult: water,
+                ocean_ratio: ocean,
+                habitability: hab,
+                city_count: cities,
+                city_level: 1,
+                city_capacity: (cities * 3000) as f64,
+                population: pop,
+                wealth_tier: 1,
+                prosperity: 0.85,
+                prosperity_window: pw,
+                treasury,
+                civic_output_per_capita: 0.08,
+                waste_backlog: 0,
+                bank: PlanetBank::new(pid, reserves),
+                total_developable_plots: total_plots,
+                unclaimed_plots_remaining: total_plots,
+                next_local_plot_seq: 1,
+                surface_tiles: Vec::new(),
+                land_listings: Vec::new(),
+                last_demands: HashMap::new(),
+                last_bought: HashMap::new(),
+                bought_this_tick: HashMap::new(),
+                prev_bids: HashMap::new(),
+            };
+            pl_obj.build_surface_tiles(&catalog);
+            planets.insert(pid.to_string(), pl_obj);
         }
 
         Self {
@@ -435,46 +435,46 @@ impl World {
             let mut pw = VecDeque::with_capacity(240);
             pw.push_back((0.76 + d.habitability * 0.14).clamp(0.65, 0.92));
 
-            planets.insert(
-                d.pid.clone(),
-                Planet {
-                    id: d.pid.clone(),
-                    system_id: "S1".to_string(),
-                    name: d.name,
-                    archetype: d.archetype,
-                    station_id: sid,
-                    orbit_radius: d.orbit_radius,
-                    orbit_period_days: d.orbit_period_days,
-                    orbit_angle: d.orbit_angle,
-                    rotation_days: d.rotation_days,
-                    visual_seed: d.visual_seed,
-                    gravity: d.gravity,
-                    solar_mult: d.solar_mult,
-                    mineral_mult: d.mineral_mult,
-                    water_mult: d.water_mult,
-                    ocean_ratio: d.ocean_ratio,
-                    habitability: d.habitability,
-                    city_count: d.city_count,
-                    city_level: if d.city_count > 0 { 1 } else { 0 },
-                    city_capacity,
-                    population: pop,
-                    wealth_tier: 1,
-                    prosperity: (0.78 + d.habitability * 0.12).clamp(0.70, 0.92),
-                    prosperity_window: pw,
-                    treasury,
-                    civic_output_per_capita: 0.08,
-                    waste_backlog: 0,
-                    bank: PlanetBank::new(&d.pid, reserves),
-                    total_developable_plots: total_plots,
-                    unclaimed_plots_remaining: total_plots,
-                    next_local_plot_seq: 1,
-                    land_listings: Vec::new(),
-                    last_demands: HashMap::new(),
-                    last_bought: HashMap::new(),
-                    bought_this_tick: HashMap::new(),
-                    prev_bids: HashMap::new(),
-                },
-            );
+            let mut pl_obj = Planet {
+                id: d.pid.clone(),
+                system_id: "S1".to_string(),
+                name: d.name,
+                archetype: d.archetype,
+                station_id: sid,
+                orbit_radius: d.orbit_radius,
+                orbit_period_days: d.orbit_period_days,
+                orbit_angle: d.orbit_angle,
+                rotation_days: d.rotation_days,
+                visual_seed: d.visual_seed,
+                gravity: d.gravity,
+                solar_mult: d.solar_mult,
+                mineral_mult: d.mineral_mult,
+                water_mult: d.water_mult,
+                ocean_ratio: d.ocean_ratio,
+                habitability: d.habitability,
+                city_count: d.city_count,
+                city_level: if d.city_count > 0 { 1 } else { 0 },
+                city_capacity,
+                population: pop,
+                wealth_tier: 1,
+                prosperity: (0.78 + d.habitability * 0.12).clamp(0.70, 0.92),
+                prosperity_window: pw,
+                treasury,
+                civic_output_per_capita: 0.08,
+                waste_backlog: 0,
+                bank: PlanetBank::new(&d.pid, reserves),
+                total_developable_plots: total_plots,
+                unclaimed_plots_remaining: total_plots,
+                next_local_plot_seq: 1,
+                surface_tiles: Vec::new(),
+                land_listings: Vec::new(),
+                last_demands: HashMap::new(),
+                last_bought: HashMap::new(),
+                bought_this_tick: HashMap::new(),
+                prev_bids: HashMap::new(),
+            };
+            pl_obj.build_surface_tiles(&catalog);
+            planets.insert(d.pid.clone(), pl_obj);
         }
 
         let rng_state = next_u64(&mut rng) | 1;
@@ -625,17 +625,20 @@ impl World {
             }
             pl.jobs.clear();
             pl.owner_id = Some(cid.clone());
+            self.planets
+                .get_mut(home_planet_id)
+                .unwrap()
+                .set_tile_owner(pl.slot_id, Some(cid.clone()), Some(pl.id));
             (pl.id, pl)
         } else {
             let pid_new = self.next_plot_id;
             self.next_plot_id += 1;
-            let mut pl = self
+            let pl = self
                 .planets
                 .get_mut(home_planet_id)
                 .unwrap()
-                .materialize_primary_plot(pid_new, &self.catalog)
+                .claim_surface_tile(None, Some(profession), pid_new, Some(cid.clone()), &self.catalog)
                 .ok_or_else(|| format!("No unclaimed plots left on '{home_planet_id}'"))?;
-            pl.owner_id = Some(cid.clone());
             (pid_new, pl)
         };
 
@@ -1655,6 +1658,7 @@ impl World {
 
             Intent::BuyPlot {
                 planet_id,
+                slot_id,
                 listing_id,
             } => {
                 if !self.planets.contains_key(&planet_id) {
@@ -1694,8 +1698,10 @@ impl World {
                     } else {
                         self.planets.get_mut(&planet_id).unwrap().treasury += lst.ask_price;
                     }
+                    let mut bought_slot: Option<SlotId> = None;
                     if let Some(pl) = self.plots.get_mut(&lst.plot_id) {
                         pl.owner_id = Some(company_id.to_string());
+                        bought_slot = Some(pl.slot_id);
                         for &bid in &pl.building_ids {
                             if let Some(b) = self.buildings.get_mut(&bid) {
                                 b.owner_id = company_id.to_string();
@@ -1705,29 +1711,42 @@ impl World {
                             }
                         }
                     }
+                    if let Some(sid) = bought_slot {
+                        self.planets
+                            .get_mut(&planet_id)
+                            .unwrap()
+                            .set_tile_owner(sid, Some(company_id.to_string()), Some(lst.plot_id));
+                    }
                     self.companies.get_mut(company_id).unwrap().plots.push(lst.plot_id);
                     true
-                } else {
+                } else if let Some(sid) = slot_id {
                     let price = self.planets[&planet_id].primary_land_price(self.cpi);
-                    if self.companies[company_id].cash < price
-                        || self.planets[&planet_id].unclaimed_plots_remaining == 0
-                    {
+                    if self.companies[company_id].cash < price {
                         return false;
                     }
                     let plot_id = self.next_plot_id;
-                    self.next_plot_id += 1;
-                    let mut plot = self
+                    let Some(plot) = self
                         .planets
                         .get_mut(&planet_id)
                         .unwrap()
-                        .materialize_primary_plot(plot_id, &self.catalog)
-                        .unwrap();
-                    plot.owner_id = Some(company_id.to_string());
+                        .claim_surface_tile(
+                            Some(sid),
+                            None,
+                            plot_id,
+                            Some(company_id.to_string()),
+                            &self.catalog,
+                        )
+                    else {
+                        return false;
+                    };
+                    self.next_plot_id += 1;
                     self.companies.get_mut(company_id).unwrap().cash -= price;
                     self.planets.get_mut(&planet_id).unwrap().treasury += price;
                     self.plots.insert(plot_id, plot);
                     self.companies.get_mut(company_id).unwrap().plots.push(plot_id);
                     true
+                } else {
+                    false
                 }
             }
 
@@ -2211,8 +2230,10 @@ impl World {
             self.in_flight.retain(|f| f.owner_id != *cid);
             let land_base = self.planets[&comp.home_planet_id].primary_land_price(self.cpi);
             for pl_id in comp.plots {
+                let mut released_slot: Option<SlotId> = None;
                 if let Some(pl) = self.plots.get_mut(&pl_id) {
                     pl.owner_id = None;
+                    released_slot = Some(pl.slot_id);
                     let blds = pl.building_ids.len() as f64;
                     let ask_p = to_money((from_money(land_base) + blds * 150.0 * self.cpi) * 0.65)
                         .max(to_money(50.0 * self.cpi));
@@ -2230,6 +2251,12 @@ impl World {
                             listed_tick: tick,
                             debt_recovery: 0,
                         });
+                }
+                if let Some(sid) = released_slot {
+                    self.planets
+                        .get_mut(&comp.home_planet_id)
+                        .unwrap()
+                        .set_tile_owner(sid, None, Some(pl_id));
                 }
             }
         }
@@ -2302,8 +2329,109 @@ impl World {
         }
 
         let mut planet_templates = Vec::with_capacity(self.planets.len());
+        let mut public_tiles_by_planet = HashMap::with_capacity(self.planets.len());
         for (pid, p) in &self.planets {
             let demands = p.compute_demands(&self.catalog);
+            let primary_px = if p.unclaimed_plots_remaining > 0 {
+                Some(p.primary_land_price(self.cpi))
+            } else {
+                None
+            };
+            let listing_by_plot: HashMap<PlotId, &LandListing> = p
+                .land_listings
+                .iter()
+                .map(|l| (l.plot_id, l))
+                .collect();
+
+            let mut tiles_view = Vec::with_capacity(p.surface_tiles.len());
+            for t in &p.surface_tiles {
+                let listing = t.plot_id.and_then(|plid| listing_by_plot.get(&plid).copied());
+                let pl_opt = t.plot_id.and_then(|plid| self.plots.get(&plid));
+                let used_slots = pl_opt.map(|pl| pl.used_slots()).unwrap_or(0);
+                let buildings: Vec<String> = pl_opt
+                    .map(|pl| {
+                        pl.building_ids
+                            .iter()
+                            .filter_map(|bid| self.buildings.get(bid).map(|b| b.building_type.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let status = if t.is_city {
+                    "city"
+                } else if listing.is_some() {
+                    "listed"
+                } else if t.owner_id.is_some() {
+                    "owned"
+                } else {
+                    "unclaimed"
+                };
+                let (owner_name, is_player_owner) = if let Some(oid) = &t.owner_id {
+                    if let Some(c) = self.companies.get(oid) {
+                        (Some(c.name.clone()), c.is_player)
+                    } else {
+                        (Some(oid.clone()), false)
+                    }
+                } else {
+                    (None, false)
+                };
+                let price = match status {
+                    "unclaimed" => primary_px,
+                    "listed" => listing.map(|l| l.ask_price),
+                    _ => None,
+                };
+                tiles_view.push(PublicLandTileView {
+                    slot_id: t.slot_id,
+                    planet_id: p.id.clone(),
+                    lat: t.lat,
+                    lon: t.lon,
+                    terrain_name: t.terrain_name.clone(),
+                    capacity: t.capacity,
+                    used_slots,
+                    building_mods: t.building_mods.clone(),
+                    status: status.to_string(),
+                    is_city: t.is_city,
+                    city_name: t.city_name.clone(),
+                    owner_id: t.owner_id.clone(),
+                    owner_name,
+                    is_player_owner,
+                    plot_id: t.plot_id,
+                    listing_id: listing.map(|l| l.listing_id),
+                    price,
+                    buildings,
+                });
+            }
+            public_tiles_by_planet.insert(pid.clone(), tiles_view);
+
+            let land_listings: Vec<LandListingView> = p
+                .land_listings
+                .iter()
+                .map(|l| {
+                    let pl_opt = self.plots.get(&l.plot_id);
+                    let buildings: Vec<String> = pl_opt
+                        .map(|pl| {
+                            pl.building_ids
+                                .iter()
+                                .filter_map(|bid| self.buildings.get(bid).map(|b| b.building_type.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    LandListingView {
+                        listing_id: l.listing_id,
+                        plot_id: l.plot_id,
+                        slot_id: pl_opt.map(|pl| pl.slot_id).unwrap_or(0),
+                        seller_id: l.seller_id.clone(),
+                        ask_price: l.ask_price,
+                        terrain_name: pl_opt.map(|pl| pl.terrain_name.clone()).unwrap_or_default(),
+                        lat: pl_opt.map(|pl| pl.lat).unwrap_or(0.0),
+                        lon: pl_opt.map(|pl| pl.lon).unwrap_or(0.0),
+                        capacity: pl_opt.map(|pl| pl.capacity).unwrap_or(0),
+                        used_slots: pl_opt.map(|pl| pl.used_slots()).unwrap_or(0),
+                        building_mods: pl_opt.map(|pl| pl.building_mods.clone()).unwrap_or_default(),
+                        buildings,
+                    }
+                })
+                .collect();
+
             let view = PlanetView {
                 id: p.id.clone(),
                 system_id: p.system_id.clone(),
@@ -2314,21 +2442,8 @@ impl World {
                 gravity: p.gravity,
                 habitability: p.habitability,
                 waste_backlog: p.waste_backlog,
-                primary_land_price: if p.unclaimed_plots_remaining > 0 {
-                    Some(p.primary_land_price(self.cpi))
-                } else {
-                    None
-                },
-                land_listings: p
-                    .land_listings
-                    .iter()
-                    .take(8)
-                    .map(|l| LandListingView {
-                        listing_id: l.listing_id,
-                        plot_id: l.plot_id,
-                        ask_price: l.ask_price,
-                    })
-                    .collect(),
+                primary_land_price: primary_px,
+                land_listings,
                 bank_rate_bps: p.bank.annual_rate_bps,
                 ground_store: HashMap::new(),
                 station_store: HashMap::new(),
@@ -2402,8 +2517,85 @@ impl World {
             open_orders_by_owner,
             systems: systems_view,
             planet_templates,
+            public_tiles_by_planet,
             routes,
         }
+    }
+
+    /// Return all public surface tiles on `planet_id` (used by `/api/planets/{id}/plots`).
+    pub fn planet_public_tiles(&self, planet_id: &str) -> Option<Vec<PublicLandTileView>> {
+        let p = self.planets.get(planet_id)?;
+        let primary_px = if p.unclaimed_plots_remaining > 0 {
+            Some(p.primary_land_price(self.cpi))
+        } else {
+            None
+        };
+        let listing_by_plot: HashMap<PlotId, &LandListing> = p
+            .land_listings
+            .iter()
+            .map(|l| (l.plot_id, l))
+            .collect();
+        let tiles_view = p
+            .surface_tiles
+            .iter()
+            .map(|t| {
+                let listing = t.plot_id.and_then(|plid| listing_by_plot.get(&plid).copied());
+                let pl_opt = t.plot_id.and_then(|plid| self.plots.get(&plid));
+                let used_slots = pl_opt.map(|pl| pl.used_slots()).unwrap_or(0);
+                let buildings: Vec<String> = pl_opt
+                    .map(|pl| {
+                        pl.building_ids
+                            .iter()
+                            .filter_map(|bid| self.buildings.get(bid).map(|b| b.building_type.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let status = if t.is_city {
+                    "city"
+                } else if listing.is_some() {
+                    "listed"
+                } else if t.owner_id.is_some() {
+                    "owned"
+                } else {
+                    "unclaimed"
+                };
+                let (owner_name, is_player_owner) = if let Some(oid) = &t.owner_id {
+                    if let Some(c) = self.companies.get(oid) {
+                        (Some(c.name.clone()), c.is_player)
+                    } else {
+                        (Some(oid.clone()), false)
+                    }
+                } else {
+                    (None, false)
+                };
+                let price = match status {
+                    "unclaimed" => primary_px,
+                    "listed" => listing.map(|l| l.ask_price),
+                    _ => None,
+                };
+                PublicLandTileView {
+                    slot_id: t.slot_id,
+                    planet_id: p.id.clone(),
+                    lat: t.lat,
+                    lon: t.lon,
+                    terrain_name: t.terrain_name.clone(),
+                    capacity: t.capacity,
+                    used_slots,
+                    building_mods: t.building_mods.clone(),
+                    status: status.to_string(),
+                    is_city: t.is_city,
+                    city_name: t.city_name.clone(),
+                    owner_id: t.owner_id.clone(),
+                    owner_name,
+                    is_player_owner,
+                    plot_id: t.plot_id,
+                    listing_id: listing.map(|l| l.listing_id),
+                    price,
+                    buildings,
+                }
+            })
+            .collect();
+        Some(tiles_view)
     }
 
     pub fn snapshot_for(&self, company_id: &str) -> Option<WorldSnapshot> {
@@ -2429,7 +2621,10 @@ impl World {
             };
             plots.push(PlotView {
                 id: pl.id,
+                slot_id: pl.slot_id,
                 planet_id: pl.planet_id.clone(),
+                lat: pl.lat,
+                lon: pl.lon,
                 terrain_name: pl.terrain_name.clone(),
                 capacity: pl.capacity,
                 used_slots: pl.used_slots(),
@@ -2518,6 +2713,7 @@ impl World {
             depths,
             orders,
             routes: shared.routes.clone(),
+            public_tiles: shared.public_tiles_by_planet.clone(),
         })
     }
 }

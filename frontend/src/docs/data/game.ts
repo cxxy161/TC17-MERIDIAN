@@ -405,47 +405,57 @@ for (const ship of idle) {
     title: 'buyPlot',
     group: 'Game',
     kind: '方法',
-    summary: '购买一手或二手地块',
-    keywords: '买地 地块 土地 plot listing 一手 二手',
+    summary: '按具体位置 slotId 购买一手地，或按 listingId 收购二手/银行挂牌地',
+    keywords: '买地 地块 土地 plot slotId listing 一手 二手 定向',
     blocks: [
       {
         kind: 'syntax',
-        code: 'Game.buyPlot(planetId, listingId?) → number',
+        code: 'Game.buyPlot(planetId, { slotId } | { listingId }) → number',
       },
-      { kind: 'prose', text: '购买地块。省略 `listingId` 表示买一手地（价格看 `primaryLandPrice`）；传 `landListings` 里的 id 表示买二手地。' },
+      {
+        kind: 'prose',
+        text: '购买指定位置的地块（已移除盲盒式无参数买地）。通过 `Game.market.getLandPlots(planetId)` 挑选未开发空地的 `slotId`，或从 `planet.landListings` / `getLandPlots` 选中挂牌地的 `listingId` 后下单。',
+      },
       {
         kind: 'params',
         rows: [
           { name: 'planetId', type: 'string', required: true, desc: '行星 id，如 `P1`' },
-          { name: 'listingId', type: 'string', required: false, desc: '来自 `planet.landListings[].listingId`；省略 = 买一手地' },
+          { name: 'target.slotId', type: 'number', required: false, desc: '购买一手空地：来自 `getLandPlots(planetId)` 中 `status === "unclaimed"` 的 `slotId`' },
+          { name: 'target.listingId', type: 'string | number', required: false, desc: '收购二手/清算挂牌地：来自 `landListings[].listingId` 或 `getLandPlots()` 的 `listingId`' },
         ],
       },
       { kind: 'returns', type: 'number', desc: '`OK` 或错误码' },
       {
         kind: 'errors',
         rows: [
-          { code: 'ERR_NOT_FOUND', when: '行星不存在' },
-          { code: 'ERR_INVALID_ARGS', when: 'planetId 不是字符串/为空串，或 listingId 不是合法数字' },
+          { code: 'ERR_NOT_FOUND', when: '行星、slotId 或 listingId 不存在' },
+          { code: 'ERR_INVALID_TARGET', when: '目标位置是城市区或已被其他公司占用' },
+          { code: 'ERR_INVALID_ARGS', when: 'planetId 非法，或未提供 `{ slotId }` / `{ listingId }`' },
           { code: 'ERR_FULL', when: '本 tick 已用满 32 条 Intent' },
         ],
       },
       {
         kind: 'example',
         code: `const p = Game.planets[Game.company.homePlanetId];
-const listing = p.landListings[0];
-if (listing && Game.company.cash > listing.askPrice) {
-  const rc = Game.buyPlot(p.id, listing.listingId);
-  if (rc !== OK) console.log('买地失败', rc);
+// 1) 定向挑采矿加成最高的一手空地
+const free = (Game.market.getLandPlots(p.id) || [])
+  .filter((t) => t.status === 'unclaimed')
+  .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
+if (free && free.price !== null && Game.company.cash > free.price) {
+  const rc = Game.buyPlot(p.id, { slotId: free.slotId });
+  if (rc !== OK) console.log('定向买地失败', rc);
 }`,
       },
       {
         kind: 'note',
         level: 'info',
-        text: '`primaryLandPrice` 为 `null` 表示该星当前没有一手地可买。现金是否足够在落地阶段校验。',
+        text: '所有位置在世界创建时即固定。若目标 `slotId` 在同一 tick 先被他人抢走，落账阶段会拒单，不会随机替换成别的地块。',
       },
       {
         kind: 'links',
         items: [
+          { label: 'Game.market.getLandPlots', id: 'Game.market.getLandPlots' },
+          { label: 'PublicLandPlot', id: 'PublicLandPlot' },
           { label: 'Game.plots', id: 'Game.plots' },
           { label: 'Planet', id: 'Planet' },
         ],

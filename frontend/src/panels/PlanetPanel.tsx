@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
-import { moneyToCredits, READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
+import { moneyToCredits } from '../types/meridian';
 import { Planet3DCanvas } from '../components/Planet3DCanvas';
 
 function multTone(v: number): string {
@@ -13,7 +13,6 @@ function multTone(v: number): string {
 export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const state = useGameStore((s) => s.state);
   const catalog = useGameStore((s) => s.catalog);
-  const sendIntent = useGameStore((s) => s.sendIntent);
 
   const [planetId, setPlanetId] = useState<string>(params.planetId || '');
 
@@ -81,15 +80,12 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
             </button>
           ))}
         </div>
-        {!READ_ONLY_OBSERVATION_MODE && (
-          <button
-            disabled={pSum.unclaimed_plots <= 0}
-            onClick={() => void sendIntent({ BuyPlot: { planet_id: pSum.id, listing_id: null } })}
-            className="cta-blue text-[10px] py-0 px-2 disabled:opacity-40"
-          >
-            购置新地块
-          </button>
-        )}
+        <button
+          onClick={() => openTemp('land', { planetId: pSum.id })}
+          className="cta-blue text-[10px] py-0 px-2 shrink-0"
+        >
+          地块分布
+        </button>
       </div>
 
       {/* Clean Multi-Row Telemetry Table + 3D Globe */}
@@ -202,13 +198,17 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
             <div className="w-[28%] min-w-[76px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
               土地 / 入驻
             </div>
-            <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
-              余地 {pSum.unclaimed_plots}
+            <button
+              onClick={() => openTemp('land', { planetId: pSum.id })}
+              className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate hover:bg-sky-500/10 cursor-pointer"
+              title="点击打开全星公开地块窗口"
+            >
+              余地 <span className="text-sky-300 underline decoration-sky-500/40">{pSum.unclaimed_plots}</span>
               {landPrice > 0 ? ` (一手 ${landPrice.toFixed(1)})` : ''}
               <span className="text-slate-500 mx-1.5">·</span>
               <span className="text-slate-400 mr-1">入驻</span>
               <span className="text-sky-300">{residentCount}</span> 家
-            </div>
+            </button>
           </div>
 
           <div className="flex">
@@ -231,6 +231,12 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
               快捷面板
             </div>
             <div className="flex-1 min-w-0 px-2 py-1 flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
+              <button
+                onClick={() => openTemp('land', { planetId: pSum.id })}
+                className="text-sky-300 hover:text-sky-200 hover:underline"
+              >
+                地块总览
+              </button>
               <button
                 onClick={() => openTemp('cargo', { locationId: pSum.id })}
                 className="text-sky-300 hover:text-sky-200 hover:underline"
@@ -268,6 +274,7 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
             paused={state?.paused ?? false}
             tickMs={state?.tick_ms ?? 2000}
             ticksPerDay={ticksPerDay}
+            onOpenLand={() => openTemp('land', { planetId: pSum.id })}
           />
         </div>
       </div>

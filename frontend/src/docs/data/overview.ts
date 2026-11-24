@@ -100,7 +100,7 @@ export const OVERVIEW_ENTRIES: DocEntry[] = [
           { name: 'Memory', type: '128 KB', desc: '按 JSON 序列化后的 UTF-8 字节数计算' },
           { name: 'console', type: '200 行 / tick', desc: '单行上限 1024 字节，超出按 UTF-8 截断并追加 `...`' },
           { name: '盘口深度', type: '5 档', desc: '`depth(limit)` 传更大也只返回快照里的 5 档' },
-          { name: '二手地', type: '8 条 / 行星', desc: '`planet.landListings` 最多 8 条' },
+          { name: '二手地', type: '全量公开', desc: '`planet.landListings` 与 `getLandPlots()` 返回完整公开列表' },
         ],
       },
       {

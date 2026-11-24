@@ -58,6 +58,7 @@ pub type LocationId = String;
 pub type CompanyId = String;
 pub type OrderId = u64;
 pub type PlotId = u64;
+pub type SlotId = u32;
 pub type BuildingId = u64;
 pub type ShipId = u64;
 pub type ListingId = u64;
@@ -114,6 +115,7 @@ pub enum Intent {
     },
     BuyPlot {
         planet_id: PlanetId,
+        slot_id: Option<SlotId>,
         listing_id: Option<ListingId>,
     },
     DispatchShip {

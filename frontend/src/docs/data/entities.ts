@@ -30,8 +30,8 @@ export const ENTITY_ENTRIES: DocEntry[] = [
           { name: 'primaryLandPrice', type: 'number | null', desc: '一手地单价；`null` 表示这颗星没有一手地可买。' },
           {
             name: 'landListings',
-            type: 'Array<{ listingId: string; plotId: string; askPrice: number }>',
-            desc: '二手地在售列表，最多 8 条。',
+            type: 'Array<{ listingId: string; plotId: string; slotId: number; sellerId: string; askPrice: number; terrainName: string; lat: number; lon: number; capacity: number; usedSlots: number; buildingMods: Record<string, number>; buildings: string[] }>',
+            desc: '本星当前全部二手/银行清算挂牌地块（含完整位置、地形、加成与已有建筑）。',
           },
           { name: 'bankRatePct', type: 'number', desc: '本星银行利率（百分数，如 4.5 表示 4.5%）。' },
           { name: 'groundStore', type: 'Store', desc: '本公司在这颗星的地面仓。' },
@@ -51,12 +51,12 @@ export const ENTITY_ENTRIES: DocEntry[] = [
       },
       {
         kind: 'prose',
-        text: '买地：一手地看 `primaryLandPrice`，二手地看 `landListings`（带 `listingId`）；真正下单用 `Game.buyPlot(planetId, listingId?)`。',
+        text: '买地：一手地先通过 `Game.market.getLandPlots(planetId)` 挑 `slotId`，二手地看 `landListings`（带 `listingId`）；下单用 `Game.buyPlot(planetId, { slotId } | { listingId })`。',
       },
       {
         kind: 'example',
-        caption: '按需求量找销路，顺便看看有没有便宜的二手地',
-        code: "const p = Game.planets['P2'];\n\n// 这颗星最缺什么？按需求量排序取前三\nconst top = Object.entries(p.demands)\n  .sort((a, b) => b[1].qty - a[1].qty)\n  .slice(0, 3);\nconsole.log(p.name, '需求前三', JSON.stringify(top));\n\n// 二手地在售\nfor (const listing of p.landListings) {\n  console.log(listing.plotId, listing.askPrice);\n}",
+        caption: '按需求量找销路，同时检索高矿冶空地与二手地',
+        code: "const p = Game.planets['P2'];\n\n// 这颗星最缺什么？按需求量排序取前三\nconst top = Object.entries(p.demands)\n  .sort((a, b) => b[1].qty - a[1].qty)\n  .slice(0, 3);\nconsole.log(p.name, '需求前三', JSON.stringify(top));\n\n// 二手地在售（现带地形、槽位与设施清单）\nfor (const listing of p.landListings) {\n  console.log(listing.slotId, listing.terrainName, listing.askPrice, listing.buildings);\n}",
       },
       {
         kind: 'links',
@@ -123,7 +123,10 @@ export const ENTITY_ENTRIES: DocEntry[] = [
         kind: 'fields',
         rows: [
           { name: 'id', type: 'string', desc: '地块 id。' },
+          { name: 'slotId', type: 'number', desc: '行星表面永久位置编号（1..N）。' },
           { name: 'planetId', type: 'string', desc: '所属星球 id。' },
+          { name: 'lat', type: 'number', desc: '行星表面纬度（度）。' },
+          { name: 'lon', type: 'number', desc: '行星表面经度（度）。' },
           { name: 'terrainName', type: 'string', desc: '地形名。' },
           { name: 'capacity', type: 'number', desc: '地块能放多少格建筑。' },
           { name: 'usedSlots', type: 'number', desc: '已经占用的格数。' },
@@ -147,8 +150,47 @@ export const ENTITY_ENTRIES: DocEntry[] = [
       {
         kind: 'links',
         items: [
+          { label: 'PublicLandPlot', id: 'PublicLandPlot' },
           { label: 'Building', id: 'Building' },
           { label: 'Planet', id: 'Planet' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'PublicLandPlot',
+    title: 'PublicLandPlot',
+    group: '实体',
+    kind: '类型',
+    summary: '行星表面的公开地理格点（城市、已开发企业地、在售挂牌与未开发空地）。',
+    keywords: 'PublicLandPlot slotId lat lon 地块 坐标 地形 加成 归属 挂牌',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '通过 `Game.market.getLandPlots(planetId)` 返回的公开地表数组元素。用于先看坐标、地形、加成和归属，再传 `slotId` 或 `listingId` 调用 `Game.buyPlot`。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'slotId', type: 'number', desc: '永久位置编号（用于购买一手空地）。' },
+          { name: 'planetId', type: 'string', desc: '所属星球 id。' },
+          { name: 'lat / lon', type: 'number', desc: '行星表面经纬度坐标。' },
+          { name: 'terrainName', type: 'string', desc: '地形名称。' },
+          { name: 'capacity / usedSlots', type: 'number', desc: '可用建筑槽位数 / 已占槽位数。' },
+          { name: 'buildingMods', type: 'Record<string, number>', desc: '各类设施在该位置的效率乘数。' },
+          { name: 'status', type: '"city" | "unclaimed" | "listed" | "owned"', desc: '地块公开状态。' },
+          { name: 'ownerId / ownerName', type: 'string | null', desc: '当前归属公司（未开发或城市区为 null）。' },
+          { name: 'buildings', type: 'string[]', desc: '该位置已公开建造的设施类型 id 列表。' },
+          { name: 'listingId', type: 'string | null', desc: '若处于挂牌状态，对应的二手挂牌 id。' },
+          { name: 'price', type: 'number | null', desc: '空地为当前一手地价，挂牌为要价，其余为 null。' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.getLandPlots', id: 'Game.market.getLandPlots' },
+          { label: 'Game.buyPlot', id: 'Game.buyPlot' },
+          { label: 'Plot', id: 'Plot' },
         ],
       },
     ],

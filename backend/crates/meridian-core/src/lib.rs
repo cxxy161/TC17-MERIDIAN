@@ -18,12 +18,14 @@ pub use logistics::{
     compute_route, compute_route_in_systems, station_coords, station_coords_in_systems, RouteKind,
     RouteSpec, Ship, ShipInFlight, ShipSize,
 };
-pub use planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem};
+pub use planet::{
+    BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem, SurfaceTile,
+};
 pub use schema::{
     BuildingDef, DemandCategoryDef, ItemDef, ItemQty, ItemRole, ProductionCatalog, ProductionPack,
     ProfessionDef, RecipeDef,
 };
-pub use snapshot::{SharedSnapshot, WorldSnapshot};
+pub use snapshot::{PublicLandTileView, SharedSnapshot, WorldSnapshot};
 pub use types::*;
 pub use world::{TickReport, World};
 

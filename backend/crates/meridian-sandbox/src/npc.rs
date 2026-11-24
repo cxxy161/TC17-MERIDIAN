@@ -1100,18 +1100,43 @@ pub fn decide_npc_intents(
                         .iter()
                         .min_by_key(|l| l.ask_price);
                     let prim_price = p_view.primary_land_price;
-                    let (target_lid, land_p) = match (best_listing, prim_price) {
-                        (Some(lst), Some(pp)) if lst.ask_price <= pp => {
-                            (Some(lst.listing_id), Some(lst.ask_price))
+                    let best_unclaimed_slot = snap
+                        .public_tiles
+                        .get(home_pid)
+                        .and_then(|tiles| {
+                            tiles
+                                .iter()
+                                .filter(|t| t.status == "unclaimed")
+                                .max_by(|a, b| {
+                                    let score = |t: &meridian_core::PublicLandTileView| -> f64 {
+                                        let pref_m = match snap.company.profession.as_str() {
+                                            "mining_ind" => t.building_mods.get("mine_smelter").copied().unwrap_or(1.0),
+                                            "env_recycle" => t.building_mods.get("power_water_station").copied().unwrap_or(1.0),
+                                            "agri_bio" => t.building_mods.get("bio_greenhouse").copied().unwrap_or(1.0),
+                                            _ => 1.0,
+                                        };
+                                        pref_m + (t.capacity as f64) * 0.08
+                                    };
+                                    score(a)
+                                        .partial_cmp(&score(b))
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .map(|t| t.slot_id)
+                        });
+                    let (target_slot, target_lid, land_p) = match (best_listing, prim_price, best_unclaimed_slot) {
+                        (Some(lst), Some(pp), _) if lst.ask_price <= pp => {
+                            (None, Some(lst.listing_id), Some(lst.ask_price))
                         }
-                        (Some(lst), None) => (Some(lst.listing_id), Some(lst.ask_price)),
-                        (_, Some(pp)) => (None, Some(pp)),
-                        (None, None) => (None, None),
+                        (Some(lst), None, _) => (None, Some(lst.listing_id), Some(lst.ask_price)),
+                        (_, Some(pp), Some(sid)) => (Some(sid), None, Some(pp)),
+                        (Some(lst), _, None) => (None, Some(lst.listing_id), Some(lst.ask_price)),
+                        _ => (None, None, None),
                     };
                     if let Some(cost) = land_p {
                         if snap.company.cash > cost + to_money(400.0 * snap.cpi) {
                             intents.push(Intent::BuyPlot {
                                 planet_id: home_pid.clone(),
+                                slot_id: target_slot,
                                 listing_id: target_lid,
                             });
                         }

@@ -113,10 +113,42 @@ struct BootCompany<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct BootLandListing {
+struct BootLandListing<'a> {
     listing_id: String,
     plot_id: String,
+    slot_id: u32,
+    seller_id: &'a str,
     ask_price: f64,
+    terrain_name: &'a str,
+    lat: f64,
+    lon: f64,
+    capacity: u32,
+    used_slots: u32,
+    building_mods: &'a HashMap<String, f64>,
+    buildings: &'a [String],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsLandPlot<'a> {
+    slot_id: u32,
+    planet_id: &'a str,
+    lat: f64,
+    lon: f64,
+    terrain_name: &'a str,
+    capacity: u32,
+    used_slots: u32,
+    building_mods: &'a HashMap<String, f64>,
+    status: &'a str,
+    is_city: bool,
+    city_name: Option<&'a str>,
+    owner_id: Option<&'a str>,
+    owner_name: Option<&'a str>,
+    is_player_owner: bool,
+    plot_id: Option<String>,
+    listing_id: Option<String>,
+    price: Option<f64>,
+    buildings: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -130,7 +162,7 @@ struct BootPlanet<'a> {
     gravity: f64,
     waste_backlog: u32,
     primary_land_price: Option<f64>,
-    land_listings: Vec<BootLandListing>,
+    land_listings: Vec<BootLandListing<'a>>,
     bank_rate_pct: f64,
     ground_store: &'a HashMap<String, u32>,
     station_store: &'a HashMap<String, u32>,
@@ -141,7 +173,10 @@ struct BootPlanet<'a> {
 #[serde(rename_all = "camelCase")]
 struct BootPlot<'a> {
     id: String,
+    slot_id: u32,
     planet_id: &'a str,
+    lat: f64,
+    lon: f64,
     terrain_name: &'a str,
     capacity: u32,
     used_slots: u32,
@@ -606,6 +641,39 @@ fn install_host_bindings<'js>(
             })?,
         )?;
     }
+    {
+        let h = Arc::clone(&host);
+        globals.set(
+            "__meridian_get_land_plots",
+            Function::new(ctx.clone(), move |pid: String| -> Option<String> {
+                let tiles = h.snapshot.public_tiles.get(&pid)?;
+                let out: Vec<JsLandPlot<'_>> = tiles
+                    .iter()
+                    .map(|t| JsLandPlot {
+                        slot_id: t.slot_id,
+                        planet_id: &t.planet_id,
+                        lat: t.lat,
+                        lon: t.lon,
+                        terrain_name: &t.terrain_name,
+                        capacity: t.capacity,
+                        used_slots: t.used_slots,
+                        building_mods: &t.building_mods,
+                        status: &t.status,
+                        is_city: t.is_city,
+                        city_name: t.city_name.as_deref(),
+                        owner_id: t.owner_id.as_deref(),
+                        owner_name: t.owner_name.as_deref(),
+                        is_player_owner: t.is_player_owner,
+                        plot_id: t.plot_id.map(|id| id.to_string()),
+                        listing_id: t.listing_id.map(|id| id.to_string()),
+                        price: t.price.map(from_money),
+                        buildings: &t.buildings,
+                    })
+                    .collect();
+                serde_json::to_string(&out).ok()
+            })?,
+        )?;
+    }
 
     // 5. Intent emitters with return codes
     {
@@ -833,23 +901,49 @@ fn install_host_bindings<'js>(
         let h = Arc::clone(&host);
         globals.set(
             "__meridian_buy_plot",
-            Function::new(ctx.clone(), move |pid: String, lid_str: String| -> i32 {
-                if !h.snapshot.planets.contains_key(&pid) {
-                    return ERR_NOT_FOUND;
-                }
-                let listing_id = if lid_str.is_empty() {
-                    None
-                } else {
-                    match lid_str.parse::<ListingId>() {
-                        Ok(id) => Some(id),
-                        Err(_) => return ERR_INVALID_ARGS,
+            Function::new(
+                ctx.clone(),
+                move |pid: String, mode: String, id_str: String| -> i32 {
+                    let Some(p_view) = h.snapshot.planets.get(&pid) else {
+                        return ERR_NOT_FOUND;
+                    };
+                    match mode.as_str() {
+                        "listing" => {
+                            let Ok(lid) = id_str.parse::<ListingId>() else {
+                                return ERR_INVALID_ARGS;
+                            };
+                            if !p_view.land_listings.iter().any(|l| l.listing_id == lid) {
+                                return ERR_NOT_FOUND;
+                            }
+                            h.push_intent(Intent::BuyPlot {
+                                planet_id: pid,
+                                slot_id: None,
+                                listing_id: Some(lid),
+                            })
+                        }
+                        "slot" => {
+                            let Ok(sid) = id_str.parse::<u32>() else {
+                                return ERR_INVALID_ARGS;
+                            };
+                            let Some(tiles) = h.snapshot.public_tiles.get(&pid) else {
+                                return ERR_NOT_FOUND;
+                            };
+                            let Some(tile) = tiles.iter().find(|t| t.slot_id == sid) else {
+                                return ERR_NOT_FOUND;
+                            };
+                            if tile.status != "unclaimed" {
+                                return ERR_INVALID_TARGET;
+                            }
+                            h.push_intent(Intent::BuyPlot {
+                                planet_id: pid,
+                                slot_id: Some(sid),
+                                listing_id: None,
+                            })
+                        }
+                        _ => ERR_INVALID_ARGS,
                     }
-                };
-                h.push_intent(Intent::BuyPlot {
-                    planet_id: pid,
-                    listing_id,
-                })
-            })?,
+                },
+            )?,
         )?;
     }
     {
@@ -961,7 +1055,16 @@ fn build_boot_json(
                 .map(|l| BootLandListing {
                     listing_id: l.listing_id.to_string(),
                     plot_id: l.plot_id.to_string(),
+                    slot_id: l.slot_id,
+                    seller_id: &l.seller_id,
                     ask_price: from_money(l.ask_price),
+                    terrain_name: &l.terrain_name,
+                    lat: l.lat,
+                    lon: l.lon,
+                    capacity: l.capacity,
+                    used_slots: l.used_slots,
+                    building_mods: &l.building_mods,
+                    buildings: &l.buildings,
                 })
                 .collect(),
             bank_rate_pct: p.bank_rate_bps as f64 / 100.0,
@@ -984,7 +1087,10 @@ fn build_boot_json(
         .iter()
         .map(|pl| BootPlot {
             id: pl.id.to_string(),
+            slot_id: pl.slot_id,
             planet_id: &pl.planet_id,
+            lat: pl.lat,
+            lon: pl.lon,
             terrain_name: &pl.terrain_name,
             capacity: pl.capacity,
             used_slots: pl.used_slots,

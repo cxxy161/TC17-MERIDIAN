@@ -8,7 +8,7 @@ use crate::exchange::{DepthLevel, MarketQuote, Order};
 use crate::logistics::ShipSize;
 use crate::types::{
     BuildingId, BuildingTypeId, CompanyId, ItemId, ListingId, Money, PlanetId, PlotId,
-    ProfessionId, RecipeId, StationId,
+    ProfessionId, RecipeId, SlotId, StationId,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,7 +27,10 @@ pub struct BuildingView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlotView {
     pub id: PlotId,
+    pub slot_id: SlotId,
     pub planet_id: PlanetId,
+    pub lat: f64,
+    pub lon: f64,
     pub terrain_name: String,
     pub capacity: u32,
     pub used_slots: u32,
@@ -50,7 +53,38 @@ pub struct ShipView {
 pub struct LandListingView {
     pub listing_id: ListingId,
     pub plot_id: PlotId,
+    pub slot_id: SlotId,
+    pub seller_id: String,
     pub ask_price: Money,
+    pub terrain_name: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub capacity: u32,
+    pub used_slots: u32,
+    pub building_mods: HashMap<BuildingTypeId, f64>,
+    pub buildings: Vec<BuildingTypeId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicLandTileView {
+    pub slot_id: SlotId,
+    pub planet_id: PlanetId,
+    pub lat: f64,
+    pub lon: f64,
+    pub terrain_name: String,
+    pub capacity: u32,
+    pub used_slots: u32,
+    pub building_mods: HashMap<BuildingTypeId, f64>,
+    pub status: String, // "city" | "unclaimed" | "listed" | "owned"
+    pub is_city: bool,
+    pub city_name: Option<String>,
+    pub owner_id: Option<CompanyId>,
+    pub owner_name: Option<String>,
+    pub is_player_owner: bool,
+    pub plot_id: Option<PlotId>,
+    pub listing_id: Option<ListingId>,
+    pub price: Option<Money>,
+    pub buildings: Vec<BuildingTypeId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +150,7 @@ pub struct SharedSnapshot {
     pub open_orders_by_owner: HashMap<CompanyId, Vec<Order>>,
     pub systems: HashMap<String, StarSystemView>,
     pub planet_templates: Vec<(PlanetId, StationId, PlanetView)>,
+    pub public_tiles_by_planet: HashMap<PlanetId, Vec<PublicLandTileView>>,
     pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
 }
 
@@ -131,6 +166,8 @@ pub struct WorldSnapshot {
     pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
     pub orders: Vec<Order>,
     pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
+    #[serde(default, skip_serializing)]
+    pub public_tiles: HashMap<PlanetId, Vec<PublicLandTileView>>,
 }
 
 impl WorldSnapshot {

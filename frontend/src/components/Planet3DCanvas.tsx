@@ -461,6 +461,7 @@ export interface Planet3DCanvasProps {
   paused: boolean;
   tickMs: number;
   ticksPerDay: number;
+  onOpenLand?: () => void;
 }
 
 export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
@@ -470,6 +471,7 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   paused,
   tickMs,
   ticksPerDay,
+  onOpenLand,
 }) => {
   const profile = useMemo(
     () => resolvePlanetProfile(planetId, planet),
@@ -671,12 +673,28 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
 
   return (
     <div className="relative w-full h-full bg-[#191f27] select-none overflow-hidden">
+      {onOpenLand && (
+        <button
+          onClick={onOpenLand}
+          className="absolute top-1.5 left-2.5 z-10 pill-btn py-0 text-[10px] text-sky-200 border-sky-500/40 bg-[#202732]/85 hover:bg-sky-500/20"
+        >
+          查看公开地块
+        </button>
+      )}
       <div className="absolute top-1.5 right-2.5 z-10 pointer-events-none text-[10px] text-slate-400">
         提示：左/右键拖动以旋转
       </div>
       {selectedInfo && (
-        <div className="absolute bottom-2 left-2.5 z-10 pointer-events-none px-2 py-0.5 rounded bg-[#202732]/90 border border-sky-500/30 text-[10px] text-sky-200 mono">
-          {selectedInfo}
+        <div className="absolute bottom-2 left-2.5 z-10 flex items-center gap-2 px-2 py-0.5 rounded bg-[#202732]/90 border border-sky-500/30 text-[10px] text-sky-200 mono">
+          <span>{selectedInfo}</span>
+          {onOpenLand && (
+            <button
+              onClick={onOpenLand}
+              className="text-emerald-300 hover:underline pointer-events-auto"
+            >
+              打开地块窗口 →
+            </button>
+          )}
         </div>
       )}
       <canvas

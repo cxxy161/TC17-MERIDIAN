@@ -159,6 +159,7 @@ interface MarketAPI {
   cancelOrder(orderId: string): RetCode;
   deal(orderId: string, amount: number): RetCode;
   calcRoute(fromId: string, toId: string): RouteCost | null;
+  getLandPlots(planetId: string): PublicLandPlot[] | null;
 }
 
 interface PlanetInfo {
@@ -173,17 +174,54 @@ interface PlanetInfo {
   readonly bankRatePct: number;
   readonly groundStore: Store;       // 本公司在该星地面仓库
   readonly stationStore: Store;      // 本公司在该星轨道站仓库
-  readonly landListings: Array<{ listingId: string; plotId: string; askPrice: number }>; // 最多 8 条
+  readonly landListings: Array<{
+    listingId: string;
+    plotId: string;
+    slotId: number;
+    sellerId: string;
+    askPrice: number;
+    terrainName: string;
+    lat: number;
+    lon: number;
+    capacity: number;
+    usedSlots: number;
+    buildingMods: Record<string, number>;
+    buildings: string[];
+  }>;
   readonly demands: Record<string, { qty: number }>;   // 只有 qty（旧版误写成含 satisfaction）
 }
 
 interface Plot {
   readonly id: string;
+  readonly slotId: number;
   readonly planetId: string;
+  readonly lat: number;
+  readonly lon: number;
   readonly terrainName: string;
   readonly capacity: number;
   readonly usedSlots: number;
   readonly buildingMods: Record<string, number>;  // 建筑类型 -> 效率乘数
+}
+
+interface PublicLandPlot {
+  readonly slotId: number;
+  readonly planetId: string;
+  readonly lat: number;
+  readonly lon: number;
+  readonly terrainName: string;
+  readonly capacity: number;
+  readonly usedSlots: number;
+  readonly buildingMods: Record<string, number>;
+  readonly status: "city" | "unclaimed" | "listed" | "owned";
+  readonly isCity: boolean;
+  readonly cityName: string | null;
+  readonly ownerId: string | null;
+  readonly ownerName: string | null;
+  readonly isPlayerOwner: boolean;
+  readonly plotId: string | null;
+  readonly listingId: string | null;
+  readonly price: number | null;
+  readonly buildings: string[];
 }
 
 interface RecipeInfo {
@@ -219,8 +257,8 @@ interface GameGlobal {
   readonly ships: Record<string, Ship>;
   readonly market: MarketAPI;
 
-  /** 购买一手/二手土地 */
-  buyPlot(planetId: string, listingId?: string): RetCode;
+  /** 查询行星全部公开地块；定向购买一手/二手土地 */
+  buyPlot(planetId: string, target: { slotId: number } | { listingId: string | number }): RetCode;
   /** 在指定地块建造或拆除通用建筑 */
   buildFacility(plotId: string, buildingType: string): RetCode;
   demolishFacility(plotId: string, buildingId: string): RetCode;
@@ -263,7 +301,7 @@ pub enum Intent {
     ToggleBuilding { building_id: BuildingId, active: bool },
     BuildFacility { plot_id: PlotId, building_type: BuildingTypeId },
     DemolishFacility { plot_id: PlotId, building_id: BuildingId },
-    BuyPlot { planet_id: PlanetId, listing_id: Option<ListingId> },
+    BuyPlot { planet_id: PlanetId, slot_id: Option<SlotId>, listing_id: Option<ListingId> },
     DispatchShip {
         ship_id: ShipId,
         from: LocationId,

@@ -45,11 +45,19 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
                 throw new Error('Expected starter power on P1 groundStore');
             }
 
-            // Validate lazy Market & Recipe FFI
+            // Validate lazy Market & Recipe FFI + positional Land Plots API
             const q = Game.market.quote('ST:HUB', RESOURCE_STEEL);
             const r = Game.getRecipe('steel_electric');
             const route = Game.market.calcRoute('P1', 'ST:P1');
-            console.log('tick', Game.time, 'steel_last', q && q.lastPrice, 'route', route && route.ticks);
+            const tiles = Game.market.getLandPlots('P1');
+            if (!Array.isArray(tiles) || tiles.length < 10) {
+                throw new Error('Expected Game.market.getLandPlots(P1) to return planet surface grid');
+            }
+            const freeTile = tiles.find((t) => t.status === 'unclaimed');
+            if (!freeTile || typeof freeTile.slotId !== 'number' || typeof freeTile.lat !== 'number') {
+                throw new Error('Expected unclaimed tile with slotId and lat/lon');
+            }
+            console.log('tick', Game.time, 'steel_last', q && q.lastPrice, 'route', route && route.ticks, 'freeSlot', freeTile.slotId);
 
             if (!r || r.id !== 'steel_electric') {
                 throw new Error('Expected Game.getRecipe to return steel_electric');
@@ -85,6 +93,12 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
                 stationId: 'ST:HUB',
             }));
             codes.push(Game.bank('P1', 'deposit', 100));
+            const targetTile = (Game.market.getLandPlots('P1') || []).find((t) => t.status === 'unclaimed');
+            if (targetTile) {
+                codes.push(Game.buyPlot('P1', { slotId: targetTile.slotId }));
+            }
+            // Missing position object should return ERR_INVALID_ARGS (-10)
+            codes.push(Game.buyPlot('P1'));
             return codes;
         };
     "#,
@@ -99,14 +113,15 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
     assert!(out1.error.is_none(), "unexpected JS error: {:?}", out1.error);
     assert!(!out1.timed_out);
     assert!(!out1.oom);
-    assert_eq!(out1.intents.len(), 3, "expected DispatchShip + CreateOrder + BankOp");
+    assert_eq!(out1.intents.len(), 4, "expected DispatchShip + CreateOrder + BankOp + BuyPlot");
     assert_eq!(rep1.rejected_intents, 0);
     assert_eq!(world.conservation_error(), 0);
     assert!(out1.logs.iter().any(|l| l.message.contains("tick 0")));
+    assert_eq!(world.companies["p_js"].plots.len(), 2, "expected player to own starter + purchased positional plot");
 
     let mem1: serde_json::Value = serde_json::from_str(&out1.memory_json).unwrap();
     assert_eq!(mem1["runs"], 1);
-    assert_eq!(mem1["lastCodes"], serde_json::json!([0, -9, -5, 0, 0]));
+    assert_eq!(mem1["lastCodes"], serde_json::json!([0, -9, -5, 0, 0, 0, -10]));
 
     // Tick 2 confirms Memory persistence
     runner.step_world(&mut world);

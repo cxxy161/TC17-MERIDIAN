@@ -167,7 +167,10 @@ export interface BuildingView {
 
 export interface PlotView {
   id: number;
+  slot_id: number;
   planet_id: string;
+  lat: number;
+  lon: number;
   terrain_name: string;
   capacity: number;
   used_slots: number;
@@ -188,7 +191,54 @@ export interface ShipView {
 export interface LandListingView {
   listing_id: number;
   plot_id: number;
+  slot_id: number;
+  seller_id: string;
   ask_price: number;
+  terrain_name: string;
+  lat: number;
+  lon: number;
+  capacity: number;
+  used_slots: number;
+  building_mods: Record<string, number>;
+  buildings: string[];
+}
+
+export interface PublicLandTile {
+  slot_id: number;
+  planet_id: string;
+  lat: number;
+  lon: number;
+  terrain_name: string;
+  capacity: number;
+  used_slots: number;
+  building_mods: Record<string, number>;
+  status: 'city' | 'unclaimed' | 'listed' | 'owned';
+  is_city: boolean;
+  city_name: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  is_player_owner: boolean;
+  is_mine: boolean;
+  plot_id: number | null;
+  listing_id: number | null;
+  price: number | null;
+  buildings: string[];
+}
+
+export interface PlanetPlotsResp {
+  planet: {
+    id: string;
+    name: string;
+    archetype: string;
+    habitability: number;
+    city_count: number;
+    primary_land_price: number | null;
+    total_developable_plots: number;
+    unclaimed_plots: number;
+    npc_plot_count: number;
+    npc_plot_cap: number;
+  };
+  tiles: PublicLandTile[];
 }
 
 export interface PlanetView {
@@ -346,7 +396,7 @@ export type IntentPayload =
   | { ToggleBuilding: { building_id: number; active: boolean } }
   | { BuildFacility: { plot_id: number; building_type: string } }
   | { DemolishFacility: { plot_id: number; building_id: number } }
-  | { BuyPlot: { planet_id: string; listing_id: number | null } }
+  | { BuyPlot: { planet_id: string; slot_id: number | null; listing_id: number | null } }
   | { DispatchShip: { ship_id: number; from: string; to: string; cargo: Array<[string, number]> } }
   | { RepairShip: { ship_id: number } }
   | { BankOp: { planet_id: string; op: 'deposit' | 'withdraw' | 'borrow' | 'repay'; amount: number } };

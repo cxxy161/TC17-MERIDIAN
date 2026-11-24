@@ -80,6 +80,14 @@ export function useEntitySearch(): EntityOption[] {
         keywords: `${planet.id} 工厂 产线`,
         content: { kind: 'factory', params: { planetId: planet.id } },
       });
+      list.push({
+        key: `planet-land-${planet.id}`,
+        group: '行星',
+        label: `地块 · ${planet.name}`,
+        sub: '公开地块分布、地形加成与位置 ID',
+        keywords: `${planet.id} 地块 土地 slot listing 坐标`,
+        content: { kind: 'land', params: { planetId: planet.id } },
+      });
     }
 
     for (const loc of world.locations) {

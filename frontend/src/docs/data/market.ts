@@ -406,4 +406,43 @@ if (route && ship) {
       },
     ],
   },
+  {
+    id: 'Game.market.getLandPlots',
+    title: 'getLandPlots',
+    group: 'Game',
+    parent: 'Game.market',
+    kind: '方法',
+    summary: '查询指定行星的全部公开地块（含坐标、地形加成、归属与挂牌）',
+    keywords: '地块 土地 坐标 经纬度 地形 加成 slotId listingId getLandPlots buyPlot',
+    blocks: [
+      { kind: 'syntax', code: 'Game.market.getLandPlots(planetId) → PublicLandPlot[] | null' },
+      {
+        kind: 'prose',
+        text: '返回一颗行星表面**全部公开位置**（含城市规划区、已开发企业地块、二手/银行挂牌地块以及未开发公有空地）。每个位置自带永久 `slotId` 与经纬坐标 `(lat, lon)`，用于配合 `Game.buyPlot` 定向购买。未知行星返回 `null`。',
+      },
+      {
+        kind: 'params',
+        rows: [{ name: 'planetId', type: 'string', required: true, desc: '行星 id，如 `P2`' }],
+      },
+      { kind: 'returns', type: 'PublicLandPlot[] | null', desc: '全星地块数组；未知行星返回 null' },
+      {
+        kind: 'example',
+        code: `const pid = Game.company.homePlanetId;
+const best = (Game.market.getLandPlots(pid) || [])
+  .filter((t) => t.status === 'unclaimed' && t.capacity >= 4)
+  .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
+if (best && Game.company.cash >= best.price) {
+  Game.buyPlot(pid, { slotId: best.slotId });
+}`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'PublicLandPlot', id: 'PublicLandPlot' },
+          { label: 'Game.buyPlot', id: 'Game.buyPlot' },
+          { label: 'Plot', id: 'Plot' },
+        ],
+      },
+    ],
+  },
 ];

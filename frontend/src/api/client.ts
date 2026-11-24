@@ -2,6 +2,7 @@ import type {
   IntentPayload,
   MarketBookResp,
   MarketCandlesResp,
+  PlanetPlotsResp,
   ProductionPack,
   ScriptsResp,
   StateResponse,
@@ -190,6 +191,10 @@ export const api = {
 
   getState(companyId = currentCompanyId): Promise<StateResponse> {
     return jsonFetch(`/api/state?company_id=${encodeURIComponent(companyId)}`);
+  },
+
+  getPlanetPlots(planetId: string): Promise<PlanetPlotsResp> {
+    return jsonFetch(`/api/planets/${encodeURIComponent(planetId)}/plots`);
   },
 
   getMarketBook(stationId: string, itemId: string): Promise<MarketBookResp> {

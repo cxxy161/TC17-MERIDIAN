@@ -336,6 +336,12 @@
       const json = global.__meridian_calc_route(fromId, toId);
       return json ? JSON.parse(json) : null;
     },
+
+    getLandPlots(planetId) {
+      if (typeof planetId !== "string" || !planetId) return null;
+      const json = global.__meridian_get_land_plots(planetId);
+      return json ? JSON.parse(json) : null;
+    },
   });
 
   global.Game = Object.freeze({
@@ -355,10 +361,16 @@
     ships: Object.freeze(shipsMap),
     market: marketApi,
 
-    buyPlot(planetId, listingId) {
+    buyPlot(planetId, target) {
       if (typeof planetId !== "string" || !planetId) return CONSTANTS.ERR_INVALID_ARGS;
-      const lid = listingId === undefined || listingId === null ? "" : String(listingId);
-      return global.__meridian_buy_plot(planetId, lid);
+      if (!target || typeof target !== "object") return CONSTANTS.ERR_INVALID_ARGS;
+      if (target.listingId !== undefined && target.listingId !== null) {
+        return global.__meridian_buy_plot(planetId, "listing", String(target.listingId));
+      }
+      if (target.slotId !== undefined && target.slotId !== null) {
+        return global.__meridian_buy_plot(planetId, "slot", String(target.slotId));
+      }
+      return CONSTANTS.ERR_INVALID_ARGS;
     },
 
     buildFacility(plotId, buildingType) {
