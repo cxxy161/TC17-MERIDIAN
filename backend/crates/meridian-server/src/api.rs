@@ -34,6 +34,7 @@ use crate::engine::{IntentQueueError, SharedEngine};
 use crate::storage::{CandleRow, TradeRow};
 
 const ADMIN_HTML: &str = include_str!("../assets/admin.html");
+const ADMIN_JS: &str = include_str!("../assets/admin.js");
 
 /// 请求体上限（2 MiB）。
 const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -42,7 +43,7 @@ const MAX_CONCURRENT_REQUESTS: usize = 256;
 /// 单请求总超时（含排队与请求体读取）。
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 
-const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: https://challenges.cloudflare.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws: wss: https://challenges.cloudflare.com https://cloudflareinsights.com; frame-src 'self' https://challenges.cloudflare.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 /// MERIDIAN_ALLOWED_ORIGINS（逗号分隔的完整 Origin，如 https://meridian.example.com）。
 /// 为空 = 不启用跨域；显式拒绝 *（与 credentials 组合是浏览器的非法配置）。
@@ -72,6 +73,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
     let api_router = Router::new()
         .route("/admin", get(admin_page_handler))
         .route("/admin.html", get(admin_page_handler))
+        .route("/admin.js", get(admin_js_handler))
         .route("/api/admin/overview", get(admin_overview_handler))
         .route("/api/admin/player/{company_id}/sandbox", get(admin_player_sandbox_handler))
         .route("/api/admin/player/{company_id}/script-toggle", post(admin_script_toggle_handler))
@@ -313,6 +315,13 @@ struct HealthResp {
 
 async fn admin_page_handler() -> Html<&'static str> {
     Html(ADMIN_HTML)
+}
+
+async fn admin_js_handler() -> ([(header::HeaderName, &'static str); 1], &'static str) {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        ADMIN_JS,
+    )
 }
 
 async fn admin_overview_handler(

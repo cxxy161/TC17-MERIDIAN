@@ -285,6 +285,31 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
             .await
             .unwrap();
         assert_eq!(admin_html_resp.status(), StatusCode::OK);
+        let admin_html = String::from_utf8(
+            admin_html_resp.into_body().collect().await.unwrap().to_bytes().to_vec(),
+        )
+        .unwrap();
+        assert!(admin_html.contains("<script src=\"/admin.js\"></script>"));
+        assert!(!admin_html.contains("<script>"));
+
+        let admin_js_resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/admin.js").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(admin_js_resp.status(), StatusCode::OK);
+        let admin_js_ct = admin_js_resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(admin_js_ct.contains("javascript"));
+        let admin_js = String::from_utf8(
+            admin_js_resp.into_body().collect().await.unwrap().to_bytes().to_vec(),
+        )
+        .unwrap();
+        assert!(!admin_js.contains("onclick="));
 
         let (st, admin_res) = read_json(
             app.clone()
