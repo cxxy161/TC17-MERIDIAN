@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Copy, MapPin, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import type { PaneProps } from '../layout/paneRegistry';
 import { api } from '../api/client';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
@@ -24,15 +24,6 @@ function statusLabel(t: PublicLandTile): { text: string; cls: string } {
   return { text: '未开发空地', cls: 'bg-slate-700/60 text-slate-300 border-slate-600/70' };
 }
 
-function tileMapFill(t: PublicLandTile, selected: boolean): string {
-  if (selected) return '#ffffff';
-  if (t.is_city) return '#f59e0b';
-  if (t.is_mine) return '#38bdf8';
-  if (t.status === 'listed') return '#34d399';
-  if (t.status === 'owned') return '#a78bfa';
-  return '#64748b';
-}
-
 export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const world = useWorldIndex();
   const catalog = useCatalogIndex();
@@ -47,7 +38,6 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
   const [sortBy, setSortBy] = useState<SortMode>('slot');
   const [query, setQuery] = useState('');
   const [selectedSlotId, setSelectedSlotId] = useState<number | null>(params.slotId ?? null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (params.slotId !== undefined) setSelectedSlotId(params.slotId);
@@ -148,28 +138,11 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
     return filtered[0] ?? tiles[0] ?? null;
   }, [tiles, filtered, selectedSlotId]);
 
-  const copyText = (key: string, text: string) => {
-    navigator.clipboard?.writeText(text).catch(() => {});
-    setCopiedKey(key);
-    window.setTimeout(() => setCopiedKey((cur) => (cur === key ? null : cur)), 1500);
-  };
-
-  const snippetForTile = (t: PublicLandTile): string => {
-    const pid = t.planet_id;
-    if (t.status === 'listed' && t.listing_id !== null) {
-      return `// 定向收购 ${pid} 二手/清算地块 (#${t.slot_id} · ${t.terrain_name})\nGame.buyPlot('${pid}', { listingId: '${t.listing_id}' });`;
-    }
-    if (t.status === 'unclaimed') {
-      return `// 定向购买 ${pid} 一手空地 #${t.slot_id} (${t.terrain_name} · ${t.lat.toFixed(1)}°, ${t.lon.toFixed(1)}°)\nGame.buyPlot('${pid}', { slotId: ${t.slot_id} });`;
-    }
-    const modKey =
-      sortBy === 'mine_smelter' || sortBy === 'power_water_station' || sortBy === 'bio_greenhouse'
-        ? sortBy
-        : 'mine_smelter';
-    return `// 查询 ${pid} 上 ${modKey} 加成最高的空地并定向购买\nconst target = (Game.market.getLandPlots('${pid}') || [])\n  .filter(t => t.status === 'unclaimed' && t.capacity >= 4)\n  .sort((a, b) => (b.buildingMods['${modKey}'] || 0) - (a.buildingMods['${modKey}'] || 0))[0];\nif (target) Game.buyPlot('${pid}', { slotId: target.slotId });`;
-  };
-
   const pInfo = data?.planet;
+  const selectedStatus = selectedTile ? statusLabel(selectedTile) : null;
+  const selectedMods = selectedTile
+    ? Object.entries(selectedTile.building_mods).sort((a, b) => b[1] - a[1])
+    : [];
 
   return (
     <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
@@ -221,59 +194,6 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
         )}
       </div>
 
-      {/* Planetary Coordinate Grid Map */}
-      <div className="px-2.5 py-1.5 border-b border-slate-700/60 bg-[#161c24] shrink-0">
-        <div className="flex items-center justify-between text-[10px] text-slate-400 mb-1">
-          <span className="flex items-center gap-1">
-            <MapPin className="w-3 h-3 text-sky-400" />
-            <span>星表经纬位置分布（点击任意块查看坐标/加成并复制购买 ID）</span>
-          </span>
-          <div className="flex items-center gap-2 text-[9.5px] shrink-0">
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-full bg-amber-400" />城市</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-full bg-sky-400" />我方</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-full bg-emerald-400" />在售</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-full bg-violet-400" />已占</span>
-            <span className="flex items-center gap-1"><i className="inline-block w-2 h-2 rounded-full bg-slate-500" />空地</span>
-          </div>
-        </div>
-        <svg viewBox="0 0 360 112" className="w-full h-[98px] bg-[#11161d] border border-slate-800 rounded-sm">
-          {[-120, -60, 0, 60, 120].map((lon) => {
-            const x = 180 + lon;
-            return <line key={lon} x1={x} y1={0} x2={x} y2={112} stroke="rgba(148,163,184,0.10)" strokeDasharray="2 3" />;
-          })}
-          {[-45, 0, 45].map((lat) => {
-            const y = 56 - (lat / 80) * 50;
-            return <line key={lat} x1={0} y1={y} x2={360} y2={y} stroke="rgba(148,163,184,0.10)" strokeDasharray="2 3" />;
-          })}
-          {tiles.map((t) => {
-            const x = Math.max(6, Math.min(354, 180 + t.lon));
-            const y = Math.max(6, Math.min(106, 56 - (t.lat / 80) * 50));
-            const isSel = selectedTile?.slot_id === t.slot_id;
-            const fill = tileMapFill(t, isSel);
-            return (
-              <g
-                key={t.slot_id}
-                className="cursor-pointer"
-                onClick={() => {
-                  setSelectedSlotId(t.slot_id);
-                  setParams({ planetId: activePlanetId, slotId: t.slot_id });
-                }}
-              >
-                {isSel && <circle cx={x} cy={y} r={5.5} fill="none" stroke="#38bdf8" strokeWidth={1.3} />}
-                {t.is_city ? (
-                  <polygon
-                    points={`${x},${y - 3.6} ${x + 3.6},${y} ${x},${y + 3.6} ${x - 3.6},${y}`}
-                    fill={fill}
-                  />
-                ) : (
-                  <circle cx={x} cy={y} r={t.is_mine || t.status === 'listed' ? 2.6 : 1.9} fill={fill} />
-                )}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-
       {/* Filters & Sorting Toolbar */}
       <div className="px-2.5 py-1 border-b border-slate-800 flex items-center gap-1.5 flex-wrap bg-[#202732] shrink-0">
         {([
@@ -317,7 +237,7 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
         </select>
       </div>
 
-      {/* Main Split: Public Tiles Table + Selected Detail & Code Box */}
+      {/* Main Split: Clean Tile List + Structured Detail Inspector */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {loading && tiles.length === 0 ? (
           <div className="p-4 text-[11px] text-slate-400">正在加载星表地块数据...</div>
@@ -331,6 +251,7 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
               const mineM = t.building_mods.mine_smelter ?? 1.0;
               const pwM = t.building_mods.power_water_station ?? 1.0;
               const bioM = t.building_mods.bio_greenhouse ?? 1.0;
+              const isDeveloped = t.status === 'owned' || t.status === 'listed';
               return (
                 <div
                   key={t.slot_id}
@@ -354,20 +275,16 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                       <span className="mono text-[9.5px] text-slate-500">
                         ({t.lat.toFixed(0)}°, {t.lon.toFixed(0)}°)
                       </span>
+                      {isDeveloped && t.owner_name && (
+                        <span className="text-[9.5px] text-sky-300/90 truncate max-w-[160px]">
+                          · {t.owner_name}
+                        </span>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 text-[9.5px] mono text-slate-400 mt-0.5 flex-wrap">
-                      <span>{t.used_slots}/{t.capacity}槽</span>
+                    <div className="flex items-center gap-2.5 text-[9.5px] mono text-slate-400 mt-0.5 flex-wrap">
                       <span>矿 <b className={modColor(mineM)}>{mineM.toFixed(2)}x</b></span>
                       <span>能 <b className={modColor(pwM)}>{pwM.toFixed(2)}x</b></span>
                       <span>农 <b className={modColor(bioM)}>{bioM.toFixed(2)}x</b></span>
-                      {t.owner_name && (
-                        <span className="text-slate-300 truncate max-w-[110px]">{t.owner_name}</span>
-                      )}
-                      {t.buildings.length > 0 && (
-                        <span className="text-slate-400 truncate">
-                          [{t.buildings.map((b) => catalog.buildingName(b)).join(', ')}]
-                        </span>
-                      )}
                     </div>
                   </div>
                   <div className="text-right mono shrink-0">
@@ -389,50 +306,95 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
           </div>
         )}
 
-        {/* Selected Plot Detail + Ready-to-Run Purchase Code */}
-        {selectedTile && (
-          <div className="border-t border-sky-500/20 bg-[#151a22] px-2.5 py-2 shrink-0 space-y-1.5">
-            <div className="flex items-center justify-between gap-2 flex-wrap text-[10.5px]">
-              <div className="mono text-slate-200 flex items-center gap-2 flex-wrap">
-                <b className="text-sky-300">位置 #{selectedTile.slot_id}</b>
-                <span>{selectedTile.city_name ?? selectedTile.terrain_name}</span>
-                <span className="text-slate-400">
-                  ({selectedTile.lat.toFixed(1)}°, {selectedTile.lon.toFixed(1)}°)
+        {/* Structured Selected Tile Detail Inspector */}
+        {selectedTile && selectedStatus && (
+          <div className="border-t border-sky-500/25 bg-[#151a22] shrink-0 text-[10.5px]">
+            <div className="px-2.5 py-1 bg-[#1e2530] border-b border-slate-800 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 mono">
+                <b className="text-sky-300">地块详情 #{selectedTile.slot_id}</b>
+                <span className={`px-1 py-[0.5px] text-[9px] border rounded-[2px] ${selectedStatus.cls}`}>
+                  {selectedStatus.text}
                 </span>
-                {selectedTile.plot_id !== null && (
-                  <span className="text-slate-400">Plot #{selectedTile.plot_id}</span>
-                )}
+                <span className="text-slate-200">{selectedTile.city_name ?? selectedTile.terrain_name}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                {selectedTile.listing_id !== null ? (
-                  <button
-                    onClick={() => copyText('id', String(selectedTile.listing_id))}
-                    className="pill-btn py-0 text-[10px] flex items-center gap-1"
-                  >
-                    {copiedKey === 'id' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    复制 listingId ({selectedTile.listing_id})
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => copyText('id', String(selectedTile.slot_id))}
-                    className="pill-btn py-0 text-[10px] flex items-center gap-1"
-                  >
-                    {copiedKey === 'id' ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    复制 slotId ({selectedTile.slot_id})
-                  </button>
-                )}
-                <button
-                  onClick={() => copyText('code', snippetForTile(selectedTile))}
-                  className="cta-blue py-0 px-2 text-[10px] flex items-center gap-1"
-                >
-                  {copiedKey === 'code' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                  复制购买代码
-                </button>
+              <span className="mono text-[9.5px] text-slate-400">
+                坐标 ({selectedTile.lat.toFixed(1)}°, {selectedTile.lon.toFixed(1)}°)
+              </span>
+            </div>
+
+            <div className="divide-y divide-slate-800/80">
+              <div className="flex">
+                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 shrink-0">
+                  编号 / 归属
+                </div>
+                <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
+                  slotId <b className="text-sky-300">{selectedTile.slot_id}</b>
+                  {selectedTile.plot_id !== null && (
+                    <span className="text-slate-400"> · Plot #{selectedTile.plot_id}</span>
+                  )}
+                  {selectedTile.listing_id !== null && (
+                    <span className="text-emerald-300"> · listingId {selectedTile.listing_id}</span>
+                  )}
+                  <span className="text-slate-500 mx-1.5">·</span>
+                  <span>
+                    {selectedTile.is_city
+                      ? selectedTile.city_name ?? '城市区'
+                      : selectedTile.owner_name ?? (selectedTile.status === 'listed' ? '银行/挂牌待售' : '公有未开发')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex">
+                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 shrink-0">
+                  槽位 / 价格
+                </div>
+                <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono text-slate-200 truncate">
+                  <span>
+                    已用 <b className="text-sky-300">{selectedTile.used_slots}</b> / {selectedTile.capacity} 槽
+                  </span>
+                  <span className="text-slate-500 mx-1.5">·</span>
+                  <span>
+                    {selectedTile.price !== null ? (
+                      <>
+                        {selectedTile.status === 'listed' ? '挂牌价' : '一手地价'}{' '}
+                        <b className="text-emerald-300">{selectedTile.price.toFixed(1)}</b>
+                      </>
+                    ) : (
+                      <span className="text-slate-500">非挂牌状态</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-stretch">
+                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
+                  已有建筑
+                </div>
+                <div className="flex-1 min-w-0 px-2 py-[3px] text-right text-slate-200">
+                  {selectedTile.buildings.length > 0 ? (
+                    <span className="mono text-sky-200">
+                      {selectedTile.buildings.map((b) => catalog.buildingName(b)).join(' · ')}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">暂无建筑</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-stretch">
+                <div className="w-[26%] min-w-[74px] bg-[#244465]/55 px-2 py-[3px] text-slate-300 border-r border-slate-800 flex items-center shrink-0">
+                  设施倍率
+                </div>
+                <div className="flex-1 min-w-0 px-2 py-[3px] text-right mono flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
+                  {selectedMods.map(([bid, m]) => (
+                    <span key={bid} className="text-slate-400">
+                      {catalog.buildingName(bid)}{' '}
+                      <b className={modColor(m)}>{m.toFixed(2)}x</b>
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
-            <pre className="p-1.5 rounded bg-[#0d1117] border border-slate-800 text-[10px] mono text-emerald-300 overflow-x-auto leading-snug">
-              {snippetForTile(selectedTile)}
-            </pre>
           </div>
         )}
       </div>
