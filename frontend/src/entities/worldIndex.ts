@@ -1,4 +1,5 @@
 import type {
+  LeaderboardRow,
   MarketTickerRow,
   OrderSnapshot,
   PlanetSummary,
@@ -44,6 +45,9 @@ export interface WorldIndex {
   tick: number;
   planets: PlanetSummary[];
   planetById: Map<string, PlanetSummary>;
+  companies: LeaderboardRow[];
+  companyById: Map<string, LeaderboardRow>;
+  companyName(id: string | null | undefined): string;
   locations: LocationInfo[];
   locationById: Map<string, LocationInfo>;
   stations: LocationInfo[];
@@ -72,6 +76,9 @@ const EMPTY: WorldIndex = {
   tick: 0,
   planets: [],
   planetById: new Map(),
+  companies: [],
+  companyById: new Map(),
+  companyName: (id) => (id ? id : '—'),
   locations: [],
   locationById: new Map(),
   stations: [],
@@ -117,6 +124,8 @@ export function buildWorldIndex(state: StateResponse | null): WorldIndex {
 
   const planets = state.planets ?? [];
   const planetById = new Map(planets.map((p) => [p.id, p]));
+  const companies = state.leaderboard ?? [];
+  const companyById = new Map(companies.map((c) => [c.id, c]));
   const snap = state.player_snapshot;
 
   const stationIds = new Set<string>([HUB_STATION_ID]);
@@ -210,6 +219,9 @@ export function buildWorldIndex(state: StateResponse | null): WorldIndex {
     tick: state.tick,
     planets,
     planetById,
+    companies,
+    companyById,
+    companyName: (id) => (id ? companyById.get(id)?.name ?? id : '—'),
     locations,
     locationById,
     stations,

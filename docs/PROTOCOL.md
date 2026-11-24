@@ -160,6 +160,14 @@ interface MarketAPI {
   deal(orderId: string, amount: number): RetCode;
   calcRoute(fromId: string, toId: string): RouteCost | null;
   getLandPlots(planetId: string): PublicLandPlot[] | null;
+  listCompanies(filter?: {
+    query?: string;
+    planetId?: string;
+    onlyPlayers?: boolean;
+    offset?: number;
+    limit?: number;
+  }): PublicCompanySummary[];
+  getCompany(companyId: string): PublicCompanyDetail | null;
 }
 
 interface PlanetInfo {
@@ -222,6 +230,38 @@ interface PublicLandPlot {
   readonly listingId: string | null;
   readonly price: number | null;
   readonly buildings: string[];
+}
+
+interface PublicCompanySummary {
+  readonly id: string;
+  readonly name: string;
+  readonly isPlayer: boolean;
+  readonly homePlanetId: string;
+  readonly netLiquid: number;       // 公开净流动资产（不暴露现金/存款/负债明细）
+  readonly plotsCount: number;
+  readonly buildingsCount: number;
+  readonly shipsCount: number;
+  readonly shipsBySize: { readonly small: number; readonly medium: number; readonly large: number };
+  readonly openOrdersCount: number;
+}
+
+interface PublicCompanyDetail extends PublicCompanySummary {
+  readonly buildingCounts: Record<string, number>;
+  readonly plots: Array<{
+    readonly planetId: string;
+    readonly slotId: number;
+    readonly plotId: string | null;
+    readonly lat: number;
+    readonly lon: number;
+    readonly terrainName: string;
+    readonly capacity: number;
+    readonly usedSlots: number;
+    readonly status: "owned" | "listed";
+    readonly listingId: string | null;
+    readonly price: number | null;
+    readonly buildings: string[];
+  }>;
+  readonly openOrders: MarketOrder[];
 }
 
 interface RecipeInfo {

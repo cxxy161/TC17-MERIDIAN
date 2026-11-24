@@ -196,6 +196,69 @@ export const ENTITY_ENTRIES: DocEntry[] = [
     ],
   },
   {
+    id: 'PublicCompanySummary',
+    title: 'PublicCompanySummary',
+    group: '实体',
+    kind: '类型',
+    summary: '公司公开摘要条目（母星、公开净流动资产、地块/建筑/飞船/挂单规模）。',
+    keywords: 'PublicCompanySummary 公司 摘要 排行榜 净流动资产',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '由 `Game.market.listCompanies(filter)` 返回的公司公开摘要。不包含职业、现金/存款/负债明细、仓库库存及飞船航线等隐私。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'id / name', type: 'string', desc: '公司 id 与名称。' },
+          { name: 'isPlayer', type: 'boolean', desc: '是否为玩家控制公司。' },
+          { name: 'homePlanetId', type: 'string', desc: '所属母星 id。' },
+          { name: 'netLiquid', type: 'number', desc: '公开净流动资产。' },
+          { name: 'plotsCount / buildingsCount', type: 'number', desc: '名下地块数 / 建筑总数。' },
+          { name: 'shipsCount / shipsBySize', type: 'number / { small, medium, large }', desc: '登记飞船总数及各型号数量。' },
+          { name: 'openOrdersCount', type: 'number', desc: '当前全星系活跃公开挂单数量。' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.listCompanies', id: 'Game.market.listCompanies' },
+          { label: 'PublicCompanyDetail', id: 'PublicCompanyDetail' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'PublicCompanyDetail',
+    title: 'PublicCompanyDetail',
+    group: '实体',
+    kind: '类型',
+    summary: '单家公司的完整公开商业情报（含名下地块、设施分布与公开挂单）。',
+    keywords: 'PublicCompanyDetail 公司详情 地块 建筑 挂单 净资产',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '由 `Game.market.getCompany(companyId)` 返回，继承 `PublicCompanySummary` 的全部字段并附加设施聚合统计、公开地块清单与全部活跃挂单。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'buildingCounts', type: 'Record<string, number>', desc: '按建筑类型汇总的数量映射。' },
+          { name: 'plots', type: 'Array<{ planetId, slotId, plotId, lat, lon, terrainName, capacity, usedSlots, status, listingId, price, buildings }>', desc: '名下全部公开地块与各块地已建建筑类型列表。' },
+          { name: 'openOrders', type: 'MarketOrder[]', desc: '该公司在各空间站的全部活跃公开挂单。' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.getCompany', id: 'Game.market.getCompany' },
+          { label: 'PublicCompanySummary', id: 'PublicCompanySummary' },
+          { label: 'MarketOrder', id: 'MarketOrder' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'Building',
     title: 'Building',
     group: '实体',

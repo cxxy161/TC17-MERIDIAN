@@ -610,3 +610,71 @@ async fn test_auth_register_login_ownership_and_admin() {
     .await;
     assert_eq!(st, StatusCode::UNAUTHORIZED, "logged-out cookie must be rejected");
 }
+
+#[tokio::test]
+async fn test_public_company_endpoint_and_leaderboard_omit_secrets() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    let (st, _, cookie_opt) = send(&app, register_request("scout@meridian.test", "Scout", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+    let cookie = cookie_opt.expect("register must set cookie");
+
+    // 1. Leaderboard rows expose home_planet_id, asset counts, and net_liquid ONLY (no profession/cash/savings/debt)
+    let (st, state_res, _) = send(
+        &app,
+        Request::builder()
+            .uri("/api/state")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let lb = state_res["leaderboard"].as_array().unwrap();
+    assert!(!lb.is_empty());
+    let first = lb[0].as_object().unwrap();
+    assert!(first.contains_key("net_liquid"));
+    assert!(first.contains_key("home_planet_id"));
+    assert!(first.contains_key("plots_count"));
+    assert!(first.contains_key("buildings_count"));
+    assert!(first.contains_key("ships_count"));
+    assert!(first.contains_key("open_orders_count"));
+    for forbidden in ["profession", "cash", "savings", "debt"] {
+        assert!(!first.contains_key(forbidden), "leaderboard leaked {forbidden}");
+    }
+
+    // 2. GET /api/companies/:id works cross-company and omits private financial/inventory/recipe/route data
+    let target_id = lb.iter().find(|r| r["is_player"] == false).unwrap()["id"].as_str().unwrap();
+    let (st, detail, _) = send(
+        &app,
+        Request::builder()
+            .uri(format!("/api/companies/{target_id}"))
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let obj = detail.as_object().unwrap();
+    assert!(obj.contains_key("net_liquid"));
+    assert!(obj.contains_key("building_counts"));
+    assert!(obj.contains_key("plots"));
+    assert!(obj.contains_key("open_orders"));
+    assert!(obj.contains_key("ships_by_size"));
+    for forbidden in ["profession", "cash", "savings", "debt", "ground_inv", "station_inv", "ships", "distress_ticks"] {
+        assert!(!obj.contains_key(forbidden), "company detail leaked {forbidden}");
+    }
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .uri("/api/companies/does_not_exist")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}

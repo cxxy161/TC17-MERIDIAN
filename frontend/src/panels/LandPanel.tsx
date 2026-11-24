@@ -341,9 +341,22 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                   )}
                   <span className="text-slate-500 mx-1.5">·</span>
                   <span>
-                    {selectedTile.is_city
-                      ? selectedTile.city_name ?? '城市区'
-                      : selectedTile.owner_name ?? (selectedTile.status === 'listed' ? '银行/挂牌待售' : '公有未开发')}
+                    {selectedTile.is_city ? (
+                      selectedTile.city_name ?? '城市区'
+                    ) : selectedTile.owner_id ? (
+                      <button
+                        type="button"
+                        onClick={() => openTemp('company', { companyId: selectedTile.owner_id! })}
+                        className="text-sky-300 hover:text-sky-200 underline decoration-sky-500/40 underline-offset-2"
+                        title="点击查看公司公开详情"
+                      >
+                        {selectedTile.owner_name ?? selectedTile.owner_id}
+                      </button>
+                    ) : selectedTile.status === 'listed' ? (
+                      '银行/挂牌待售'
+                    ) : (
+                      '公有未开发'
+                    )}
                   </span>
                 </div>
               </div>

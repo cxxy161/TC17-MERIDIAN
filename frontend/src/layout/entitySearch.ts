@@ -113,6 +113,20 @@ export function useEntitySearch(): EntityOption[] {
       });
     }
 
+    for (let i = 0; i < world.companies.length; i += 1) {
+      const c = world.companies[i];
+      const homeName = world.planetName(c.home_planet_id);
+      list.push({
+        key: `company-${c.id}`,
+        group: '公司',
+        label: c.name,
+        sub: `#${i + 1} · ${homeName} · 净流动 ${c.net_liquid.toLocaleString(undefined, { maximumFractionDigits: 1 })} · 地块 ${c.plots_count} · 飞船 ${c.ships_count}`,
+        keywords: `${c.id} ${c.name} ${c.home_planet_id} ${homeName} 公司 企业 ${c.is_player ? '玩家 player' : 'npc'}`,
+        badge: c.is_player ? '玩家' : 'NPC',
+        content: { kind: 'company', params: { companyId: c.id } },
+      });
+    }
+
     return list;
-  }, [catalog, world.planets, world.locations, world.stations]);
+  }, [catalog, world.planets, world.locations, world.stations, world.companies]);
 }

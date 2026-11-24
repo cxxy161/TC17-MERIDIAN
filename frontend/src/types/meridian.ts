@@ -134,14 +134,59 @@ export interface LeaderboardRow {
   id: string;
   name: string;
   is_player: boolean;
-  profession: string;
   home_planet_id: string;
-  cash: number;
-  savings: number;
-  debt: number;
   net_liquid: number;
   plots_count: number;
+  buildings_count: number;
   ships_count: number;
+  open_orders_count: number;
+}
+
+export interface ShipCountsView {
+  small: number;
+  medium: number;
+  large: number;
+}
+
+export interface PublicCompanyPlot {
+  planet_id: string;
+  slot_id: number;
+  plot_id: number | null;
+  lat: number;
+  lon: number;
+  terrain_name: string;
+  capacity: number;
+  used_slots: number;
+  status: 'owned' | 'listed';
+  listing_id: number | null;
+  price: number | null;
+  buildings: string[];
+}
+
+export interface PublicCompanyDetail {
+  id: string;
+  name: string;
+  is_player: boolean;
+  home_planet_id: string;
+  net_liquid: number;
+  plots_count: number;
+  buildings_count: number;
+  ships_count: number;
+  ships_by_size: ShipCountsView;
+  building_counts: Record<string, number>;
+  plots: PublicCompanyPlot[];
+  open_orders_count: number;
+  open_orders: Array<{
+    order_id: number;
+    owner_id: string;
+    station_id: string;
+    item_id: string;
+    side: 'buy' | 'sell';
+    price: number;
+    qty: number;
+    total_qty: number;
+    created_tick: number;
+  }>;
 }
 
 export interface MarketTickerRow {

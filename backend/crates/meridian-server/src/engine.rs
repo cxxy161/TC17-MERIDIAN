@@ -83,14 +83,12 @@ pub struct LeaderboardRow {
     pub id: String,
     pub name: String,
     pub is_player: bool,
-    pub profession: String,
     pub home_planet_id: String,
-    pub cash: f64,
-    pub savings: f64,
-    pub debt: f64,
     pub net_liquid: f64,
     pub plots_count: usize,
+    pub buildings_count: usize,
     pub ships_count: usize,
+    pub open_orders_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1155,28 +1153,41 @@ impl GameEngine {
     }
 
     pub fn leaderboard(&self) -> Vec<LeaderboardRow> {
+        let mut order_counts: HashMap<&str, usize> = HashMap::new();
+        for st in self.world.stations.values() {
+            for o in st.bids.values().chain(st.asks.values()).flat_map(|v| v.iter()) {
+                *order_counts.entry(o.owner_id.as_str()).or_insert(0) += 1;
+            }
+        }
         let mut rows: Vec<LeaderboardRow> = self
             .world
             .companies
             .values()
-            .map(|c| LeaderboardRow {
-                id: c.id.clone(),
-                name: c.name.clone(),
-                is_player: c.is_player,
-                profession: c.profession.clone(),
-                home_planet_id: c.home_planet_id.clone(),
-                cash: from_money(c.cash),
-                savings: from_money(c.savings),
-                debt: from_money(c.debt),
-                net_liquid: from_money(c.cash + c.savings - c.debt),
-                plots_count: c.plots.len(),
-                ships_count: c.ships.len(),
+            .map(|c| {
+                let buildings_count = c
+                    .plots
+                    .iter()
+                    .filter_map(|pid| self.world.plots.get(pid))
+                    .map(|pl| pl.building_ids.len())
+                    .sum();
+                LeaderboardRow {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    is_player: c.is_player,
+                    home_planet_id: c.home_planet_id.clone(),
+                    net_liquid: from_money(c.cash + c.savings - c.debt),
+                    plots_count: c.plots.len(),
+                    buildings_count,
+                    ships_count: c.ships.len(),
+                    open_orders_count: order_counts.get(c.id.as_str()).copied().unwrap_or(0),
+                }
             })
             .collect();
         rows.sort_by(|a, b| {
             b.net_liquid
                 .partial_cmp(&a.net_liquid)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         });
         rows
     }

@@ -445,4 +445,85 @@ if (best && Game.company.cash >= best.price) {
       },
     ],
   },
+  {
+    id: 'Game.market.listCompanies',
+    title: 'listCompanies',
+    group: 'Game',
+    parent: 'Game.market',
+    kind: '方法',
+    summary: '搜索/分页列出全星系公司的公开摘要（按公开净流动资产降序）',
+    keywords: '公司 搜索 排行 listCompanies 净流动资产 母星 地块 飞船 挂单',
+    blocks: [
+      {
+        kind: 'syntax',
+        code: 'Game.market.listCompanies(filter?: { query?: string; planetId?: string; onlyPlayers?: boolean; offset?: number; limit?: number }) → PublicCompanySummary[]',
+      },
+      {
+        kind: 'prose',
+        text: '按公开净流动资产从高到低筛选并返回公司公开摘要。支持按公司名/ID/母星关键字过滤（`query`）、限定母星（`planetId`）、只看玩家公司（`onlyPlayers`）及分页（`offset`/`limit`，默认最多 100 条，上限 1000 条）。不暴露资金明细（现金/存款/负债）、仓库库存或产线/飞船私密动态。',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'filter.query', type: 'string', required: false, desc: '按公司名称、companyId 或 homePlanetId 模糊匹配' },
+          { name: 'filter.planetId', type: 'string', required: false, desc: '只筛选母星为该星球 id 的公司' },
+          { name: 'filter.onlyPlayers', type: 'boolean', required: false, desc: '为 true 时只返回玩家公司' },
+          { name: 'filter.offset', type: 'number', required: false, desc: '分页偏移量，默认 0' },
+          { name: 'filter.limit', type: 'number', required: false, desc: '最大返回条数（1..1000），默认 100' },
+        ],
+      },
+      { kind: 'returns', type: 'PublicCompanySummary[]', desc: '匹配到的公司公开摘要数组' },
+      {
+        kind: 'example',
+        code: `const rivals = Game.market.listCompanies({ planetId: Game.company.homePlanetId, limit: 10 });
+for (const c of rivals) {
+  console.log(c.name, '净资产:', c.netLiquid.toFixed(1), '地块:', c.plotsCount);
+}`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'PublicCompanySummary', id: 'PublicCompanySummary' },
+          { label: 'Game.market.getCompany', id: 'Game.market.getCompany' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Game.market.getCompany',
+    title: 'getCompany',
+    group: 'Game',
+    parent: 'Game.market',
+    kind: '方法',
+    summary: '查看指定公司的公开商业情报（净流动资产、地块设施、舰队规模与活跃挂单）',
+    keywords: '公司详情 getCompany 对手 情报 地块 建筑 挂单 飞船',
+    blocks: [
+      { kind: 'syntax', code: 'Game.market.getCompany(companyId) → PublicCompanyDetail | null' },
+      {
+        kind: 'prose',
+        text: '返回目标公司的公开商业情报：基本信息、公开净流动资产 `netLiquid`、名下地块列表及各块地已建建筑类型、设施分类汇总、按船型统计的舰队数量以及全部活跃公开挂单。出于商业保密，不返回现金/存款/负债明细、仓库库存、配方/停工状态及飞船航线与载货。未知 `companyId` 返回 `null`。',
+      },
+      {
+        kind: 'params',
+        rows: [{ name: 'companyId', type: 'string', required: true, desc: '目标公司 id，可来自 `listCompanies`、公开地块 `ownerId` 或挂单 `ownerId`' }],
+      },
+      { kind: 'returns', type: 'PublicCompanyDetail | null', desc: '公司公开详情对象；找不到返回 null' },
+      {
+        kind: 'example',
+        code: `const orders = Game.market.getAllOrders({ stationId: 'ST:HUB', resourceType: 'refined_metal' });
+if (orders.length > 0) {
+  const rival = Game.market.getCompany(orders[0].ownerId);
+  if (rival) console.log(rival.name, '建筑:', JSON.stringify(rival.buildingCounts));
+}`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'PublicCompanyDetail', id: 'PublicCompanyDetail' },
+          { label: 'Game.market.listCompanies', id: 'Game.market.listCompanies' },
+          { label: 'MarketOrder', id: 'MarketOrder' },
+        ],
+      },
+    ],
+  },
 ];

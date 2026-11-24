@@ -70,6 +70,8 @@ const expected = new Map([
   ['get_all_orders', 'Game.market.getAllOrders'],
   ['calc_route', 'Game.market.calcRoute'],
   ['get_land_plots', 'Game.market.getLandPlots'],
+  ['list_companies', 'Game.market.listCompanies'],
+  ['get_company', 'Game.market.getCompany'],
   ['get_recipe', 'Game.getRecipe'],
   ['set_recipe', 'Building'],
   ['set_active', 'Building'],

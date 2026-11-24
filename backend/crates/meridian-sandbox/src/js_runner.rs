@@ -1,17 +1,17 @@
 //! QuickJS (`rquickjs`) sandbox runner exposing the player-script API: `Game`, `Memory`, `Store`,
 //! `console`, `require()`, and `OK/ERR_*` constants with strict CPU & heap isolation.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use meridian_core::{
-    from_money, to_money, BankOpKind, BuildingId, Intent, ListingId, OrderId, OrderSide, PlotId,
-    ProductionCatalog, ShipId, WorldSnapshot, ERR_BUSY, ERR_FULL, ERR_INVALID_ARGS,
-    ERR_INVALID_TARGET, ERR_NOT_ENOUGH_CREDITS, ERR_NOT_ENOUGH_RESOURCES, ERR_NOT_FOUND,
-    ERR_NOT_IN_RANGE, ERR_NOT_OWNER, ERR_NO_PATH, MAX_ACTIVE_ORDERS_PER_COMPANY,
-    MAX_INTENTS_PER_TICK, OK,
+    from_money, to_money, BankOpKind, BuildingId, Intent, ListingId, Order, OrderId, OrderSide,
+    PlotId, ProductionCatalog, PublicCompanySummary, ShipCountsView, ShipId, WorldSnapshot,
+    ERR_BUSY, ERR_FULL, ERR_INVALID_ARGS, ERR_INVALID_TARGET, ERR_NOT_ENOUGH_CREDITS,
+    ERR_NOT_ENOUGH_RESOURCES, ERR_NOT_FOUND, ERR_NOT_IN_RANGE, ERR_NOT_OWNER, ERR_NO_PATH,
+    MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK, OK,
 };
 use rquickjs::{CatchResultExt, CaughtError, Context, Function, Runtime};
 use serde::Serialize;
@@ -149,6 +149,88 @@ struct JsLandPlot<'a> {
     listing_id: Option<String>,
     price: Option<f64>,
     buildings: &'a [String],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsPublicCompanySummary<'a> {
+    id: &'a str,
+    name: &'a str,
+    is_player: bool,
+    home_planet_id: &'a str,
+    net_liquid: f64,
+    plots_count: usize,
+    buildings_count: usize,
+    ships_count: usize,
+    ships_by_size: &'a ShipCountsView,
+    open_orders_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsPublicCompanyPlot {
+    planet_id: String,
+    slot_id: u32,
+    plot_id: Option<String>,
+    lat: f64,
+    lon: f64,
+    terrain_name: String,
+    capacity: u32,
+    used_slots: u32,
+    status: String,
+    listing_id: Option<String>,
+    price: Option<f64>,
+    buildings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JsPublicCompanyDetail<'a> {
+    id: String,
+    name: String,
+    is_player: bool,
+    home_planet_id: String,
+    net_liquid: f64,
+    plots_count: usize,
+    buildings_count: usize,
+    ships_count: usize,
+    ships_by_size: ShipCountsView,
+    building_counts: BTreeMap<String, u32>,
+    plots: Vec<JsPublicCompanyPlot>,
+    open_orders_count: usize,
+    open_orders: Vec<JsOrder<'a>>,
+}
+
+fn to_js_order(o: &Order) -> JsOrder<'_> {
+    JsOrder {
+        id: o.order_id.to_string(),
+        created: o.created_tick,
+        side: match o.side {
+            OrderSide::Buy => "buy",
+            OrderSide::Sell => "sell",
+        },
+        resource_type: &o.item_id,
+        station_id: &o.station_id,
+        price: from_money(o.price),
+        amount: o.qty,
+        total_amount: o.total_qty,
+        owner_id: &o.owner_id,
+    }
+}
+
+fn to_js_company_summary(c: &PublicCompanySummary) -> JsPublicCompanySummary<'_> {
+    JsPublicCompanySummary {
+        id: &c.id,
+        name: &c.name,
+        is_player: c.is_player,
+        home_planet_id: &c.home_planet_id,
+        net_liquid: from_money(c.net_liquid),
+        plots_count: c.plots_count,
+        buildings_count: c.buildings_count,
+        ships_count: c.ships_count,
+        ships_by_size: &c.ships_by_size,
+        open_orders_count: c.open_orders_count,
+    }
 }
 
 #[derive(Serialize)]
@@ -578,20 +660,7 @@ fn install_host_bindings<'js>(
                                 && (item.is_empty() || o.item_id == item)
                                 && want_side.map(|s| o.side == s).unwrap_or(true)
                         })
-                        .map(|o| JsOrder {
-                            id: o.order_id.to_string(),
-                            created: o.created_tick,
-                            side: match o.side {
-                                OrderSide::Buy => "buy",
-                                OrderSide::Sell => "sell",
-                            },
-                            resource_type: &o.item_id,
-                            station_id: &o.station_id,
-                            price: from_money(o.price),
-                            amount: o.qty,
-                            total_amount: o.total_qty,
-                            owner_id: &o.owner_id,
-                        })
+                        .map(to_js_order)
                         .collect();
                     serde_json::to_string(&filtered).unwrap_or_else(|_| "[]".to_string())
                 },
@@ -671,6 +740,86 @@ fn install_host_bindings<'js>(
                     })
                     .collect();
                 serde_json::to_string(&out).ok()
+            })?,
+        )?;
+    }
+    {
+        let h = Arc::clone(&host);
+        globals.set(
+            "__meridian_list_companies",
+            Function::new(
+                ctx.clone(),
+                move |query: String,
+                      planet_id: String,
+                      only_players: bool,
+                      offset: i32,
+                      limit: i32|
+                      -> String {
+                    let q = query.trim().to_ascii_lowercase();
+                    let skip = offset.max(0) as usize;
+                    let take = limit.clamp(1, 1000) as usize;
+                    let out: Vec<JsPublicCompanySummary<'_>> = h
+                        .snapshot
+                        .public_companies
+                        .iter()
+                        .filter(|c| {
+                            (!only_players || c.is_player)
+                                && (planet_id.is_empty() || c.home_planet_id == planet_id)
+                                && (q.is_empty()
+                                    || c.name.to_ascii_lowercase().contains(&q)
+                                    || c.id.to_ascii_lowercase().contains(&q)
+                                    || c.home_planet_id.to_ascii_lowercase().contains(&q))
+                        })
+                        .skip(skip)
+                        .take(take)
+                        .map(to_js_company_summary)
+                        .collect();
+                    serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+                },
+            )?,
+        )?;
+    }
+    {
+        let h = Arc::clone(&host);
+        globals.set(
+            "__meridian_get_company",
+            Function::new(ctx.clone(), move |company_id: String| -> Option<String> {
+                let d = h.snapshot.public_company_detail(&company_id)?;
+                let plots = d
+                    .plots
+                    .into_iter()
+                    .map(|p| JsPublicCompanyPlot {
+                        planet_id: p.planet_id,
+                        slot_id: p.slot_id,
+                        plot_id: p.plot_id.map(|id| id.to_string()),
+                        lat: p.lat,
+                        lon: p.lon,
+                        terrain_name: p.terrain_name,
+                        capacity: p.capacity,
+                        used_slots: p.used_slots,
+                        status: p.status,
+                        listing_id: p.listing_id.map(|id| id.to_string()),
+                        price: p.price.map(from_money),
+                        buildings: p.buildings,
+                    })
+                    .collect();
+                let open_orders = d.open_orders.iter().map(to_js_order).collect();
+                let view = JsPublicCompanyDetail {
+                    id: d.id,
+                    name: d.name,
+                    is_player: d.is_player,
+                    home_planet_id: d.home_planet_id,
+                    net_liquid: from_money(d.net_liquid),
+                    plots_count: d.plots_count,
+                    buildings_count: d.buildings_count,
+                    ships_count: d.ships_count,
+                    ships_by_size: d.ships_by_size,
+                    building_counts: d.building_counts,
+                    plots,
+                    open_orders_count: d.open_orders_count,
+                    open_orders,
+                };
+                serde_json::to_string(&view).ok()
             })?,
         )?;
     }

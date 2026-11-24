@@ -1,6 +1,6 @@
 //! Deterministic Two-Phase World simulation kernel.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -11,8 +11,9 @@ use crate::logistics::{compute_route_in_systems, RouteKind, Ship, ShipInFlight, 
 use crate::planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob, StarSystem};
 use crate::schema::{ItemRole, ProductionCatalog};
 use crate::snapshot::{
-    BuildingView, LandListingView, PlanetView, PlotView, PublicLandTileView, SelfView,
-    SharedSnapshot, ShipView, StarSystemView, WorldSnapshot,
+    BuildingView, LandListingView, PlanetView, PlotView, PublicCompanyDetail,
+    PublicCompanyPlotView, PublicCompanySummary, PublicLandTileView, SelfView, SharedSnapshot,
+    ShipCountsView, ShipView, StarSystemView, WorldSnapshot,
 };
 use crate::types::{
     bps_of, from_money, to_money, BankOpKind, BuildingId, CompanyId, Intent, ItemId, ListingId,
@@ -2510,6 +2511,23 @@ impl World {
             }
         }
 
+        let mut public_companies: Vec<PublicCompanySummary> = self
+            .companies
+            .values()
+            .map(|c| {
+                let orders_cnt = open_orders_by_owner
+                    .get(&c.id)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                self.public_company_summary_for(c, orders_cnt)
+            })
+            .collect();
+        public_companies.sort_by(|a, b| {
+            b.net_liquid
+                .cmp(&a.net_liquid)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
         SharedSnapshot {
             quotes,
             depths,
@@ -2518,8 +2536,124 @@ impl World {
             systems: systems_view,
             planet_templates,
             public_tiles_by_planet,
+            public_companies,
             routes,
         }
+    }
+
+    fn ship_counts_for(ships: &[Ship]) -> ShipCountsView {
+        let mut counts = ShipCountsView::default();
+        for s in ships {
+            match s.size {
+                ShipSize::Small => counts.small += 1,
+                ShipSize::Medium => counts.medium += 1,
+                ShipSize::Large => counts.large += 1,
+            }
+        }
+        counts
+    }
+
+    fn public_company_summary_for(
+        &self,
+        comp: &Company,
+        open_orders_count: usize,
+    ) -> PublicCompanySummary {
+        let buildings_count: usize = comp
+            .plots
+            .iter()
+            .filter_map(|pid| self.plots.get(pid))
+            .map(|pl| pl.building_ids.len())
+            .sum();
+        PublicCompanySummary {
+            id: comp.id.clone(),
+            name: comp.name.clone(),
+            is_player: comp.is_player,
+            home_planet_id: comp.home_planet_id.clone(),
+            net_liquid: comp.cash + comp.savings - comp.debt,
+            plots_count: comp.plots.len(),
+            buildings_count,
+            ships_count: comp.ships.len(),
+            ships_by_size: Self::ship_counts_for(&comp.ships),
+            open_orders_count,
+        }
+    }
+
+    /// Return public intelligence profile for a single company (used by `/api/companies/{id}`).
+    /// Excludes private cash/savings/debt breakdown, inventories, active recipes, and ship routes.
+    pub fn public_company_detail(&self, company_id: &str) -> Option<PublicCompanyDetail> {
+        let comp = self.companies.get(company_id)?;
+        let mut building_counts: BTreeMap<String, u32> = BTreeMap::new();
+        let mut plots: Vec<PublicCompanyPlotView> = Vec::with_capacity(comp.plots.len());
+        let mut buildings_count = 0usize;
+
+        for pid in &comp.plots {
+            let Some(pl) = self.plots.get(pid) else {
+                continue;
+            };
+            let listing = self
+                .planets
+                .get(&pl.planet_id)
+                .and_then(|p| p.land_listings.iter().find(|l| l.plot_id == pl.id));
+            let mut btypes: Vec<String> = Vec::with_capacity(pl.building_ids.len());
+            for bid in &pl.building_ids {
+                if let Some(b) = self.buildings.get(bid) {
+                    btypes.push(b.building_type.clone());
+                    *building_counts.entry(b.building_type.clone()).or_insert(0) += 1;
+                    buildings_count += 1;
+                }
+            }
+            let status = if listing.is_some() { "listed" } else { "owned" };
+            plots.push(PublicCompanyPlotView {
+                planet_id: pl.planet_id.clone(),
+                slot_id: pl.slot_id,
+                plot_id: Some(pl.id),
+                lat: pl.lat,
+                lon: pl.lon,
+                terrain_name: pl.terrain_name.clone(),
+                capacity: pl.capacity,
+                used_slots: pl.used_slots(),
+                status: status.to_string(),
+                listing_id: listing.map(|l| l.listing_id),
+                price: listing.map(|l| l.ask_price),
+                buildings: btypes,
+            });
+        }
+        plots.sort_by(|a, b| {
+            a.planet_id
+                .cmp(&b.planet_id)
+                .then_with(|| a.slot_id.cmp(&b.slot_id))
+        });
+
+        let mut open_orders: Vec<Order> = Vec::new();
+        for st in self.stations.values() {
+            for o in st.bids.values().chain(st.asks.values()).flat_map(|v| v.iter()) {
+                if o.owner_id == company_id {
+                    open_orders.push(o.clone());
+                }
+            }
+        }
+        open_orders.sort_by(|a, b| {
+            a.station_id
+                .cmp(&b.station_id)
+                .then_with(|| a.item_id.cmp(&b.item_id))
+                .then_with(|| a.order_id.cmp(&b.order_id))
+        });
+
+        Some(PublicCompanyDetail {
+            id: comp.id.clone(),
+            name: comp.name.clone(),
+            is_player: comp.is_player,
+            home_planet_id: comp.home_planet_id.clone(),
+            net_liquid: comp.cash + comp.savings - comp.debt,
+            plots_count: plots.len(),
+            buildings_count,
+            ships_count: comp.ships.len(),
+            ships_by_size: Self::ship_counts_for(&comp.ships),
+            building_counts,
+            plots,
+            open_orders_count: open_orders.len(),
+            open_orders,
+        })
     }
 
     /// Return all public surface tiles on `planet_id` (used by `/api/planets/{id}/plots`).
@@ -2672,10 +2806,14 @@ impl World {
             .get(company_id)
             .cloned()
             .unwrap_or_default();
-        let (depths, orders) = if include_full_book {
-            (shared.depths.clone(), shared.all_orders.clone())
+        let (depths, orders, public_companies) = if include_full_book {
+            (
+                shared.depths.clone(),
+                shared.all_orders.clone(),
+                shared.public_companies.clone(),
+            )
         } else {
-            (HashMap::new(), Vec::new())
+            (HashMap::new(), Vec::new(), Vec::new())
         };
 
         let mut planets_view = HashMap::with_capacity(shared.planet_templates.len());
@@ -2714,6 +2852,7 @@ impl World {
             orders,
             routes: shared.routes.clone(),
             public_tiles: shared.public_tiles_by_planet.clone(),
+            public_companies,
         })
     }
 }

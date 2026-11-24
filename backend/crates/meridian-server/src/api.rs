@@ -35,6 +35,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/catalog", get(catalog_handler))
         .route("/api/state", get(state_handler))
         .route("/api/planets/{planet_id}/plots", get(planet_plots_handler))
+        .route("/api/companies/{company_id}", get(company_detail_handler))
         .route("/api/market/book", get(market_book_handler))
         .route("/api/market/candles", get(market_candles_handler))
         .route("/api/scripts/{company_id}", get(get_scripts_handler))
@@ -182,6 +183,69 @@ async fn planet_plots_handler(
             "npc_plot_cap": eng.world.npc_plot_cap_on(&planet_id),
         },
         "tiles": tiles_json,
+    })))
+}
+
+async fn company_detail_handler(
+    State(engine): State<SharedEngine>,
+    _user: AuthUser,
+    Path(company_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eng = engine.lock().await;
+    let Some(detail) = eng.world.public_company_detail(&company_id) else {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown company '{company_id}'")));
+    };
+    let plots: Vec<serde_json::Value> = detail
+        .plots
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "planet_id": p.planet_id,
+                "slot_id": p.slot_id,
+                "plot_id": p.plot_id,
+                "lat": p.lat,
+                "lon": p.lon,
+                "terrain_name": p.terrain_name,
+                "capacity": p.capacity,
+                "used_slots": p.used_slots,
+                "status": p.status,
+                "listing_id": p.listing_id,
+                "price": p.price.map(from_money),
+                "buildings": p.buildings,
+            })
+        })
+        .collect();
+    let open_orders: Vec<serde_json::Value> = detail
+        .open_orders
+        .into_iter()
+        .map(|o| {
+            serde_json::json!({
+                "order_id": o.order_id,
+                "owner_id": o.owner_id,
+                "station_id": o.station_id,
+                "item_id": o.item_id,
+                "side": o.side,
+                "price": from_money(o.price),
+                "qty": o.qty,
+                "total_qty": o.total_qty,
+                "created_tick": o.created_tick,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "id": detail.id,
+        "name": detail.name,
+        "is_player": detail.is_player,
+        "home_planet_id": detail.home_planet_id,
+        "net_liquid": from_money(detail.net_liquid),
+        "plots_count": detail.plots_count,
+        "buildings_count": detail.buildings_count,
+        "ships_count": detail.ships_count,
+        "ships_by_size": detail.ships_by_size,
+        "building_counts": detail.building_counts,
+        "plots": plots,
+        "open_orders_count": detail.open_orders_count,
+        "open_orders": open_orders,
     })))
 }
 

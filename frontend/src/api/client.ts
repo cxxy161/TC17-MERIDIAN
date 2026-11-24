@@ -4,6 +4,7 @@ import type {
   MarketCandlesResp,
   PlanetPlotsResp,
   ProductionPack,
+  PublicCompanyDetail,
   ScriptsResp,
   StateResponse,
 } from '../types/meridian';
@@ -195,6 +196,10 @@ export const api = {
 
   getPlanetPlots(planetId: string): Promise<PlanetPlotsResp> {
     return jsonFetch(`/api/planets/${encodeURIComponent(planetId)}/plots`);
+  },
+
+  getCompanyDetail(companyId: string): Promise<PublicCompanyDetail> {
+    return jsonFetch(`/api/companies/${encodeURIComponent(companyId)}`);
   },
 
   getMarketBook(stationId: string, itemId: string): Promise<MarketBookResp> {

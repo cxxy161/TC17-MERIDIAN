@@ -342,6 +342,33 @@
       const json = global.__meridian_get_land_plots(planetId);
       return json ? JSON.parse(json) : null;
     },
+
+    listCompanies(filter) {
+      let query = "";
+      let planetId = "";
+      let onlyPlayers = false;
+      let offset = 0;
+      let limit = 100;
+      if (filter && typeof filter === "object") {
+        if (typeof filter.query === "string") query = filter.query;
+        if (typeof filter.planetId === "string") planetId = filter.planetId;
+        if (filter.onlyPlayers === true) onlyPlayers = true;
+        if (typeof filter.offset === "number" && Number.isFinite(filter.offset) && filter.offset >= 0) {
+          offset = Math.floor(filter.offset);
+        }
+        if (typeof filter.limit === "number" && Number.isFinite(filter.limit) && filter.limit > 0) {
+          limit = Math.min(1000, Math.floor(filter.limit));
+        }
+      }
+      const json = global.__meridian_list_companies(query, planetId, onlyPlayers, offset, limit);
+      return json ? JSON.parse(json) : [];
+    },
+
+    getCompany(companyId) {
+      if (typeof companyId !== "string" || !companyId) return null;
+      const json = global.__meridian_get_company(companyId);
+      return json ? JSON.parse(json) : null;
+    },
   });
 
   global.Game = Object.freeze({

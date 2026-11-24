@@ -25,7 +25,10 @@ pub use schema::{
     BuildingDef, DemandCategoryDef, ItemDef, ItemQty, ItemRole, ProductionCatalog, ProductionPack,
     ProfessionDef, RecipeDef,
 };
-pub use snapshot::{PublicLandTileView, SharedSnapshot, WorldSnapshot};
+pub use snapshot::{
+    PublicCompanyDetail, PublicCompanyPlotView, PublicCompanySummary, PublicLandTileView,
+    SharedSnapshot, ShipCountsView, WorldSnapshot,
+};
 pub use types::*;
 pub use world::{TickReport, World};
 

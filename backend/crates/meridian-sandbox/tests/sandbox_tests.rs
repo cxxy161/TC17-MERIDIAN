@@ -359,3 +359,54 @@ fn test_npc_ecosystem_sustains_active_market_volume() {
         unique_items
     );
 }
+
+#[test]
+fn test_public_company_queries_omit_secrets() {
+    let catalog = load_catalog();
+    let mut world = World::new_standard(catalog);
+    world.spawn_company("p1", "Player Co", true, "mining_ind", "P1", 10_000.0).unwrap();
+    world.spawn_company("npc_riv", "Vexor Dynamics", false, "agri_bio", "P2", 12_345.0).unwrap();
+
+    // Give rival an open order and a debt via planet bank to verify debt is hidden while netLiquid reflects it
+    let npc = world.companies.get_mut("npc_riv").unwrap();
+    npc.savings = meridian_core::to_money(1_000.0);
+    npc.debt = meridian_core::to_money(500.0);
+
+    let mut runner = SimulationRunner::new(PlayerRunConfig::default());
+    runner.set_player_script(
+        "p1",
+        PlayerScriptBundle::single_main(
+            r#"
+            module.exports.loop = function() {
+              const list = Game.market.listCompanies({ query: 'Vexor' });
+              if (list.length !== 1) throw new Error('expected 1 search result, got ' + list.length);
+              const row = list[0];
+              if (row.id !== 'npc_riv') throw new Error('wrong company id: ' + row.id);
+              if (Math.abs(row.netLiquid - 12845) > 0.01) {
+                throw new Error('expected netLiquid=12845, got ' + row.netLiquid);
+              }
+              for (const forbidden of ['profession', 'cash', 'savings', 'debt', 'groundInv', 'stationInv']) {
+                if (forbidden in row) throw new Error('summary leaked forbidden field: ' + forbidden);
+              }
+
+              const detail = Game.market.getCompany('npc_riv');
+              if (!detail || detail.id !== 'npc_riv') throw new Error('missing detail');
+              if (detail.plots.length < 1) throw new Error('expected rival plots');
+              for (const forbidden of ['profession', 'cash', 'savings', 'debt', 'groundInv', 'stationInv', 'ships']) {
+                if (forbidden in detail) throw new Error('detail leaked forbidden field: ' + forbidden);
+              }
+              if (Game.market.getCompany('nonexistent') !== null) {
+                throw new Error('unknown company should return null');
+              }
+              Memory.verified = true;
+            };
+        "#,
+        ),
+    );
+
+    runner.step_world(&mut world);
+    let out = &runner.last_player_outputs["p1"];
+    assert!(out.error.is_none(), "JS verification failed: {:?}", out.error);
+    let mem: serde_json::Value = serde_json::from_str(&out.memory_json).unwrap();
+    assert_eq!(mem["verified"], true);
+}

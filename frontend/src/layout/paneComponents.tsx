@@ -17,6 +17,7 @@ import { ItemListPanel } from '../panels/ItemListPanel';
 import { ItemDetailPanel } from '../panels/ItemDetailPanel';
 import { TreasuryPanel } from '../panels/TreasuryPanel';
 import { RankingPanel } from '../panels/RankingPanel';
+import { CompanyPanel } from '../panels/CompanyPanel';
 import { ScriptIdePanel } from '../panels/ScriptIdePanel';
 import { ConsolePanel } from '../panels/ConsolePanel';
 import { ApiDocsPanel } from '../panels/ApiDocsPanel';
@@ -39,6 +40,7 @@ const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   item: ItemDetailPanel,
   treasury: TreasuryPanel,
   ranking: RankingPanel,
+  company: CompanyPanel,
   files: FileExplorerPanel,
   script: ScriptIdePanel,
   memory: MemoryPanel,

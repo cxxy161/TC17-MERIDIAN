@@ -22,7 +22,7 @@ export interface EntitySearchListProps {
 export const EntitySearchList: React.FC<EntitySearchListProps> = ({
   options,
   onPick,
-  placeholder = '搜索物品 / 行星 / 站点 / 面板…',
+  placeholder = '搜索公司 / 物品 / 行星 / 站点 / 面板…',
   autoFocus,
   className,
   showGroupFilter = true,

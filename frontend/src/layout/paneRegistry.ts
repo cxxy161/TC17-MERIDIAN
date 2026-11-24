@@ -17,6 +17,7 @@ export type PaneKind =
   | 'item'
   | 'treasury'
   | 'ranking'
+  | 'company'
   | 'files'
   | 'script'
   | 'memory'
@@ -27,6 +28,7 @@ export type PaneKind =
 export interface PaneParams {
   planetId?: string;
   slotId?: number;
+  companyId?: string;
   locationId?: string;
   stationId?: string;
   itemId?: string;
@@ -91,7 +93,8 @@ export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'chart', label: 'K线图', description: '蜡烛图、均线与成交量（可多开并排盯盘）', group: '贸易' },
   { kind: 'orderbook', label: '盘口深度', description: '实时买卖深度、成交流水与手工限价下单', group: '贸易' },
   { kind: 'treasury', label: '央行与财务', description: '现金、储蓄、借贷与母星央行存贷', group: '财务' },
-  { kind: 'ranking', label: '势力排行', description: '玩家与演化 NPC 净资产排名及货币守恒审计', group: '财务' },
+  { kind: 'ranking', label: '势力排行', description: '玩家与 NPC 公开净流动资产、母星与资产规模排行', group: '财务' },
+  { kind: 'company', label: '公司详情', description: '搜索任意公司，查看公开净流动资产、地块设施、舰队规模与挂单', group: '观察', keywords: '公司 企业 npc 搜索 详情 地块 挂单 资产' },
   { kind: 'files', label: '代码文件', description: '脚本模块树管理', group: '开发' },
   { kind: 'script', label: '脚本编辑器', description: '多模块 JS 策略 IDE 与热重载', group: '开发' },
   { kind: 'memory', label: 'Memory 内存', description: '查看、搜索与编辑 128KB 持久化 JSON', group: '开发' },
@@ -164,6 +167,8 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
       return `财务 · ${p.planetId ? world.planetName(p.planetId) : '母星'}`;
     case 'ranking':
       return '势力排行';
+    case 'company':
+      return `公司 · ${p.companyId ? world.companyName(p.companyId) : NOT_CHOSEN}`;
     case 'files':
       return '代码文件';
     case 'script':
@@ -203,6 +208,8 @@ export function focusDefaults(kind: PaneKind, focus: PaneParams): PaneParams {
     }
     case 'item':
       return focus.itemId ? { itemId: focus.itemId } : {};
+    case 'company':
+      return focus.companyId ? { companyId: focus.companyId } : {};
     default:
       return {};
   }
