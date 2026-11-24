@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use meridian_core::{CompanyId, Intent, ProductionCatalog, TickReport, World};
 use rayon::prelude::*;
@@ -28,12 +29,20 @@ impl Default for PlayerVmState {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct StepTiming {
+    pub snapshot_ms: f64,
+    pub actors_ms: f64,
+    pub world_tick_ms: f64,
+}
+
 pub struct SimulationRunner {
     pub players: HashMap<CompanyId, PlayerVmState>,
     pub npc_genomes: HashMap<CompanyId, NpcGenome>,
     pub extra_intents: HashMap<CompanyId, Vec<Intent>>,
     pub config: PlayerRunConfig,
     pub last_player_outputs: HashMap<CompanyId, PlayerRunOutput>,
+    pub last_timing: StepTiming,
 }
 
 impl Default for SimulationRunner {
@@ -44,6 +53,7 @@ impl Default for SimulationRunner {
             extra_intents: HashMap::new(),
             config: PlayerRunConfig::default(),
             last_player_outputs: HashMap::new(),
+            last_timing: StepTiming::default(),
         }
     }
 }
@@ -116,7 +126,10 @@ impl SimulationRunner {
             }
         }
 
+        let t0 = Instant::now();
         let shared = world.prepare_shared_snapshot();
+        let snapshot_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
         let player_catalog = if has_active_player {
             Some(Arc::new(world.catalog.clone()))
         } else {
@@ -126,6 +139,7 @@ impl SimulationRunner {
         let config = &self.config;
         let world_ref: &World = world;
 
+        let t1 = Instant::now();
         let outcomes: Vec<(CompanyId, Vec<Intent>, Option<PlayerRunOutput>)> = specs
             .into_par_iter()
             .filter_map(|spec| match spec {
@@ -148,6 +162,7 @@ impl SimulationRunner {
                 }
             })
             .collect();
+        let actors_ms = t1.elapsed().as_secs_f64() * 1000.0;
 
         let mut intents_by_company = Vec::with_capacity(outcomes.len() + self.extra_intents.len());
         let mut extra = std::mem::take(&mut self.extra_intents);
@@ -171,7 +186,14 @@ impl SimulationRunner {
             }
         }
 
+        let t2 = Instant::now();
         let report = world.step_tick(intents_by_company);
+        let world_tick_ms = t2.elapsed().as_secs_f64() * 1000.0;
+        self.last_timing = StepTiming {
+            snapshot_ms,
+            actors_ms,
+            world_tick_ms,
+        };
 
         // Respawn bankrupt NPC slots cleanly or prune dead NPC genomes
         for dead_cid in &report.bankruptcies {

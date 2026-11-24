@@ -1,11 +1,11 @@
 //! GameEngine host managing World state, SimulationRunner, SQLite WAL persistence,
 //! NPC evolutionary replenishment, and WebSocket tick event broadcasts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use meridian_core::{
     from_money, snapshot::StarSystemView, Intent, ProductionCatalog, TickReport, World,
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::storage::SqliteStore;
+use crate::telemetry::{EconomySample, TelemetryTracker, TickPhases};
 
 pub const STARTER_PLAYER_JS: &str = r#"// 《Meridian》默认玩家策略脚本
 // 提示：支持 module.exports.loop、多模块 require()、Game、Memory、Store Proxy 与 console.log
@@ -193,6 +194,8 @@ pub struct GameEngine {
     pub events_tx: broadcast::Sender<TickBroadcast>,
     /// 注册/登录限流器（内存态，进程内单例）
     pub auth: crate::auth::AuthLimiter,
+    /// 服务端运行时遥测与经济趋势采样
+    pub telemetry: TelemetryTracker,
 }
 
 impl Drop for GameEngine {
@@ -259,6 +262,7 @@ impl GameEngine {
                 world_dirty: false,
                 events_tx,
                 auth: crate::auth::AuthLimiter::default(),
+                telemetry: TelemetryTracker::default(),
             };
             // Heal cohort if an older DB has fewer than the minimum active NPC floor (respecting 90% plot cap)
             while engine.world.companies.values().filter(|c| !c.is_player).count() < 36 {
@@ -290,6 +294,7 @@ impl GameEngine {
             world_dirty: false,
             events_tx,
             auth: crate::auth::AuthLimiter::default(),
+            telemetry: TelemetryTracker::default(),
         })
     }
 
@@ -567,15 +572,18 @@ impl GameEngine {
     }
 
     pub fn step_once(&mut self) -> Result<TickBroadcast, String> {
+        let step_t0 = Instant::now();
         let report = self.runner.step_world(&mut self.world);
         self.world_dirty = true;
 
         // Dynamic market-driven NPC startups every 24 ticks (respecting 90% per-planet land cap)
+        let npc_t0 = Instant::now();
         let new_npcs = if self.world.tick % 24 == 0 {
             self.run_npc_startups()
         } else {
             Vec::new()
         };
+        let npc_spawn_ms = npc_t0.elapsed().as_secs_f64() * 1000.0;
 
         let save_world_now = self.world.tick % 40 == 0;
         let prune_history_now = self.world.tick % 25 == 0;
@@ -591,6 +599,7 @@ impl GameEngine {
 
         // Coalesce fills, history pruning, dirty player memories, NPC genome changes, and
         // periodic world snapshots into a single SQLite WAL transaction per tick.
+        let persist_t0 = Instant::now();
         self.store.persist_tick_batch(
             &report.fills,
             1,
@@ -600,6 +609,7 @@ impl GameEngine {
             &new_npc_refs,
             if save_world_now { Some(&self.world) } else { None },
         )?;
+        let persist_ms = persist_t0.elapsed().as_secs_f64() * 1000.0;
 
         for (cid, mem, en) in dirty_memories {
             self.saved_player_memories.insert(cid, (mem, en));
@@ -608,7 +618,78 @@ impl GameEngine {
             self.world_dirty = false;
         }
 
+        let bcast_t0 = Instant::now();
         let bcast = self.build_broadcast(&report);
+        let broadcast_ms = bcast_t0.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = step_t0.elapsed().as_secs_f64() * 1000.0;
+
+        let mut player_net = 0.0;
+        let mut npc_net = 0.0;
+        for c in self.world.companies.values() {
+            let nl = from_money(c.cash + c.savings - c.debt);
+            if c.is_player {
+                player_net += nl;
+            } else {
+                npc_net += nl;
+            }
+        }
+        let open_orders_count: usize = self
+            .world
+            .stations
+            .values()
+            .map(|st| {
+                st.bids.values().map(|v| v.len()).sum::<usize>()
+                    + st.asks.values().map(|v| v.len()).sum::<usize>()
+            })
+            .sum();
+        let idle_buildings = self
+            .world
+            .buildings
+            .values()
+            .filter(|b| b.active && b.idle_ticks > 0)
+            .count();
+        let fills_qty: u32 = report.fills.iter().map(|f| f.qty).sum();
+        let mut timeouts = 0u64;
+        let mut ooms = 0u64;
+        for out in self.runner.last_player_outputs.values() {
+            if out.timed_out {
+                timeouts += 1;
+            }
+            if out.oom {
+                ooms += 1;
+            }
+        }
+        let phases = TickPhases {
+            snapshot_ms: self.runner.last_timing.snapshot_ms,
+            actors_ms: self.runner.last_timing.actors_ms,
+            world_tick_ms: self.runner.last_timing.world_tick_ms,
+            npc_spawn_ms,
+            persist_ms,
+            broadcast_ms,
+            total_ms,
+        };
+        let econ = EconomySample {
+            tick: self.world.tick,
+            cpi: self.world.cpi,
+            total_minted: from_money_i128(self.world.ledger.expected_circulation()),
+            player_net_liquid: player_net,
+            npc_net_liquid: npc_net,
+            fills_count: report.fills.len(),
+            fills_qty,
+            open_orders_count,
+            idle_buildings,
+            step_total_ms: total_ms,
+        };
+        self.telemetry.record_tick(
+            phases,
+            save_world_now,
+            self.world.tick,
+            timeouts,
+            ooms,
+            report.rejected_intents,
+            econ,
+        );
+
         let _ = self.events_tx.send(bcast.clone());
         Ok(bcast)
     }
@@ -1057,6 +1138,7 @@ impl GameEngine {
         self.saved_player_memories
             .insert("player1".to_string(), ("{}".to_string(), true));
         self.world_dirty = false;
+        self.telemetry.reset_history();
 
         let empty_rep = TickReport {
             tick: self.world.tick,
@@ -1219,7 +1301,8 @@ impl GameEngine {
         rows
     }
 
-    pub fn admin_overview(&self) -> serde_json::Value {
+    pub fn admin_overview(&mut self) -> serde_json::Value {
+        let ov_t0 = Instant::now();
         let mut order_counts_by_owner: HashMap<String, usize> = HashMap::new();
         let mut station_stats = serde_json::Map::new();
 
@@ -1362,6 +1445,8 @@ impl GameEngine {
                         serde_json::json!({
                             "enabled": pvm.enabled,
                             "modules_count": pvm.bundle.modules.len(),
+                            "memory_bytes": pvm.memory_json.len(),
+                            "logs_count": out.map(|o| o.logs.len()).unwrap_or(0),
                             "cpu_used_ms": out.map(|o| o.cpu_used_ms).unwrap_or(0.0),
                             "error": out.and_then(|o| o.error.clone()),
                             "timed_out": out.map(|o| o.timed_out).unwrap_or(false),
@@ -1424,6 +1509,136 @@ impl GameEngine {
             })
             .collect();
 
+        // Macro economy & supply-chain bottleneck telemetry
+        let mut total_buildings = 0usize;
+        let mut active_buildings = 0usize;
+        let mut idle_buildings = 0usize;
+        let mut missing_inputs: HashMap<String, usize> = HashMap::new();
+        for b in self.world.buildings.values() {
+            total_buildings += 1;
+            if b.active {
+                active_buildings += 1;
+                if b.idle_ticks > 0 {
+                    idle_buildings += 1;
+                    if let (Some(r), Some(comp)) = (
+                        self.world.catalog.recipes.get(&b.recipe_id),
+                        self.world.companies.get(&b.owner_id),
+                    ) {
+                        for inp in &r.inputs {
+                            if comp.ground_qty(&b.planet_id, &inp.item) < inp.qty {
+                                *missing_inputs.entry(inp.item.clone()).or_insert(0) += 1;
+                            }
+                        }
+                        if r.power_cost > 0 && comp.ground_qty(&b.planet_id, "power") < r.power_cost {
+                            *missing_inputs.entry("power".to_string()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let mut missing_inputs_top: Vec<serde_json::Value> = missing_inputs
+            .into_iter()
+            .map(|(item_id, count)| serde_json::json!({ "item_id": item_id, "idle_count": count }))
+            .collect();
+        missing_inputs_top.sort_by(|a, b| {
+            b["idle_count"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["idle_count"].as_u64().unwrap_or(0))
+        });
+        missing_inputs_top.truncate(10);
+
+        let mut prof_npc_counts: BTreeMap<String, usize> = BTreeMap::new();
+        let mut player_net_liquid = 0.0;
+        let mut npc_net_liquid = 0.0;
+        let mut player_count = 0usize;
+        let mut npc_count = 0usize;
+        for c in self.world.companies.values() {
+            let nl = from_money(c.cash + c.savings - c.debt);
+            if c.is_player {
+                player_count += 1;
+                player_net_liquid += nl;
+            } else {
+                npc_count += 1;
+                npc_net_liquid += nl;
+                *prof_npc_counts.entry(c.profession.clone()).or_insert(0) += 1;
+            }
+        }
+        let total_developable_plots: u32 = self.world.planets.values().map(|p| p.total_developable_plots).sum();
+        let total_unclaimed_plots: u32 = self.world.planets.values().map(|p| p.unclaimed_plots_remaining).sum();
+        let total_listed_plots: usize = self.world.planets.values().map(|p| p.land_listings.len()).sum();
+
+        // Player sandbox summary
+        let mut active_scripts = 0usize;
+        let mut total_cpu_used_ms = 0.0;
+        let mut max_script_cpu_ms = 0.0;
+        let mut max_script_company: Option<String> = None;
+        for (cid, pvm) in &self.runner.players {
+            if pvm.enabled {
+                active_scripts += 1;
+            }
+            if let Some(out) = self.runner.last_player_outputs.get(cid) {
+                total_cpu_used_ms += out.cpu_used_ms;
+                if out.cpu_used_ms > max_script_cpu_ms {
+                    max_script_cpu_ms = out.cpu_used_ms;
+                    max_script_company = Some(cid.clone());
+                }
+            }
+        }
+
+        // Registered user accounts & active sessions
+        let now_s = crate::auth::now_secs();
+        let users = self.store.list_all_users();
+        let active_sessions = self.store.list_active_sessions(now_s);
+        let (ws_total, ws_by_company) = self.telemetry.ws_counts();
+        let mut sess_by_user: HashMap<i64, Vec<&crate::storage::SessionRow>> = HashMap::new();
+        for s in &active_sessions {
+            sess_by_user.entry(s.user_id).or_default().push(s);
+        }
+        let accounts: Vec<serde_json::Value> = users
+            .iter()
+            .map(|u| {
+                let us = sess_by_user.get(&u.id);
+                let sess_count = us.map(|v| v.len()).unwrap_or(0);
+                let last_seen = us.and_then(|v| v.iter().map(|s| s.last_seen_at).max());
+                let user_agents: Vec<&str> = us
+                    .map(|v| v.iter().map(|s| s.user_agent.as_str()).take(3).collect())
+                    .unwrap_or_default();
+                let comp = self.world.companies.get(&u.company_id);
+                let script_enabled = self
+                    .runner
+                    .players
+                    .get(&u.company_id)
+                    .map(|p| p.enabled)
+                    .unwrap_or(false);
+                serde_json::json!({
+                    "id": u.id,
+                    "email": u.email,
+                    "nickname": u.nickname,
+                    "role": u.role,
+                    "status": u.status,
+                    "company_id": u.company_id,
+                    "company_name": comp.map(|c| c.name.as_str()).unwrap_or(&u.company_id),
+                    "net_liquid": comp.map(|c| from_money(c.cash + c.savings - c.debt)).unwrap_or(0.0),
+                    "script_enabled": script_enabled,
+                    "created_at": u.created_at,
+                    "last_login_at": u.last_login_at,
+                    "last_seen_at": last_seen,
+                    "active_sessions": sess_count,
+                    "ws_connections": ws_by_company.get(&u.company_id).copied().unwrap_or(0),
+                    "user_agents": user_agents,
+                })
+            })
+            .collect();
+
+        let (dur_last, dur_avg, dur_p95, dur_max) = self.telemetry.duration_stats_ms();
+        let tps = self.telemetry.tps();
+        let cpu = self.telemetry.sample_cpu();
+        let memory = self.telemetry.sample_memory();
+        let storage = self.telemetry.storage_sizes(self.store.db_path.as_deref());
+        let recent_trades = self.store.recent_trades(60);
+        let overview_gen_ms = ov_t0.elapsed().as_secs_f64() * 1000.0;
+
         serde_json::json!({
             "tick": self.world.tick,
             "cpi": self.world.cpi,
@@ -1438,6 +1653,51 @@ impl GameEngine {
                 "total_storage_fees": from_money_i128(self.world.ledger.total_storage_fees),
                 "total_wages_paid": from_money_i128(self.world.ledger.total_wages_paid),
             },
+            "runtime": {
+                "uptime_secs": self.telemetry.started_at.elapsed().as_secs(),
+                "tps": tps,
+                "tick_last_ms": dur_last,
+                "tick_avg_ms": dur_avg,
+                "tick_p95_ms": dur_p95,
+                "tick_max_ms": dur_max,
+                "phases": self.telemetry.last_phases,
+                "cpu": cpu,
+                "memory": memory,
+                "storage": storage,
+                "last_persisted_tick": self.telemetry.last_persisted_tick,
+                "last_persisted_ago_secs": self.telemetry.last_persisted_at.elapsed().as_secs(),
+                "ws_total": ws_total,
+                "ws_by_company": ws_by_company,
+                "users_total": users.len(),
+                "active_sessions": active_sessions.len(),
+                "sandbox": {
+                    "active_scripts": active_scripts,
+                    "total_cpu_used_ms": total_cpu_used_ms,
+                    "max_script_cpu_ms": max_script_cpu_ms,
+                    "max_script_company": max_script_company,
+                    "total_timeouts": self.telemetry.total_js_timeouts,
+                    "total_ooms": self.telemetry.total_js_ooms,
+                    "total_rejected_intents": self.telemetry.total_rejected_intents,
+                },
+                "overview_gen_ms": overview_gen_ms,
+            },
+            "supply_chain": {
+                "player_count": player_count,
+                "npc_count": npc_count,
+                "player_net_liquid": player_net_liquid,
+                "npc_net_liquid": npc_net_liquid,
+                "total_buildings": total_buildings,
+                "active_buildings": active_buildings,
+                "idle_buildings": idle_buildings,
+                "missing_inputs_top": missing_inputs_top,
+                "profession_npc_counts": prof_npc_counts,
+                "total_developable_plots": total_developable_plots,
+                "total_unclaimed_plots": total_unclaimed_plots,
+                "total_listed_plots": total_listed_plots,
+            },
+            "economy_history": self.telemetry.economy_history,
+            "accounts": accounts,
+            "recent_trades": recent_trades,
             "systems": self.system_summaries(),
             "hub_orbit_radius": self.world.hub_orbit_radius,
             "planets": planets_detail,

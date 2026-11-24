@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod engine;
 pub mod storage;
+pub mod telemetry;
 
 pub use api::build_router;
 pub use auth::{AuthUser, AuthLimiter};

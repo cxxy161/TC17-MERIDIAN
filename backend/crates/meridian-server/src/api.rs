@@ -31,6 +31,11 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/admin", get(admin_page_handler))
         .route("/admin.html", get(admin_page_handler))
         .route("/api/admin/overview", get(admin_overview_handler))
+        .route("/api/admin/player/{company_id}/sandbox", get(admin_player_sandbox_handler))
+        .route("/api/admin/player/{company_id}/script-toggle", post(admin_script_toggle_handler))
+        .route("/api/admin/users/{user_id}/status", post(admin_user_status_handler))
+        .route("/api/admin/users/{user_id}/kick", post(admin_user_kick_handler))
+        .route("/api/admin/users/{user_id}/password", post(admin_user_password_handler))
         .route("/api/health", get(health_handler))
         .route("/api/catalog", get(catalog_handler))
         .route("/api/state", get(state_handler))
@@ -83,8 +88,134 @@ async fn admin_overview_handler(
     _admin: AdminUser,
     State(engine): State<SharedEngine>,
 ) -> impl IntoResponse {
-    let eng = engine.lock().await;
+    let mut eng = engine.lock().await;
     Json(eng.admin_overview())
+}
+
+async fn admin_player_sandbox_handler(
+    _admin: AdminUser,
+    State(engine): State<SharedEngine>,
+    Path(company_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eng = engine.lock().await;
+    let Some(pvm) = eng.runner.players.get(&company_id) else {
+        return Err((StatusCode::NOT_FOUND, format!("No player sandbox for '{company_id}'")));
+    };
+    let out = eng.runner.last_player_outputs.get(&company_id);
+    Ok(Json(serde_json::json!({
+        "company_id": company_id,
+        "enabled": pvm.enabled,
+        "memory_json": pvm.memory_json,
+        "memory_bytes": pvm.memory_json.len(),
+        "memory_limit_bytes": 131_072,
+        "modules": pvm.bundle.modules,
+        "last_output": out,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ScriptToggleReq {
+    enabled: bool,
+}
+
+async fn admin_script_toggle_handler(
+    _admin: AdminUser,
+    State(engine): State<SharedEngine>,
+    Path(company_id): Path<String>,
+    Json(req): Json<ScriptToggleReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut eng = engine.lock().await;
+    let mem_copy = {
+        let Some(pvm) = eng.runner.players.get_mut(&company_id) else {
+            return Err((StatusCode::NOT_FOUND, format!("No player sandbox for '{company_id}'")));
+        };
+        pvm.enabled = req.enabled;
+        pvm.memory_json.clone()
+    };
+    eng.store
+        .save_player_memory(&company_id, &mem_copy, req.enabled)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    eng.mark_player_memory_saved(&company_id, &mem_copy, req.enabled);
+    Ok(Json(serde_json::json!({ "ok": true, "company_id": company_id, "enabled": req.enabled })))
+}
+
+#[derive(Deserialize)]
+struct UserStatusReq {
+    status: String,
+}
+
+async fn admin_user_status_handler(
+    admin: AdminUser,
+    State(engine): State<SharedEngine>,
+    Path(user_id): Path<i64>,
+    Json(req): Json<UserStatusReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if admin.0.user.id == user_id && req.status != "active" {
+        return Err((StatusCode::BAD_REQUEST, "不能禁用当前登录的管理员自身账号".to_string()));
+    }
+    if req.status != "active" && req.status != "disabled" {
+        return Err((StatusCode::BAD_REQUEST, "status 只能为 active 或 disabled".to_string()));
+    }
+    let eng = engine.lock().await;
+    let found = eng
+        .store
+        .set_user_status(user_id, &req.status, now_secs())
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if !found {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown user {user_id}")));
+    }
+    if req.status != "active" {
+        let _ = eng.store.delete_all_sessions(user_id);
+    }
+    Ok(Json(serde_json::json!({ "ok": true, "user_id": user_id, "status": req.status })))
+}
+
+async fn admin_user_kick_handler(
+    admin: AdminUser,
+    State(engine): State<SharedEngine>,
+    Path(user_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let eng = engine.lock().await;
+    if admin.0.user.id == user_id {
+        let deleted = eng
+            .store
+            .delete_other_sessions(user_id, admin.0.session_id)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        return Ok(Json(serde_json::json!({ "ok": true, "revoked": deleted })));
+    }
+    let deleted = eng
+        .store
+        .delete_all_sessions(user_id)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(serde_json::json!({ "ok": true, "revoked": deleted })))
+}
+
+#[derive(Deserialize)]
+struct AdminResetPasswordReq {
+    password: String,
+}
+
+async fn admin_user_password_handler(
+    _admin: AdminUser,
+    State(engine): State<SharedEngine>,
+    Path(user_id): Path<i64>,
+    Json(req): Json<AdminResetPasswordReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if req.password.chars().count() < 8 {
+        return Err((StatusCode::BAD_REQUEST, "密码至少需要 8 位".to_string()));
+    }
+    let (salt, hash) = hash_blocking(req.password)
+        .await
+        .map_err(|e| (e.status, e.body.message))?;
+    let eng = engine.lock().await;
+    if eng.store.user_by_id(user_id).is_none() {
+        return Err((StatusCode::NOT_FOUND, format!("Unknown user {user_id}")));
+    }
+    eng.store
+        .update_password(user_id, &hash, &salt)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let _ = eng.store.delete_all_sessions(user_id);
+    Ok(Json(serde_json::json!({ "ok": true, "user_id": user_id })))
 }
 
 async fn health_handler(State(engine): State<SharedEngine>) -> Json<HealthResp> {
@@ -674,14 +805,15 @@ async fn ws_handler(
 }
 
 async fn handle_ws(mut socket: WebSocket, engine: SharedEngine, cid: String) {
-    let (init_json, mut rx) = {
+    let (init_json, mut rx, _ws_guard) = {
         let eng = engine.lock().await;
+        let guard = eng.telemetry.track_ws(&cid);
         let init = serde_json::to_string(&serde_json::json!({
             "kind": "init",
             "state": eng.state_response(&cid),
         }))
         .unwrap_or_else(|_| "{}".to_string());
-        (init, eng.events_tx.subscribe())
+        (init, eng.events_tx.subscribe(), guard)
     };
 
     if socket.send(Message::Text(init_json.into())).await.is_err() {

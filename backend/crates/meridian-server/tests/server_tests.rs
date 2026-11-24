@@ -678,3 +678,154 @@ async fn test_public_company_endpoint_and_leaderboard_omit_secrets() {
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_admin_telemetry_and_player_ops() {
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    // First user = admin (player1), second user = regular player (u2)
+    let (st, _, admin_ck_opt) = send(&app, register_request("adm@meridian.test", "Boss", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+    let admin_ck = admin_ck_opt.unwrap();
+
+    let (st, u2_body, u2_ck_opt) = send(&app, register_request("ply@meridian.test", "Miner", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+    let u2_ck = u2_ck_opt.unwrap();
+    let u2_cid = u2_body["company_id"].as_str().unwrap().to_string();
+
+    // Advance one tick so economy_history and tick phase timings are populated
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/sim/control")
+            .header("content-type", "application/json")
+            .header("cookie", &admin_ck)
+            .body(Body::from(r#"{"action":"step"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    // Non-admin must receive 403 on admin overview & ops
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .uri("/api/admin/overview")
+            .header("cookie", &u2_ck)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    // Admin overview includes runtime, supply_chain, economy_history, accounts, recent_trades
+    let (st, ov, _) = send(
+        &app,
+        Request::builder()
+            .uri("/api/admin/overview")
+            .header("cookie", &admin_ck)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(ov["runtime"]["tps"].is_number());
+    assert!(ov["runtime"]["phases"]["world_tick_ms"].is_number());
+    assert!(ov["runtime"]["memory"]["rss_bytes"].as_u64().unwrap() > 0);
+    assert!(ov["supply_chain"]["total_buildings"].is_number());
+    assert_eq!(ov["economy_history"].as_array().unwrap().len(), 1);
+    let accounts = ov["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 2);
+    let u2_uid = accounts
+        .iter()
+        .find(|a| a["company_id"] == u2_cid)
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // Inspect & toggle player sandbox script
+    let (st, sb, _) = send(
+        &app,
+        Request::builder()
+            .uri(format!("/api/admin/player/{u2_cid}/sandbox"))
+            .header("cookie", &admin_ck)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(sb["enabled"], true);
+    assert!(sb["modules"]["main"].is_string());
+
+    let (st, tg, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/admin/player/{u2_cid}/script-toggle"))
+            .header("content-type", "application/json")
+            .header("cookie", &admin_ck)
+            .body(Body::from(r#"{"enabled":false}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(tg["enabled"], false);
+
+    // Kick & disable u2 -> existing cookie rejected & login blocked
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/admin/users/{u2_uid}/status"))
+            .header("content-type", "application/json")
+            .header("cookie", &admin_ck)
+            .body(Body::from(r#"{"status":"disabled"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .uri("/api/auth/me")
+            .header("cookie", &u2_ck)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    // Re-enable + reset password -> new password logs in cleanly
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/admin/users/{u2_uid}/status"))
+            .header("content-type", "application/json")
+            .header("cookie", &admin_ck)
+            .body(Body::from(r#"{"status":"active"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/api/admin/users/{u2_uid}/password"))
+            .header("content-type", "application/json")
+            .header("cookie", &admin_ck)
+            .body(Body::from(r#"{"password":"new-password-99"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+
+    let (st, _, _) = send(&app, login_request("ply@meridian.test", "new-password-99")).await;
+    assert_eq!(st, StatusCode::OK);
+}

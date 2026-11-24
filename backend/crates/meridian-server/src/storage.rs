@@ -2,7 +2,7 @@
 //! persistent `Memory`, NPC genomes, and OHLCV market candles.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use meridian_core::{from_money, TradeFill, World};
@@ -87,6 +87,7 @@ const USER_COLUMNS: &str = "id, email, nickname, role, status, company_id, creat
 
 pub struct SqliteStore {
     conn: Connection,
+    pub db_path: Option<PathBuf>,
 }
 
 fn unix_secs() -> i64 {
@@ -98,19 +99,20 @@ fn unix_secs() -> i64 {
 
 impl SqliteStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, rusqlite::Error> {
-        if let Some(parent) = path.as_ref().parent() {
+        let pb = path.as_ref().to_path_buf();
+        if let Some(parent) = pb.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let conn = Connection::open(path)?;
-        Self::init(conn)
+        let conn = Connection::open(&pb)?;
+        Self::init(conn, Some(pb))
     }
 
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
         let conn = Connection::open_in_memory()?;
-        Self::init(conn)
+        Self::init(conn, None)
     }
 
-    fn init(conn: Connection) -> Result<Self, rusqlite::Error> {
+    fn init(conn: Connection, db_path: Option<PathBuf>) -> Result<Self, rusqlite::Error> {
         conn.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
@@ -200,7 +202,7 @@ impl SqliteStore {
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
             "#,
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn, db_path })
     }
 
     pub fn save_world(&self, world: &World) -> Result<(), String> {
@@ -1058,6 +1060,80 @@ impl SqliteStore {
             .map_err(|e| e.to_string())
     }
 
+    pub fn list_all_users(&self) -> Vec<UserRow> {
+        let sql = format!("SELECT {USER_COLUMNS} FROM users ORDER BY id ASC");
+        let mut stmt = match self.conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map([], map_user);
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn list_active_sessions(&self, now: i64) -> Vec<SessionRow> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT id, user_id, created_at, expires_at, last_seen_at, user_agent
+             FROM sessions WHERE expires_at > ?1 ORDER BY last_seen_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![now], |row| {
+            Ok(SessionRow {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                created_at: row.get(2)?,
+                expires_at: row.get(3)?,
+                last_seen_at: row.get(4)?,
+                user_agent: row.get(5)?,
+            })
+        });
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    pub fn set_user_status(&self, user_id: i64, status: &str, now: i64) -> Result<bool, String> {
+        let n = self
+            .conn
+            .execute(
+                "UPDATE users SET status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![status, now, user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(n > 0)
+    }
+
+    pub fn recent_trades(&self, limit: usize) -> Vec<TradeRow> {
+        let lim = limit.clamp(1, 200) as i64;
+        let mut stmt = match self.conn.prepare(
+            "SELECT tick, station_id, item_id, qty, price, fee, buyer_id, seller_id
+             FROM trade_history ORDER BY id DESC LIMIT ?1",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt.query_map(params![lim], |row| {
+            Ok(TradeRow {
+                tick: row.get::<_, i64>(0)? as u64,
+                station_id: row.get(1)?,
+                item_id: row.get(2)?,
+                qty: row.get::<_, i64>(3)? as u32,
+                price: row.get(4)?,
+                fee: row.get(5)?,
+                buyer_id: row.get(6)?,
+                seller_id: row.get(7)?,
+            })
+        });
+        match rows {
+            Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
