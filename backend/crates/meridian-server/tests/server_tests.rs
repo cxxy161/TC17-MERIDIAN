@@ -110,8 +110,8 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         let init_planets = init_state["planets"].as_array().unwrap().len();
         assert!(
-            (3..=9).contains(&init_planets),
-            "expected 3..=9 generated planets, got {init_planets}"
+            (2..=5).contains(&init_planets),
+            "expected 2..=5 generated planets, got {init_planets}"
         );
         assert_eq!(init_state["systems"].as_array().unwrap().len(), 1);
         let home_pid = init_state["player_snapshot"]["company"]["home_planet_id"]
@@ -310,7 +310,7 @@ fn test_long_horizon_1200_ticks_economy_never_stalls() {
     let mut engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
 
     assert_eq!(engine.world.systems.len(), 1);
-    assert!((3..=9).contains(&engine.world.planets.len()));
+    assert!((2..=5).contains(&engine.world.planets.len()));
     let planet_ids: Vec<String> = engine.world.planets.keys().cloned().collect();
 
     let mut buckets = [0usize; 6];

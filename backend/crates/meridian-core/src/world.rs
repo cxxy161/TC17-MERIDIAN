@@ -209,8 +209,8 @@ impl World {
         }
     }
 
-    /// Generate a procedural single-system (`S1`) world with `3..=9` planets, physical
-    /// habitability driving city counts, and ~10,000 initial urban residents (no forced utopia).
+    /// Generate a procedural single-system (`S1`) world with `2..=5` planets, physical
+    /// habitability driving `0..=10` cities, and ~10,000 initial urban residents (no forced utopia).
     pub fn new_generated(catalog: ProductionCatalog, seed: u64) -> Self {
         let mut rng = SplitMix::new(seed);
         let next_u64 = |r: &mut SplitMix| r.next_u64();
@@ -256,7 +256,7 @@ impl World {
             },
         );
 
-        let planet_count = 3 + ((next_u64(&mut rng) % 7) as usize); // 3..=9 planets
+        let planet_count = 2 + ((next_u64(&mut rng) % 4) as usize); // 2..=5 planets
         let roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"];
         let name_pool = [
             "炽岩", "赤砂", "金晖", "晨曦", "新伊甸", "翠微", "苍岚", "青冥",
@@ -288,13 +288,13 @@ impl World {
         }
 
         let mut drafts = Vec::with_capacity(planet_count);
-        let mut orbit_r = 0.58 + rand_f64(&mut rng) * 0.28;
+        let mut orbit_r = 0.56 + rand_f64(&mut rng) * 0.44;
         let star_mass_sqrt = luminosity.powf(0.22);
 
         for i in 0..planet_count {
             let pid = format!("P{}", i + 1);
             if i > 0 {
-                let step = 0.36 + rand_f64(&mut rng) * 0.32;
+                let step = 0.28 + rand_f64(&mut rng) * 0.32;
                 orbit_r += step;
             }
             let orbit_period_days =
@@ -308,7 +308,7 @@ impl World {
             let solar_mult = (insolation.powf(0.52)).clamp(0.32, 2.25);
 
             // Gravity tends higher for rocky/super-earth planets, varied cleanly across orbits
-            let gravity = (0.48 + rand_f64(&mut rng) * 1.18).clamp(0.45, 1.75);
+            let gravity = (0.52 + rand_f64(&mut rng) * 1.05).clamp(0.45, 1.70);
 
             // Mineral richness tends higher closer to the star and on denser worlds
             let inner_metal_bonus = (1.15 - orbit_r * 0.16).clamp(0.75, 1.25);
@@ -316,43 +316,41 @@ impl World {
 
             // Water availability: scorching inner orbits bake off volatiles; temperate/outer keep more
             let temp_water_factor = if insolation > 2.2 {
-                0.35 + rand_f64(&mut rng) * 0.35
-            } else if insolation > 0.45 {
-                0.78 + rand_f64(&mut rng) * 0.72
+                0.30 + rand_f64(&mut rng) * 0.35
+            } else if insolation > 0.42 {
+                0.82 + rand_f64(&mut rng) * 0.72
             } else {
-                0.95 + rand_f64(&mut rng) * 0.75
+                0.90 + rand_f64(&mut rng) * 0.75
             };
             let water_mult = temp_water_factor.clamp(0.25, 1.85);
-            let raw_ocean = if insolation > 2.4 {
-                rand_f64(&mut rng) * 0.08
-            } else if insolation >= 0.45 {
-                0.10 + (water_mult - 0.65).max(0.0) * 0.48 + rand_f64(&mut rng) * 0.15
+            let raw_ocean = if insolation > 2.2 {
+                rand_f64(&mut rng) * 0.06
+            } else if insolation >= 0.42 {
+                0.14 + (water_mult - 0.65).max(0.0) * 0.45 + rand_f64(&mut rng) * 0.16
             } else {
-                0.08 + rand_f64(&mut rng) * 0.35
+                0.06 + rand_f64(&mut rng) * 0.30
             };
             let ocean_ratio = raw_ocean.clamp(0.02, 0.72);
 
             // Physical habitability (0..=1) from thermal band, gravity, and surface volatiles
             let thermal_log_diff = insolation.max(0.08).ln().abs();
-            let temp_score = (1.0 - thermal_log_diff / 1.35).clamp(0.0, 1.0);
-            let grav_score = (1.0 - (gravity - 0.98).abs() / 0.85).clamp(0.08, 1.0);
+            let temp_score = (1.0 - thermal_log_diff / 1.55).clamp(0.0, 1.0);
+            let grav_score = (1.0 - (gravity - 0.98).abs() / 0.95).clamp(0.10, 1.0);
             let water_score = if water_mult < 0.5 {
                 (water_mult / 0.5) * 0.45
             } else {
-                (1.0 - (ocean_ratio - 0.42).abs() / 0.55).clamp(0.25, 1.0)
+                (1.0 - (ocean_ratio - 0.42).abs() / 0.58).clamp(0.25, 1.0)
             };
             let habitability =
-                ((0.48 * temp_score + 0.28 * water_score + 0.24 * grav_score) * 1.04)
+                ((0.48 * temp_score + 0.28 * water_score + 0.24 * grav_score) * 1.12)
                     .clamp(0.05, 0.98);
 
-            let city_count = if habitability < 0.34 {
+            // City count 0..=10 smoothly driven by habitability (0 for extreme < 0.38)
+            let city_count = if habitability < 0.38 {
                 0
-            } else if habitability < 0.56 {
-                1
-            } else if habitability < 0.78 {
-                2
             } else {
-                3
+                let t = ((habitability - 0.38) / 0.56).clamp(0.0, 1.0);
+                (1.0 + 9.0 * t.powf(1.15)).round().clamp(1.0, 10.0) as u32
             };
 
             let archetype = if insolation > 2.2 && city_count == 0 {
@@ -409,12 +407,12 @@ impl World {
         let mut planets = HashMap::with_capacity(planet_count);
         for (idx, d) in drafts.into_iter().enumerate() {
             let pop = if total_weight > 0.0 && d.city_count > 0 {
-                (10_000.0 * (pop_weights[idx] / total_weight)).round().max(400.0)
+                (10_000.0 * (pop_weights[idx] / total_weight)).round().max(300.0)
             } else {
                 0.0
             };
             let city_capacity = if d.city_count > 0 {
-                (pop * 1.55).max((d.city_count * 3200) as f64).round()
+                (pop * 1.35).max((d.city_count * 1200) as f64).round()
             } else {
                 0.0
             };

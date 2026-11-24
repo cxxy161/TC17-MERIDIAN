@@ -345,7 +345,7 @@ impl Planet {
         let mat_bought = *self.bought_this_tick.get("building_mat").unwrap_or(&0);
         if self.population >= self.city_capacity * 0.85 && mat_bought >= 2 {
             self.city_level += 1;
-            self.city_capacity += (self.city_count * 2500) as f64;
+            self.city_capacity += (self.city_count * 1000) as f64;
         }
 
         if self.prosperity_window.len() >= 120 {

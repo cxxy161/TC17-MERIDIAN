@@ -324,7 +324,9 @@ impl GameEngine {
         let weights: Vec<f64> = planets
             .iter()
             .map(|p| {
-                1.0 + (p.city_count as f64) * 1.45 + p.habitability * 1.6 + p.mineral_mult * 0.65
+                1.0 + (p.city_count as f64).sqrt() * 1.8
+                    + p.habitability * 1.6
+                    + p.mineral_mult * 0.65
             })
             .collect();
         let w_sum: f64 = weights.iter().sum::<f64>().max(1.0);
@@ -373,7 +375,7 @@ impl GameEngine {
         let mut cohort = Vec::with_capacity(cur_total);
         for (p, n) in planets.iter().zip(counts.into_iter()) {
             // Profession mix adapts naturally to each generated planet's physics
-            let (w_mine, w_env, _w_agri) = if p.city_count >= 2 || p.habitability >= 0.56 {
+            let (w_mine, w_env, _w_agri) = if p.city_count >= 4 || p.habitability >= 0.56 {
                 (0.28, 0.36, 0.36)
             } else if p.mineral_mult >= 1.25 && p.city_count == 0 {
                 (0.56, 0.24, 0.20)
@@ -778,7 +780,7 @@ impl GameEngine {
         });
         let total_p_weight: f64 = planet_order
             .iter()
-            .map(|(_, cc, hab)| 1.0 + (*cc as f64) * 1.45 + *hab * 1.6)
+            .map(|(_, cc, hab)| 1.0 + (*cc as f64).sqrt() * 1.8 + *hab * 1.6)
             .sum::<f64>()
             .max(1.0);
 
@@ -789,7 +791,7 @@ impl GameEngine {
             let Some(p) = self.world.planets.get(pid) else {
                 continue;
             };
-            let w = 1.0 + (*cc as f64) * 1.45 + *hab * 1.6;
+            let w = 1.0 + (*cc as f64).sqrt() * 1.8 + *hab * 1.6;
             let min_p = ((48.0 * w / total_p_weight).round() as usize).clamp(4, 24);
             let cap_p = ((min_p as f64 * 1.65).ceil() as usize + (p.population / 500.0) as usize)
                 .min(42)

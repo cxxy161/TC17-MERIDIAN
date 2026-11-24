@@ -436,7 +436,7 @@ fn test_npc_plot_90_percent_cap_reserves_land_for_players() {
 }
 
 #[test]
-fn test_procedural_system_generation_3_to_9_planets_and_conservation() {
+fn test_procedural_system_generation_2_to_5_planets_and_conservation() {
     let cat = load_production_catalog();
     let mut seen_counts = std::collections::HashSet::new();
     for seed in [
@@ -448,8 +448,8 @@ fn test_procedural_system_generation_3_to_9_planets_and_conservation() {
         assert!(world.stations.contains_key("ST:HUB"));
         let n_planets = world.planets.len();
         assert!(
-            (3..=9).contains(&n_planets),
-            "seed {seed} produced {n_planets} planets (expected 3..=9)"
+            (2..=5).contains(&n_planets),
+            "seed {seed} produced {n_planets} planets (expected 2..=5)"
         );
         seen_counts.insert(n_planets);
 
@@ -458,11 +458,11 @@ fn test_procedural_system_generation_3_to_9_planets_and_conservation() {
         for p in world.planets.values() {
             assert_eq!(p.system_id, "S1");
             assert!((0.05..=0.99).contains(&p.habitability));
-            if p.habitability < 0.34 {
+            if p.habitability < 0.38 {
                 assert_eq!(p.city_count, 0);
             } else {
-                assert!(p.city_count >= 1);
-                assert!(p.population >= 400.0);
+                assert!((1..=10).contains(&p.city_count));
+                assert!(p.population >= 300.0);
             }
         }
         if total_cities > 0 {
