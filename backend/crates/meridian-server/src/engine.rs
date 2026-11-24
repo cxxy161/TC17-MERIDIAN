@@ -155,9 +155,17 @@ pub struct GameEngine {
     pub paused: bool,
     pub tick_ms: u64,
     next_npc_seq: u64,
+    saved_player_memories: HashMap<String, (String, bool)>,
+    world_dirty: bool,
     pub events_tx: broadcast::Sender<TickBroadcast>,
     /// 注册/登录限流器（内存态，进程内单例）
     pub auth: crate::auth::AuthLimiter,
+}
+
+impl Drop for GameEngine {
+    fn drop(&mut self) {
+        let _ = self.flush_persistence();
+    }
 }
 
 impl GameEngine {
@@ -179,6 +187,7 @@ impl GameEngine {
             for (cid, bundle) in bundles {
                 runner.set_player_script(cid, bundle);
             }
+            let saved_player_memories = memories.clone();
             for (cid, (mem, enabled)) in memories {
                 let entry = runner.players.entry(cid).or_default();
                 entry.memory_json = mem;
@@ -213,6 +222,8 @@ impl GameEngine {
                 paused: false,
                 tick_ms,
                 next_npc_seq,
+                saved_player_memories,
+                world_dirty: false,
                 events_tx,
                 auth: crate::auth::AuthLimiter::default(),
             };
@@ -231,6 +242,9 @@ impl GameEngine {
         Self::seed_initial_actors(&mut world, &mut runner, &mut store)?;
         store.save_world(&world)?;
 
+        let mut saved_player_memories = HashMap::new();
+        saved_player_memories.insert("player1".to_string(), ("{}".to_string(), true));
+
         Ok(Self {
             world,
             runner,
@@ -239,6 +253,8 @@ impl GameEngine {
             paused: false,
             tick_ms,
             next_npc_seq: 100,
+            saved_player_memories,
+            world_dirty: false,
             events_tx,
             auth: crate::auth::AuthLimiter::default(),
         })
@@ -336,44 +352,113 @@ impl GameEngine {
                 let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
                 self.store.save_player_bundle(company_id, &bundle)?;
                 self.store.save_player_memory(company_id, "{}", true)?;
+                self.saved_player_memories
+                    .insert(company_id.to_string(), ("{}".to_string(), true));
                 self.runner.set_player_script(company_id, bundle);
             }
             return Ok(());
         }
         self.world
             .spawn_company(company_id, nickname, true, "mining_ind", "P1", 10_000.0)?;
+        self.world_dirty = true;
         let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
         self.store.save_player_bundle(company_id, &bundle)?;
         self.store.save_player_memory(company_id, "{}", true)?;
+        self.saved_player_memories
+            .insert(company_id.to_string(), ("{}".to_string(), true));
         self.runner.set_player_script(company_id, bundle);
+        Ok(())
+    }
+
+    pub fn mark_player_memory_saved(&mut self, company_id: &str, memory_json: &str, enabled: bool) {
+        self.saved_player_memories
+            .insert(company_id.to_string(), (memory_json.to_string(), enabled));
+    }
+
+    pub fn mark_world_dirty(&mut self) {
+        self.world_dirty = true;
+    }
+
+    fn collect_dirty_player_memories(&self) -> Vec<(String, String, bool)> {
+        let mut dirty = Vec::new();
+        for (cid, pvm) in &self.runner.players {
+            let is_dirty = match self.saved_player_memories.get(cid) {
+                Some((saved_mem, saved_en)) => {
+                    *saved_en != pvm.enabled || saved_mem != &pvm.memory_json
+                }
+                None => true,
+            };
+            if is_dirty {
+                dirty.push((cid.clone(), pvm.memory_json.clone(), pvm.enabled));
+            }
+        }
+        dirty
+    }
+
+    /// Flush any dirty player memories and pending world state snapshot cleanly to SQLite.
+    pub fn flush_persistence(&mut self) -> Result<(), String> {
+        let dirty_memories = self.collect_dirty_player_memories();
+        if !self.world_dirty && dirty_memories.is_empty() {
+            return Ok(());
+        }
+        let dirty_refs: Vec<(&str, &str, bool)> = dirty_memories
+            .iter()
+            .map(|(c, m, e)| (c.as_str(), m.as_str(), *e))
+            .collect();
+        let world_ref = if self.world_dirty {
+            Some(&self.world)
+        } else {
+            None
+        };
+        self.store
+            .persist_tick_batch(&[], 1, false, &dirty_refs, &[], &[], world_ref)?;
+        for (cid, mem, en) in dirty_memories {
+            self.saved_player_memories.insert(cid, (mem, en));
+        }
+        self.world_dirty = false;
         Ok(())
     }
 
     pub fn step_once(&mut self) -> Result<TickBroadcast, String> {
         let report = self.runner.step_world(&mut self.world);
-
-        // Persist fills & candles + updated player Memory JSON
-        if !report.fills.is_empty() {
-            self.store.record_tick_fills(&report.fills, 1)?;
-        }
-        for (cid, pvm) in &self.runner.players {
-            let _ = self
-                .store
-                .save_player_memory(cid, &pvm.memory_json, pvm.enabled);
-        }
-
-        // Remove genomes of bankrupted NPCs (their plots return to BANK land_listings)
-        for dead_cid in &report.bankruptcies {
-            let _ = self.store.delete_npc_genome(dead_cid);
-        }
+        self.world_dirty = true;
 
         // Dynamic market-driven NPC startups every 24 ticks (respecting 90% per-planet land cap)
-        if self.world.tick % 24 == 0 {
-            self.run_npc_startups();
-        }
+        let new_npcs = if self.world.tick % 24 == 0 {
+            self.run_npc_startups()
+        } else {
+            Vec::new()
+        };
 
-        if self.world.tick % 10 == 0 {
-            self.store.save_world(&self.world)?;
+        let save_world_now = self.world.tick % 40 == 0;
+        let prune_history_now = self.world.tick % 25 == 0;
+        let dirty_memories = self.collect_dirty_player_memories();
+        let dirty_refs: Vec<(&str, &str, bool)> = dirty_memories
+            .iter()
+            .map(|(c, m, e)| (c.as_str(), m.as_str(), *e))
+            .collect();
+        let new_npc_refs: Vec<(&str, &NpcGenome)> = new_npcs
+            .iter()
+            .map(|(c, g)| (c.as_str(), g))
+            .collect();
+
+        // Coalesce fills, history pruning, dirty player memories, NPC genome changes, and
+        // periodic world snapshots into a single SQLite WAL transaction per tick.
+        self.store.persist_tick_batch(
+            &report.fills,
+            1,
+            prune_history_now,
+            &dirty_refs,
+            &report.bankruptcies,
+            &new_npc_refs,
+            if save_world_now { Some(&self.world) } else { None },
+        )?;
+
+        for (cid, mem, en) in dirty_memories {
+            self.saved_player_memories.insert(cid, (mem, en));
+        }
+        if save_world_now {
+            self.world_dirty = false;
         }
 
         let bcast = self.build_broadcast(&report);
@@ -438,7 +523,16 @@ impl GameEngine {
             }
         }
         let (prof, planet, _) = target_niches[best_idx];
-        self.spawn_evolved_company_on(prof, planet, seq, &ranked, 6_000.0 * self.world.cpi.clamp(0.5, 4.0));
+        if let Some((new_cid, genome)) = self.spawn_evolved_company_on(
+            prof,
+            planet,
+            seq,
+            &ranked,
+            6_000.0 * self.world.cpi.clamp(0.5, 4.0),
+        ) {
+            let _ = self.store.save_npc_genome(&new_cid, &genome);
+            self.world_dirty = true;
+        }
     }
 
     fn spawn_evolved_company_on(
@@ -448,9 +542,9 @@ impl GameEngine {
         seq: u64,
         ranked: &[(f64, String, String, String)],
         seed_credits: f64,
-    ) -> bool {
+    ) -> Option<(String, NpcGenome)> {
         if self.world.npc_plot_count_on(planet) >= self.world.npc_plot_cap_on(planet) {
-            return false;
+            return None;
         }
         let new_cid = format!("npc_evo_{seq}");
         if self
@@ -458,7 +552,7 @@ impl GameEngine {
             .spawn_npc_startup(&new_cid, format!("Evo-{prof}-{seq}"), prof, planet, seed_credits)
             .is_err()
         {
-            return false;
+            return None;
         }
         let same_prof_elites: Vec<&str> = ranked
             .iter()
@@ -490,13 +584,13 @@ impl GameEngine {
         } else {
             NpcGenome::from_seed(seq.wrapping_mul(2654435761))
         };
-        let _ = self.store.save_npc_genome(&new_cid, &genome);
-        self.runner.register_npc(new_cid, genome);
-        true
+        self.runner.register_npc(new_cid.clone(), genome.clone());
+        Some((new_cid, genome))
     }
 
     /// Market-driven NPC startups on planets with profitable shortages (capped at 90% planet land & <=72 NPCs).
-    fn run_npc_startups(&mut self) {
+    fn run_npc_startups(&mut self) -> Vec<(String, NpcGenome)> {
+        let mut spawned = Vec::new();
         const MAX_GLOBAL_NPCS: usize = 72;
         let mut total_npcs = self
             .world
@@ -505,7 +599,7 @@ impl GameEngine {
             .filter(|c| !c.is_player)
             .count();
         if total_npcs >= MAX_GLOBAL_NPCS {
-            return;
+            return spawned;
         }
 
         let mut ranked: Vec<(f64, String, String, String)> = self
@@ -696,7 +790,10 @@ impl GameEngine {
                 }
                 self.next_npc_seq = seq + 1;
                 let seed_cash = (6_000.0 * cpi).clamp(3_000.0, 12_000.0);
-                if self.spawn_evolved_company_on(best_prof, pid, seq, &ranked, seed_cash) {
+                if let Some(created) =
+                    self.spawn_evolved_company_on(best_prof, pid, seq, &ranked, seed_cash)
+                {
+                    spawned.push(created);
                     cur_on_p += 1;
                     total_npcs += 1;
                 } else {
@@ -704,6 +801,7 @@ impl GameEngine {
                 }
             }
         }
+        spawned
     }
 
     pub fn reset_world(&mut self) -> Result<TickBroadcast, String> {
@@ -718,6 +816,10 @@ impl GameEngine {
         self.store.save_world(&new_world)?;
         self.world = new_world;
         self.next_npc_seq = 100;
+        self.saved_player_memories.clear();
+        self.saved_player_memories
+            .insert("player1".to_string(), ("{}".to_string(), true));
+        self.world_dirty = false;
 
         let empty_rep = TickReport {
             tick: self.world.tick,

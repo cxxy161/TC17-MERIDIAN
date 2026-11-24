@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use meridian_core::{CompanyId, Intent, ProductionCatalog, TickReport, World, WorldSnapshot};
+use meridian_core::{CompanyId, Intent, ProductionCatalog, TickReport, World};
 use rayon::prelude::*;
 
 use crate::js_runner::run_player_tick;
@@ -73,77 +73,78 @@ impl SimulationRunner {
     }
 
     /// Execute one complete tick:
-    /// 1. Export read-only `WorldSnapshot` per company (sorted by ID for deterministic order).
-    /// 2. Run Player QuickJS VMs and NPC Brains in parallel via `rayon`.
+    /// 1. Precompute immutable shared snapshot data once per tick.
+    /// 2. Build per-company `WorldSnapshot`s (skipping full order books for NPCs) and run Player
+    ///    QuickJS VMs + NPC Brains in parallel via `rayon`.
     /// 3. Update player Memory & console outputs, then step `World::step_tick`.
     pub fn step_world(&mut self, world: &mut World) -> TickReport {
-        enum JobKind {
+        enum JobSpec<'a> {
             Player {
                 cid: CompanyId,
-                snap: Arc<WorldSnapshot>,
                 bundle: Arc<PlayerScriptBundle>,
                 memory_json: String,
             },
             Npc {
                 cid: CompanyId,
-                snap: Arc<WorldSnapshot>,
-                genome: NpcGenome,
+                genome: Option<&'a NpcGenome>,
             },
         }
 
-        let catalog = Arc::new(world.catalog.clone());
         let mut cids: Vec<CompanyId> = world.companies.keys().cloned().collect();
         cids.sort();
 
-        let mut jobs = Vec::with_capacity(cids.len());
+        let mut has_active_player = false;
+        let mut specs = Vec::with_capacity(cids.len());
         for cid in cids {
             let Some(comp) = world.companies.get(&cid) else {
                 continue;
             };
-            let Some(snap) = world.snapshot_for(&cid) else {
-                continue;
-            };
-            let snap = Arc::new(snap);
             if comp.is_player {
                 if let Some(pvm) = self.players.get(&cid) {
                     if pvm.enabled {
-                        jobs.push(JobKind::Player {
+                        has_active_player = true;
+                        specs.push(JobSpec::Player {
                             cid,
-                            snap,
                             bundle: Arc::new(pvm.bundle.clone()),
                             memory_json: pvm.memory_json.clone(),
                         });
                     }
                 }
             } else {
-                let genome = self.npc_genomes.get(&cid).cloned().unwrap_or_default();
-                jobs.push(JobKind::Npc { cid, snap, genome });
+                let genome = self.npc_genomes.get(&cid);
+                specs.push(JobSpec::Npc { cid, genome });
             }
         }
 
+        let shared = world.prepare_shared_snapshot();
+        let player_catalog = if has_active_player {
+            Some(Arc::new(world.catalog.clone()))
+        } else {
+            None
+        };
+        let default_genome = NpcGenome::default();
         let config = &self.config;
-        let outcomes: Vec<(CompanyId, Vec<Intent>, Option<PlayerRunOutput>)> = jobs
+        let world_ref: &World = world;
+
+        let outcomes: Vec<(CompanyId, Vec<Intent>, Option<PlayerRunOutput>)> = specs
             .into_par_iter()
-            .map(|job| match job {
-                JobKind::Player {
+            .filter_map(|spec| match spec {
+                JobSpec::Player {
                     cid,
-                    snap,
                     bundle,
                     memory_json,
                 } => {
-                    let out = run_player_tick(
-                        snap,
-                        Arc::clone(&catalog),
-                        bundle,
-                        &memory_json,
-                        config,
-                    );
+                    let snap = Arc::new(world_ref.snapshot_for_with_shared(&cid, &shared, true)?);
+                    let cat = Arc::clone(player_catalog.as_ref().unwrap());
+                    let out = run_player_tick(snap, cat, bundle, &memory_json, config);
                     let intents = out.intents.clone();
-                    (cid, intents, Some(out))
+                    Some((cid, intents, Some(out)))
                 }
-                JobKind::Npc { cid, snap, genome } => {
-                    let intents = decide_npc_intents(&snap, &catalog, &genome);
-                    (cid, intents, None)
+                JobSpec::Npc { cid, genome } => {
+                    let snap = world_ref.snapshot_for_with_shared(&cid, &shared, false)?;
+                    let g = genome.unwrap_or(&default_genome);
+                    let intents = decide_npc_intents(&snap, &world_ref.catalog, g);
+                    Some((cid, intents, None))
                 }
             })
             .collect();

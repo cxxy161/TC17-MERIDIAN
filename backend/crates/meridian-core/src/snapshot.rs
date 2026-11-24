@@ -86,6 +86,16 @@ pub struct SelfView {
     pub open_orders: Vec<Order>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SharedSnapshot {
+    pub quotes: HashMap<StationId, HashMap<ItemId, MarketQuote>>,
+    pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
+    pub all_orders: Vec<Order>,
+    pub open_orders_by_owner: HashMap<CompanyId, Vec<Order>>,
+    pub planet_templates: Vec<(PlanetId, StationId, PlanetView)>,
+    pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldSnapshot {
     pub tick: u64,

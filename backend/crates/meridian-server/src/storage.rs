@@ -399,50 +399,171 @@ impl SqliteStore {
         if fills.is_empty() {
             return Ok(());
         }
+        self.persist_tick_batch(fills, bucket_ticks, true, &[], &[], &[], None)
+    }
+
+    /// Coalesce fills, optional trade_history pruning, dirty player memories, NPC genome changes,
+    /// and optional world snapshot into a single SQLite WAL transaction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn persist_tick_batch(
+        &mut self,
+        fills: &[TradeFill],
+        bucket_ticks: u64,
+        prune_trade_history: bool,
+        dirty_memories: &[(&str, &str, bool)],
+        dead_npc_ids: &[String],
+        new_npc_genomes: &[(&str, &NpcGenome)],
+        world_to_save: Option<&World>,
+    ) -> Result<(), String> {
+        if fills.is_empty()
+            && !prune_trade_history
+            && dirty_memories.is_empty()
+            && dead_npc_ids.is_empty()
+            && new_npc_genomes.is_empty()
+            && world_to_save.is_none()
+        {
+            return Ok(());
+        }
+
+        // Pre-serialize JSON payloads before opening the write transaction.
+        let world_payload = match world_to_save {
+            Some(w) => Some((w.tick as i64, serde_json::to_string(w).map_err(|e| e.to_string())?)),
+            None => None,
+        };
+        let mut npc_jsons = Vec::with_capacity(new_npc_genomes.len());
+        for &(cid, genome) in new_npc_genomes {
+            npc_jsons.push((cid, serde_json::to_string(genome).map_err(|e| e.to_string())?));
+        }
+
+        let now = unix_secs();
         let bsize = bucket_ticks.max(1);
         let tx = self.conn.transaction().map_err(|e| e.to_string())?;
-        for f in fills {
-            let px = from_money(f.price);
-            let fee = from_money(f.fee);
-            let bucket = (f.tick / bsize) * bsize;
-            tx.execute(
-                r#"
-                INSERT INTO candles (station_id, item_id, bucket_tick, open, high, low, close, volume)
-                VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?4, ?5)
-                ON CONFLICT(station_id, item_id, bucket_tick) DO UPDATE SET
-                    high = MAX(candles.high, excluded.high),
-                    low = MIN(candles.low, excluded.low),
-                    close = excluded.close,
-                    volume = candles.volume + excluded.volume
-                "#,
-                params![f.station_id, f.item_id, bucket as i64, px, f.qty as i64],
-            )
-            .map_err(|e| e.to_string())?;
 
+        if !fills.is_empty() {
+            let mut candle_stmt = tx
+                .prepare_cached(
+                    r#"
+                    INSERT INTO candles (station_id, item_id, bucket_tick, open, high, low, close, volume)
+                    VALUES (?1, ?2, ?3, ?4, ?4, ?4, ?4, ?5)
+                    ON CONFLICT(station_id, item_id, bucket_tick) DO UPDATE SET
+                        high = MAX(candles.high, excluded.high),
+                        low = MIN(candles.low, excluded.low),
+                        close = excluded.close,
+                        volume = candles.volume + excluded.volume
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            let mut trade_stmt = tx
+                .prepare_cached(
+                    r#"
+                    INSERT INTO trade_history (tick, station_id, item_id, qty, price, fee, buyer_id, seller_id)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+
+            for f in fills {
+                let px = from_money(f.price);
+                let fee = from_money(f.fee);
+                let bucket = (f.tick / bsize) * bsize;
+                candle_stmt
+                    .execute(params![
+                        f.station_id,
+                        f.item_id,
+                        bucket as i64,
+                        px,
+                        f.qty as i64
+                    ])
+                    .map_err(|e| e.to_string())?;
+                trade_stmt
+                    .execute(params![
+                        f.tick as i64,
+                        f.station_id,
+                        f.item_id,
+                        f.qty as i64,
+                        px,
+                        fee,
+                        f.buyer_id,
+                        f.seller_id
+                    ])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        if prune_trade_history {
+            // Keep bounded trade history (last 4000 rows) for small memory/disk footprint
             tx.execute(
-                r#"
-                INSERT INTO trade_history (tick, station_id, item_id, qty, price, fee, buyer_id, seller_id)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                "#,
-                params![
-                    f.tick as i64,
-                    f.station_id,
-                    f.item_id,
-                    f.qty as i64,
-                    px,
-                    fee,
-                    f.buyer_id,
-                    f.seller_id
-                ],
+                "DELETE FROM trade_history WHERE id <= (SELECT COALESCE(MAX(id), 0) - 4000 FROM trade_history)",
+                [],
             )
             .map_err(|e| e.to_string())?;
         }
-        // Keep bounded trade history (last 4000 rows) for small memory/disk footprint
-        tx.execute(
-            "DELETE FROM trade_history WHERE id <= (SELECT COALESCE(MAX(id), 0) - 4000 FROM trade_history)",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+
+        if !dirty_memories.is_empty() {
+            let mut mem_stmt = tx
+                .prepare_cached(
+                    r#"
+                    INSERT INTO player_memory (company_id, memory_json, enabled, updated_at)
+                    VALUES (?1, ?2, ?3, ?4)
+                    ON CONFLICT(company_id) DO UPDATE SET
+                        memory_json = excluded.memory_json,
+                        enabled = excluded.enabled,
+                        updated_at = excluded.updated_at
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            for &(cid, mem_json, enabled) in dirty_memories {
+                mem_stmt
+                    .execute(params![cid, mem_json, if enabled { 1 } else { 0 }, now])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        if !dead_npc_ids.is_empty() {
+            let mut del_stmt = tx
+                .prepare_cached("DELETE FROM npc_genomes WHERE company_id = ?1")
+                .map_err(|e| e.to_string())?;
+            for dead_cid in dead_npc_ids {
+                del_stmt
+                    .execute(params![dead_cid])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        if !npc_jsons.is_empty() {
+            let mut npc_stmt = tx
+                .prepare_cached(
+                    r#"
+                    INSERT INTO npc_genomes (company_id, genome_json, updated_at)
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(company_id) DO UPDATE SET
+                        genome_json = excluded.genome_json,
+                        updated_at = excluded.updated_at
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            for (cid, json) in &npc_jsons {
+                npc_stmt
+                    .execute(params![cid, json, now])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        if let Some((tick, json)) = world_payload {
+            tx.execute(
+                r#"
+                INSERT INTO world_state (id, tick, world_json, updated_at)
+                VALUES (1, ?1, ?2, ?3)
+                ON CONFLICT(id) DO UPDATE SET
+                    tick = excluded.tick,
+                    world_json = excluded.world_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![tick, json, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
         tx.commit().map_err(|e| e.to_string())?;
         Ok(())
     }

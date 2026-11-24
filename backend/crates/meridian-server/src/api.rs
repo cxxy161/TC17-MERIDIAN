@@ -373,7 +373,9 @@ async fn put_scripts_handler(
             pvm.memory_json.clone()
         });
         if let Some(mem_json) = mem_copy {
-            let _ = eng.store.save_player_memory(&company_id, &mem_json, en);
+            if eng.store.save_player_memory(&company_id, &mem_json, en).is_ok() {
+                eng.mark_player_memory_saved(&company_id, &mem_json, en);
+            }
         }
     }
 
@@ -415,6 +417,7 @@ async fn put_memory_handler(
     eng.store
         .save_player_memory(&company_id, &req.memory_json, enabled)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    eng.mark_player_memory_saved(&company_id, &req.memory_json, enabled);
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -510,6 +513,7 @@ async fn create_company_handler(
         )
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
+    eng.mark_world_dirty();
     if req.is_player {
         let bundle = PlayerScriptBundle::single_main(crate::engine::STARTER_PLAYER_JS);
         eng.store
@@ -518,6 +522,7 @@ async fn create_company_handler(
         eng.store
             .save_player_memory(&req.id, "{}", true)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        eng.mark_player_memory_saved(&req.id, "{}", true);
         eng.runner.set_player_script(&req.id, bundle);
     } else {
         let genome = NpcGenome::from_seed(eng.world.tick.wrapping_add(req.id.len() as u64) + 31337);

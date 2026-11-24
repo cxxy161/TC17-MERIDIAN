@@ -11,7 +11,8 @@ use crate::logistics::{compute_route, RouteKind, Ship, ShipInFlight, ShipSize};
 use crate::planet::{BuildingInstance, LandListing, Planet, PlanetBank, Plot, SiteJob};
 use crate::schema::{ItemRole, ProductionCatalog};
 use crate::snapshot::{
-    BuildingView, LandListingView, PlanetView, PlotView, SelfView, ShipView, WorldSnapshot,
+    BuildingView, LandListingView, PlanetView, PlotView, SelfView, SharedSnapshot, ShipView,
+    WorldSnapshot,
 };
 use crate::types::{
     bps_of, from_money, to_money, BankOpKind, BuildingId, CompanyId, Intent, ItemId, ListingId,
@@ -1796,63 +1797,16 @@ impl World {
         dead
     }
 
-    pub fn snapshot_for(&self, company_id: &str) -> Option<WorldSnapshot> {
-        let comp = self.companies.get(company_id)?;
-        let plots: Vec<PlotView> = comp
-            .plots
-            .iter()
-            .filter_map(|pid| self.plots.get(pid))
-            .map(|pl| PlotView {
-                id: pl.id,
-                planet_id: pl.planet_id.clone(),
-                terrain_name: pl.terrain_name.clone(),
-                capacity: pl.capacity,
-                used_slots: pl.used_slots(),
-                building_mods: pl.building_mods.clone(),
-            })
-            .collect();
-        let buildings: Vec<BuildingView> = self
-            .buildings
-            .values()
-            .filter(|b| b.owner_id == company_id)
-            .map(|b| BuildingView {
-                id: b.id,
-                building_type: b.building_type.clone(),
-                plot_id: b.plot_id,
-                planet_id: b.planet_id.clone(),
-                efficiency: b.efficiency,
-                recipe_id: b.recipe_id.clone(),
-                active: b.active,
-                progress: b.progress,
-                cycle_ticks: self
-                    .catalog
-                    .recipes
-                    .get(&b.recipe_id)
-                    .map(|r| r.cycle_ticks)
-                    .unwrap_or(1),
-            })
-            .collect();
-        let ships: Vec<ShipView> = comp
-            .ships
-            .iter()
-            .map(|s| ShipView {
-                id: s.id,
-                size: s.size,
-                capacity: s.capacity(),
-                durability: s.durability,
-                location: s.location.clone(),
-                busy_until: s.busy_until,
-                is_busy: s.is_busy(self.tick),
-                cargo: s.cargo.clone(),
-            })
-            .collect();
-
-        let mut open_orders = Vec::new();
+    /// Precompute immutable per-tick shared snapshot state once across all companies.
+    pub fn prepare_shared_snapshot(&self) -> SharedSnapshot {
+        let mut open_orders_by_owner: HashMap<CompanyId, Vec<Order>> = HashMap::new();
         let mut all_orders = Vec::new();
-        let mut quotes: HashMap<StationId, HashMap<ItemId, _>> = HashMap::new();
-        let mut depths: HashMap<StationId, HashMap<ItemId, _>> = HashMap::new();
+        let mut quotes: HashMap<StationId, HashMap<ItemId, _>> =
+            HashMap::with_capacity(self.stations.len());
+        let mut depths: HashMap<StationId, HashMap<ItemId, _>> =
+            HashMap::with_capacity(self.stations.len());
         for (sid, st) in &self.stations {
-            let mut sq = HashMap::new();
+            let mut sq = HashMap::with_capacity(self.catalog.items.len());
             let mut sd = HashMap::new();
             for it in self.catalog.items.values() {
                 sq.insert(it.id.clone(), st.quote(&it.id, to_money(it.ref_price)));
@@ -1864,46 +1818,45 @@ impl World {
             depths.insert(sid.clone(), sd);
             for o in st.bids.values().chain(st.asks.values()).flat_map(|v| v.iter()) {
                 all_orders.push(o.clone());
-                if o.owner_id == company_id {
-                    open_orders.push(o.clone());
-                }
+                open_orders_by_owner
+                    .entry(o.owner_id.clone())
+                    .or_default()
+                    .push(o.clone());
             }
         }
 
-        let mut planets_view = HashMap::new();
+        let mut planet_templates = Vec::with_capacity(self.planets.len());
         for (pid, p) in &self.planets {
             let demands = p.compute_demands(&self.catalog);
-            planets_view.insert(
-                pid.clone(),
-                PlanetView {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    wealth_tier: p.wealth_tier,
-                    prosperity: p.prosperity,
-                    population: p.population,
-                    gravity: p.gravity,
-                    waste_backlog: p.waste_backlog,
-                    primary_land_price: if p.unclaimed_plots_remaining > 0 {
-                        Some(p.primary_land_price(self.cpi))
-                    } else {
-                        None
-                    },
-                    land_listings: p
-                        .land_listings
-                        .iter()
-                        .take(8)
-                        .map(|l| LandListingView {
-                            listing_id: l.listing_id,
-                            plot_id: l.plot_id,
-                            ask_price: l.ask_price,
-                        })
-                        .collect(),
-                    bank_rate_bps: p.bank.annual_rate_bps,
-                    ground_store: comp.ground_inv.get(pid).cloned().unwrap_or_default(),
-                    station_store: comp.station_inv.get(&p.station_id).cloned().unwrap_or_default(),
-                    demands,
+            let view = PlanetView {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                wealth_tier: p.wealth_tier,
+                prosperity: p.prosperity,
+                population: p.population,
+                gravity: p.gravity,
+                waste_backlog: p.waste_backlog,
+                primary_land_price: if p.unclaimed_plots_remaining > 0 {
+                    Some(p.primary_land_price(self.cpi))
+                } else {
+                    None
                 },
-            );
+                land_listings: p
+                    .land_listings
+                    .iter()
+                    .take(8)
+                    .map(|l| LandListingView {
+                        listing_id: l.listing_id,
+                        plot_id: l.plot_id,
+                        ask_price: l.ask_price,
+                    })
+                    .collect(),
+                bank_rate_bps: p.bank.annual_rate_bps,
+                ground_store: HashMap::new(),
+                station_store: HashMap::new(),
+                demands,
+            };
+            planet_templates.push((pid.clone(), p.station_id.clone(), view));
         }
 
         let mut routes: HashMap<String, HashMap<String, (u32, u32)>> = HashMap::new();
@@ -1932,6 +1885,105 @@ impl World {
             }
         }
 
+        SharedSnapshot {
+            quotes,
+            depths,
+            all_orders,
+            open_orders_by_owner,
+            planet_templates,
+            routes,
+        }
+    }
+
+    pub fn snapshot_for(&self, company_id: &str) -> Option<WorldSnapshot> {
+        if !self.companies.contains_key(company_id) {
+            return None;
+        }
+        let shared = self.prepare_shared_snapshot();
+        self.snapshot_for_with_shared(company_id, &shared, true)
+    }
+
+    pub fn snapshot_for_with_shared(
+        &self,
+        company_id: &str,
+        shared: &SharedSnapshot,
+        include_full_book: bool,
+    ) -> Option<WorldSnapshot> {
+        let comp = self.companies.get(company_id)?;
+        let mut plots = Vec::with_capacity(comp.plots.len());
+        let mut buildings = Vec::new();
+        for pid in &comp.plots {
+            let Some(pl) = self.plots.get(pid) else {
+                continue;
+            };
+            plots.push(PlotView {
+                id: pl.id,
+                planet_id: pl.planet_id.clone(),
+                terrain_name: pl.terrain_name.clone(),
+                capacity: pl.capacity,
+                used_slots: pl.used_slots(),
+                building_mods: pl.building_mods.clone(),
+            });
+            for bid in &pl.building_ids {
+                let Some(b) = self.buildings.get(bid) else {
+                    continue;
+                };
+                buildings.push(BuildingView {
+                    id: b.id,
+                    building_type: b.building_type.clone(),
+                    plot_id: b.plot_id,
+                    planet_id: b.planet_id.clone(),
+                    efficiency: b.efficiency,
+                    recipe_id: b.recipe_id.clone(),
+                    active: b.active,
+                    progress: b.progress,
+                    cycle_ticks: self
+                        .catalog
+                        .recipes
+                        .get(&b.recipe_id)
+                        .map(|r| r.cycle_ticks)
+                        .unwrap_or(1),
+                });
+            }
+        }
+        let ships: Vec<ShipView> = comp
+            .ships
+            .iter()
+            .map(|s| ShipView {
+                id: s.id,
+                size: s.size,
+                capacity: s.capacity(),
+                durability: s.durability,
+                location: s.location.clone(),
+                busy_until: s.busy_until,
+                is_busy: s.is_busy(self.tick),
+                cargo: s.cargo.clone(),
+            })
+            .collect();
+
+        let open_orders = shared
+            .open_orders_by_owner
+            .get(company_id)
+            .cloned()
+            .unwrap_or_default();
+        let (depths, orders) = if include_full_book {
+            (shared.depths.clone(), shared.all_orders.clone())
+        } else {
+            (HashMap::new(), Vec::new())
+        };
+
+        let mut planets_view = HashMap::with_capacity(shared.planet_templates.len());
+        for (pid, sid, tmpl) in &shared.planet_templates {
+            let mut pv = tmpl.clone();
+            if let Some(g) = comp.ground_inv.get(pid) {
+                pv.ground_store = g.clone();
+            }
+            if let Some(s) = comp.station_inv.get(sid) {
+                pv.station_store = s.clone();
+            }
+            planets_view.insert(pid.clone(), pv);
+        }
+
         Some(WorldSnapshot {
             tick: self.tick,
             cpi: self.cpi,
@@ -1950,10 +2002,10 @@ impl World {
                 open_orders,
             },
             planets: planets_view,
-            quotes,
+            quotes: shared.quotes.clone(),
             depths,
-            orders: all_orders,
-            routes,
+            orders,
+            routes: shared.routes.clone(),
         })
     }
 }

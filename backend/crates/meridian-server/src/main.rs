@@ -120,8 +120,8 @@ async fn main() {
         .expect("axum serve failed");
 
     // Final world snapshot before exit
-    let eng = shared.lock().await;
-    if let Err(e) = eng.store.save_world(&eng.world) {
+    let mut eng = shared.lock().await;
+    if let Err(e) = eng.flush_persistence() {
         error!("failed to save world on shutdown: {e}");
     } else {
         info!("World state saved cleanly at tick {}", eng.world.tick);
