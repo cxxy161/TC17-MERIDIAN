@@ -1,68 +1,68 @@
 import type { DocEntry } from '../types';
 
-/**
- * 「实体」分组：脚本在 Game 里读到的各类只读快照对象。
- * 它们的字段都是引擎每 tick 生成的，只读；写操作走各自的方法（返回错误码）。
- */
 export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'Planet',
     title: 'Planet',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '一颗行星的公开数据，外加本公司在这颗星上的仓库、需求与待售土地。',
-    keywords: 'Planet 行星 星球 人口 繁荣 重力 废料 地价 二手地 landListings demands 需求 仓库 银行利率',
+    summary: '行星公开遥测数据、二手地挂牌、城市需求与本公司在该星的仓库视图',
+    keywords: 'Planet 行星 人口 繁荣 重力 废料 地价 二手地 landListings demands 需求 仓库 利率',
     blocks: [
       {
         kind: 'prose',
-        text: '`Game.planets[id]` 返回的只读快照。前半截是这颗星的客观情况（人口、繁荣度、地价），后半截是**本公司视角**的资产（两个仓库、各项需求）——刚开的公司这两个仓库通常是空的。',
+        text: '`Game.planets[planetId]` 返回的行星只读快照对象，同时包含行星公共遥测信息与本公司在该行星的地面仓、轨道站仓。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'id', type: 'string', desc: '星球 id，如 `"P2"`。脚本里所有 id 都是字符串。' },
-          { name: 'name', type: 'string', desc: '显示名。' },
-          { name: 'wealthTier', type: 'number', desc: '富裕等级 1..5，越高消费能力越强。' },
-          { name: 'prosperity', type: 'number', desc: '繁荣度。' },
-          { name: 'population', type: 'number', desc: '人口。' },
-          { name: 'gravity', type: 'number', desc: '重力。' },
-          { name: 'wasteBacklog', type: 'number', desc: '还没处理掉的废料堆积量。' },
-          { name: 'primaryLandPrice', type: 'number | null', desc: '一手地单价；`null` 表示这颗星没有一手地可买。' },
+          { name: 'id', type: 'string', desc: '行星 ID，如 `\'P2\'`' },
+          { name: 'name', type: 'string', desc: '行星显示名称' },
+          { name: 'wealthTier', type: 'number', desc: '富裕等级（`1..5`），等级越高城市消费种类与能力越强' },
+          { name: 'prosperity', type: 'number', desc: '当前繁荣度指标' },
+          { name: 'population', type: 'number', desc: '当前城市总人口' },
+          { name: 'gravity', type: 'number', desc: '行星表面重力系数（影响飞船地面 ↔ 轨道起降耗时与油耗）' },
+          { name: 'wasteBacklog', type: 'number', desc: '城市尚未消纳的废料堆积量（可由回收中心在生产时直接消纳）' },
+          { name: 'primaryLandPrice', type: 'number | null', desc: '一手空地单价（信用点）；`null` 表示该行星已无未开发空地' },
           {
             name: 'landListings',
             type: 'Array<{ listingId: string; plotId: string; slotId: number; sellerId: string; askPrice: number; terrainName: string; lat: number; lon: number; capacity: number; usedSlots: number; buildingMods: Record<string, number>; buildings: string[] }>',
-            desc: '本星当前全部二手/银行清算挂牌地块（含完整位置、地形、加成与已有建筑）。',
+            desc: '本行星当前全部二手地与银行清算挂牌地块列表',
           },
-          { name: 'bankRatePct', type: 'number', desc: '本星银行利率（百分数，如 4.5 表示 4.5%）。' },
-          { name: 'groundStore', type: 'Store', desc: '本公司在这颗星的地面仓。' },
-          { name: 'stationStore', type: 'Store', desc: '本公司在这颗星的轨道站仓。' },
-          { name: 'demands', type: 'Record<string, { qty: number }>', desc: '各物品本 tick 的需求量。' },
+          { name: 'bankRatePct', type: 'number', desc: '本星央行当前年化贷款利率（百分数，如 `4.5` 表示 4.5%）' },
+          { name: 'groundStore', type: 'Store', desc: '本公司在该行星地面仓库的只读视图（无容量上限）' },
+          { name: 'stationStore', type: 'Store', desc: '本公司在该行星轨道站（`ST:<planetId>`）仓库的只读视图（无容量上限）' },
+          { name: 'demands', type: 'Record<string, { qty: number }>', desc: '本 tick 城市对各物品的需求量字典，键为物品 ID' },
         ],
       },
       {
         kind: 'note',
         level: 'info',
-        text: '`groundStore` 与 `stationStore` 的 `getCapacity()` 恒返回 `null`（星球仓没有容量上限），`getFreeCapacity()` 同理；只有飞船的货舱才有真实容量。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '`demands` 的每一项**只有 `qty`**，没有 `satisfaction`。旧版 `PROTOCOL.md` 里写的 `{ qty, satisfaction }` 已经过时，照抄会读到 `undefined`。',
-      },
-      {
-        kind: 'prose',
-        text: '买地：一手地先通过 `Game.market.getLandPlots(planetId)` 挑 `slotId`，二手地看 `landListings`（带 `listingId`）；下单用 `Game.buyPlot(planetId, { slotId } | { listingId })`。',
+        text: '`groundStore` 与 `stationStore` 的 `getCapacity()` 和 `getFreeCapacity()` 均返回 `null`（星球地面仓与行星轨道站仓库不设容量上限）。',
       },
       {
         kind: 'example',
-        caption: '按需求量找销路，同时检索高矿冶空地与二手地',
-        code: "const p = Game.planets['P2'];\n\n// 这颗星最缺什么？按需求量排序取前三\nconst top = Object.entries(p.demands)\n  .sort((a, b) => b[1].qty - a[1].qty)\n  .slice(0, 3);\nconsole.log(p.name, '需求前三', JSON.stringify(top));\n\n// 二手地在售（现带地形、槽位与设施清单）\nfor (const listing of p.landListings) {\n  console.log(listing.slotId, listing.terrainName, listing.askPrice, listing.buildings);\n}",
+        caption: '查看行星最紧缺的 3 项物品需求与二手挂牌地',
+        code: `module.exports.loop = function () {
+  const p = Game.planets[Game.company.homePlanetId];
+  if (!p) return;
+
+  const top = Object.entries(p.demands)
+    .sort((a, b) => b[1].qty - a[1].qty)
+    .slice(0, 3);
+  console.log(p.name, '需求前三:', top);
+
+  for (const lst of p.landListings) {
+    console.log('二手挂牌:', lst.listingId, lst.terrainName, '要价:', lst.askPrice);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
+          { label: 'Game.planets', id: 'Game.planets' },
+          { label: 'Game.buyPlot', id: 'Game.buyPlot' },
           { label: 'Station', id: 'Station' },
-          { label: 'Plot', id: 'Plot' },
           { label: 'Store', id: 'Store' },
         ],
       },
@@ -71,38 +71,45 @@ export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'Station',
     title: 'Station',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '轨道站，本质是一个仓库；字典的键集只包含本公司有库存记录的站点。',
-    keywords: 'Station 轨道站 ST:HUB ST:P2 store 仓库 库存',
+    summary: '空间站对象，提供本公司在该站点的只读库存视图',
+    keywords: 'Station 轨道站 枢纽站 ST:HUB store 仓库 库存',
     blocks: [
       {
         kind: 'prose',
-        text: '`Game.stations` 是只读字典。注意它的键集**只包含本公司有库存记录的站点**，不是全星系的站点清单。',
+        text: '`Game.stations[stationId]` 返回的空间站对象。注意 `Game.stations` 仅包含本公司当前有库存记录的站点，并非全星系站点全集。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'id', type: 'string', desc: '站点 id，形如 `"ST:P2"`、`"ST:HUB"`；飞船的 location 也用这套值。' },
-          { name: 'store', type: 'Store', desc: '本站点里本公司的库存。' },
+          { name: 'id', type: 'string', desc: '站点 ID，如 `\'ST:P2\'` 或 `\'ST:HUB\'`' },
+          { name: 'store', type: 'Store', desc: '本公司在该站点的只读库存视图（`getCapacity()` 恒为 `null`）' },
         ],
       },
       {
         kind: 'note',
         level: 'warn',
-        text: '新公司可能连 `"ST:HUB"` 都还没有条目。别直接 `Game.stations["ST:HUB"].store`（会 TypeError），先判空。',
+        text: '在星系枢纽站 `ST:HUB` 存放物资会每 12 个 tick 按货物估值收取 **0.8%** 仓租；行星轨道站（`ST:P*`）免费。访问 `Game.stations[\'ST:HUB\']` 前请先判空。',
       },
       {
         kind: 'example',
-        caption: '安全地读 Hub 库存',
-        code: "const hub = Game.stations['ST:HUB'];\n\nif (hub) {\n  console.log('Hub 库存', hub.store.getUsedCapacity());\n} else {\n  console.log('还没有 Hub 的库存记录');\n}",
+        caption: '安全读取枢纽站库存总量',
+        code: `module.exports.loop = function () {
+  const hub = Game.stations['ST:HUB'];
+  if (hub) {
+    console.log('Hub 总存货量:', hub.store.getUsedCapacity());
+  } else {
+    console.log('当前在 ST:HUB 无任何库存记录');
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
+          { label: 'Game.stations', id: 'Game.stations' },
           { label: 'Store', id: 'Store' },
-          { label: 'Ship', id: 'Ship' },
-          { label: 'Planet', id: 'Planet' },
+          { label: '核心经济规则', id: 'guides/economy' },
         ],
       },
     ],
@@ -110,49 +117,761 @@ export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'Plot',
     title: 'Plot',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '自己名下的一块地：地形、格子容量，以及地形对各建筑类型的效率修正。',
-    keywords: 'Plot 地块 土地 地形 terrain 格子 容量 buildingMods 建造',
+    summary: '本公司名下的一块土地，包含地形、槽位容量与建筑效率修正',
+    keywords: 'Plot 地块 土地 地形 slotId lat lon capacity usedSlots buildingMods',
     blocks: [
       {
         kind: 'prose',
-        text: '`Game` 里只会出现**自己的**地块，看不到别家的地皮。地块本身没有方法，建造和拆除都走 `Game` 上的全局方法。',
+        text: '`Game.plots[plotId]` 返回的自有地块只读快照对象。建筑的建造与拆除操作通过 `Game.buildFacility` 和 `Game.demolishFacility` 发起。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'id', type: 'string', desc: '地块 id。' },
-          { name: 'slotId', type: 'number', desc: '行星表面永久位置编号（1..N）。' },
-          { name: 'planetId', type: 'string', desc: '所属星球 id。' },
-          { name: 'lat', type: 'number', desc: '行星表面纬度（度）。' },
-          { name: 'lon', type: 'number', desc: '行星表面经度（度）。' },
-          { name: 'terrainName', type: 'string', desc: '地形名。' },
-          { name: 'capacity', type: 'number', desc: '地块能放多少格建筑。' },
-          { name: 'usedSlots', type: 'number', desc: '已经占用的格数。' },
-          {
-            name: 'buildingMods',
-            type: 'Record<string, number>',
-            desc: '地形对各建筑类型的效率修正值；盖厂前先查这张表，别在不利地形上盖亏本厂。',
-          },
+          { name: 'id', type: 'string', desc: '地块 ID（数字字符串，用于建造与拆除）' },
+          { name: 'slotId', type: 'number', desc: '行星表面永久位置编号' },
+          { name: 'planetId', type: 'string', desc: '所属行星 ID' },
+          { name: 'lat', type: 'number', desc: '行星表面纬度（度）' },
+          { name: 'lon', type: 'number', desc: '行星表面经度（度）' },
+          { name: 'terrainName', type: 'string', desc: '地形名称' },
+          { name: 'capacity', type: 'number', desc: '最大建筑槽位数' },
+          { name: 'usedSlots', type: 'number', desc: '当前已占用槽位数（含已完工建筑与施工中任务）' },
+          { name: 'buildingMods', type: 'Record<string, number>', desc: '各建筑类型在该地形上的效率乘数（键为建筑类型 ID）' },
         ],
       },
       {
         kind: 'note',
         level: 'info',
-        text: '建造用 `Game.buildFacility(plotId, buildingType)`，拆除用 `Game.demolishFacility(plotId, buildingId)`。',
+        text: '当 `usedSlots >= capacity` 时无法继续建造新建筑，需先调用 `Game.demolishFacility` 腾出槽位，或调用 `Game.buyPlot` 购买新地块。',
       },
       {
-        kind: 'note',
-        level: 'warn',
-        text: '格子用完（`usedSlots >= capacity`）就盖不下新建筑了，先拆再盖。',
+        kind: 'example',
+        caption: '查找适合建造矿业冶炼厂的空闲地块',
+        code: `module.exports.loop = function () {
+  const bestPlot = Object.values(Game.plots)
+    .filter((p) => p.usedSlots < p.capacity)
+    .sort((a, b) => (b.buildingMods.mine_smelter || 1) - (a.buildingMods.mine_smelter || 1))[0];
+
+  if (bestPlot) {
+    console.log('最优空闲地块:', bestPlot.id, '地形:', bestPlot.terrainName, '加成:', bestPlot.buildingMods.mine_smelter);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
+          { label: 'Game.plots', id: 'Game.plots' },
+          { label: 'Game.buildFacility', id: 'Game.buildFacility' },
+          { label: 'Game.demolishFacility', id: 'Game.demolishFacility' },
           { label: 'PublicLandPlot', id: 'PublicLandPlot' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Building',
+    title: 'Building',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '公司名下的一座已完工生产建筑，可切换配方或控制开机停产',
+    keywords: 'Building 建筑 工厂 生产 配方 efficiency progress cycleTicks',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '`Game.buildings[buildingId]` 返回的生产建筑只读快照对象。处于开机状态（`active === true`）且原料、电力、现金工资满足时，建筑在周期开始时一次性扣除本周期原料、电力与工资，并在推进满 `cycleTicks` 后按 `efficiency` 倍率产出成品。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'id', type: 'string', desc: '建筑 ID（数字字符串）' },
+          { name: 'type', type: 'string', desc: '建筑类型 ID，如 `\'mine_smelter\'`' },
+          { name: 'plotId', type: 'string', desc: '所在地块 ID' },
+          { name: 'planetId', type: 'string', desc: '所在行星 ID' },
+          { name: 'efficiency', type: 'number', desc: '当前综合产出效率（地形修正 × 职业加成，保留两位小数）' },
+          { name: 'recipeId', type: 'string', desc: '当前绑定的配方 ID' },
+          { name: 'active', type: 'boolean', desc: '是否处于开机生产状态' },
+          { name: 'progress', type: 'number', desc: '当前生产周期已推进的 tick 数' },
+          { name: 'cycleTicks', type: 'number', desc: '当前绑定配方的总周期 tick 数' },
+        ],
+      },
+      {
+        kind: 'methods',
+        rows: [
+          { signature: 'building.setRecipe(recipeId: string)', returns: 'RetCode', desc: '切换该建筑的生产配方', id: 'Building.setRecipe' },
+          { signature: 'building.setActive(active: boolean)', returns: 'RetCode', desc: '设置该建筑开机生产或停产待机', id: 'Building.setActive' },
+        ],
+      },
+      {
+        kind: 'example',
+        caption: '查看所有建筑的生产进度',
+        code: `module.exports.loop = function () {
+  for (const b of Object.values(Game.buildings)) {
+    console.log(b.id, b.type, b.recipeId, b.active ? '运行中' : '停产', b.progress + '/' + b.cycleTicks);
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Building.setRecipe', id: 'Building.setRecipe' },
+          { label: 'Building.setActive', id: 'Building.setActive' },
+          { label: 'RecipeInfo', id: 'RecipeInfo' },
+          { label: 'Game.buildings', id: 'Game.buildings' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Building.setRecipe',
+    title: 'setRecipe',
+    group: '实体与数据结构',
+    parent: 'Building',
+    kind: '方法',
+    summary: '切换建筑当前绑定的生产配方（下一 tick 生效）',
+    keywords: 'Building.setRecipe 切配方 换配方 生产',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '为指定建筑更换生产配方。写操作在下一 tick 落账后生效；若当前建筑正处于一个已扣料的生产周期中，切换配方**不会清零 `progress`**，当前周期跑满时将按新配方的 `cycleTicks` 与 `outputs` 结算产出。',
+      },
+      {
+        kind: 'syntax',
+        code: 'building.setRecipe(recipeId: string): RetCode',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'recipeId', type: 'string', required: 'required', desc: '目标配方 ID（必须与 `building.type` 匹配，可通过 `Game.getRecipe(recipeId).buildingId` 确认）' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示切配方请求已入队，否则返回负数错误码',
+      },
+      {
+        kind: 'errors',
+        rows: [
+          { code: 'ERR_INVALID_ARGS', when: '`recipeId` 不是非空字符串' },
+          { code: 'ERR_NOT_OWNER', when: '该建筑不属于本公司' },
+          { code: 'ERR_NOT_FOUND', when: '指定的 `recipeId` 不存在' },
+          { code: 'ERR_INVALID_TARGET', when: '该配方不属于此建筑类型（`recipe.buildingId !== building.type`）' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '目标配方在当前世界中处于禁用状态；',
+          '该建筑在落账前已被拆除或随地块过户给其他公司。',
+        ],
+      },
+      {
+        kind: 'example',
+        caption: '将矿业冶炼厂切换为碳还原炼钢配方',
+        code: `module.exports.loop = function () {
+  for (const b of Object.values(Game.buildings)) {
+    if (b.type === 'mine_smelter' && b.recipeId !== 'steel_carbon') {
+      const rc = b.setRecipe('steel_carbon');
+      if (rc !== OK) console.warn('切换配方失败:', b.id, rc);
+    }
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
           { label: 'Building', id: 'Building' },
-          { label: 'Planet', id: 'Planet' },
+          { label: 'Building.setActive', id: 'Building.setActive' },
+          { label: '默认世界建筑与配方', id: 'constants/world-catalog' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Building.setActive',
+    title: 'setActive',
+    group: '实体与数据结构',
+    parent: 'Building',
+    kind: '方法',
+    summary: '设置建筑开机运行或停产待机（下一 tick 生效）',
+    keywords: 'Building.setActive 开机 停产 开关 active',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '控制建筑开启生产或停产待机。停产期间不发起新的生产批次，仅每隔一个周期消耗少量的待机电力。',
+      },
+      {
+        kind: 'syntax',
+        code: 'building.setActive(active: boolean): RetCode',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'active', type: 'boolean', required: 'required', desc: '`true` 表示开机生产，`false` 表示停产待机' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示开关请求已入队，否则返回负数错误码',
+      },
+      {
+        kind: 'errors',
+        rows: [
+          { code: 'ERR_INVALID_ARGS', when: '`active` 不是布尔类型（例如误传了 `1` 或 `\'true\'`）' },
+          { code: 'ERR_NOT_OWNER', when: '该建筑不属于本公司' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '该建筑在落账前已被拆除或随地块过户给其他公司。',
+        ],
+      },
+      {
+        kind: 'example',
+        caption: '地面现金紧张时暂停冶炼厂，现金充足时恢复',
+        code: `module.exports.loop = function () {
+  const shouldRun = Game.company.cash >= 200;
+  for (const b of Object.values(Game.buildings)) {
+    if (b.type === 'mine_smelter' && b.active !== shouldRun) {
+      b.setActive(shouldRun);
+    }
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Building', id: 'Building' },
+          { label: 'Building.setRecipe', id: 'Building.setRecipe' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Ship',
+    title: 'Ship',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '公司名下的星际运输飞船，支持混装派船与原地维修',
+    keywords: 'Ship 飞船 运输 货舱 耐久 location isBusy busyUntil size',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '`Game.ships[shipId]` 返回的飞船只读快照对象。飞船每次可接取一段单程运输任务（行星地面 ↔ 本星轨道站，或轨道站 ↔ 枢纽站），允许在同一趟中混装多种货物。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'id', type: 'string', desc: '飞船 ID（数字字符串）' },
+          { name: 'size', type: "'small' | 'medium' | 'large'", desc: '船型规格（对应载货上限 `40` / `120` / `360` 件）' },
+          { name: 'capacity', type: 'number', desc: '货舱最大载货件数' },
+          { name: 'durability', type: 'number', desc: '当前耐久度（`0..100`）；降至 `0` 后航行耗时翻倍' },
+          { name: 'location', type: 'string', desc: '当前位置 ID（如 `\'P2\'`、`\'ST:P2\'`、`\'ST:HUB\'`）；航行中显示目标目的地' },
+          { name: 'isBusy', type: 'boolean', desc: '是否正在航行中（判断飞船是否空闲**必须使用此字段**）' },
+          { name: 'busyUntil', type: 'number', desc: '最近一次派船的预计到达 tick（到站后不会自动清零）' },
+          { name: 'store', type: 'Store', desc: '飞船货舱只读库存（仅在航行途中持有货物，到站卸载后清空）' },
+        ],
+      },
+      {
+        kind: 'methods',
+        rows: [
+          { signature: 'ship.dispatch(from: string, to: string, cargo: Record<string, number>)', returns: 'RetCode', desc: '从当前所在位置装货并派往目的地', id: 'Ship.dispatch' },
+          { signature: 'ship.repair()', returns: 'RetCode', desc: '在当前位置消耗日用品恢复满耐久', id: 'Ship.repair' },
+        ],
+      },
+      {
+        kind: 'note',
+        level: 'warn',
+        text: '飞船到站后 `busyUntil` 仍保留上一次到达时的 tick 数值而不会归零，请不要用 `busyUntil === 0` 判断飞船是否空闲。',
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Ship.dispatch', id: 'Ship.dispatch' },
+          { label: 'Ship.repair', id: 'Ship.repair' },
+          { label: 'Game.ships', id: 'Game.ships' },
+          { label: 'Game.market.calcRoute', id: 'Game.market.calcRoute' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Ship.dispatch',
+    title: 'dispatch',
+    group: '实体与数据结构',
+    parent: 'Ship',
+    kind: '方法',
+    summary: '为当前空闲的飞船指派一段单程混装货运任务',
+    keywords: 'Ship.dispatch 派船 运货 装货 燃料 航线',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '指派飞船从 `from` 出发前往 `to`，并将 `cargo` 指定的货物从出发地仓库装载上船。出发地消耗的燃料也在 `from` 仓库中直接扣除。每次出航都会磨损耐久（地面 ↔ 轨道为 4.0 / 3.0 / 2.5；星际航段磨损乘以 1.4）。',
+      },
+      {
+        kind: 'syntax',
+        code: 'ship.dispatch(from: string, to: string, cargo: Record<string, number>): RetCode',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'from', type: 'string', required: 'required', desc: '出发地 ID（必须与飞船当前的 `ship.location` 一致）' },
+          { name: 'to', type: 'string', required: 'required', desc: '目的地 ID（必须存在从 `from` 到 `to` 的可行直达航线）' },
+          { name: 'cargo', type: 'Record<string, number>', required: 'required', desc: '装船货物字典，如 `{ [RESOURCE_STEEL]: 20 }`；每项数量向下取整为正整数，总量不能超过 `ship.capacity`' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示派船请求已入队，否则返回负数错误码',
+      },
+      {
+        kind: 'errors',
+        rows: [
+          { code: 'ERR_INVALID_ARGS', when: '参数类型错误、`cargo` 为空对象、含未知物品或数量非正数' },
+          { code: 'ERR_NOT_OWNER', when: '该飞船不属于本公司' },
+          { code: 'ERR_BUSY', when: '飞船正在航行中（`ship.isBusy === true`）' },
+          { code: 'ERR_NOT_IN_RANGE', when: '`from` 与飞船当前的 `ship.location` 不一致' },
+          { code: 'ERR_NO_PATH', when: '`from` 与 `to` 之间没有可行直达航线（包含 `from === to`）' },
+          { code: 'ERR_FULL', when: '装货总件数超过 `ship.capacity`，或本 tick 已用满 32 条写操作配额' },
+          { code: 'ERR_NOT_ENOUGH_RESOURCES', when: '出发地仓库的 `fuel`（按小船基准估算）不足' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '实际船型为 `medium` / `large` 时，地面 ↔ 轨道段真实油耗高于 `calcRoute` 的小船基准值，出发地实际 `fuel` 不足；',
+          '出发地仓库的待运货物数量不足（如果同时运送 `fuel` 本身，需保证出发地燃料满足 `航线油耗 + 货舱运载燃料`）；',
+          '同一 tick 内对同一艘船重复派船，前一条派船落账后该船已处于航行中。',
+        ],
+      },
+      {
+        kind: 'example',
+        caption: '把母星地面仓的建材运往轨道站',
+        code: `module.exports.loop = function () {
+  const pid = Game.company.homePlanetId;
+  const stId = 'ST:' + pid;
+  const ship = Object.values(Game.ships).find((s) => !s.isBusy && s.location === pid);
+  if (!ship) return;
+
+  const ground = Game.planets[pid].groundStore;
+  const qty = Math.min(ground[RESOURCE_BUILDING_MAT], ship.capacity);
+  if (qty <= 0) return;
+
+  const rc = ship.dispatch(pid, stId, { [RESOURCE_BUILDING_MAT]: qty });
+  if (rc !== OK) console.warn('派船失败:', ship.id, rc);
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Ship', id: 'Ship' },
+          { label: 'Game.market.calcRoute', id: 'Game.market.calcRoute' },
+          { label: 'RouteCost', id: 'RouteCost' },
+          { label: 'Ship.repair', id: 'Ship.repair' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Ship.repair',
+    title: 'repair',
+    group: '实体与数据结构',
+    parent: 'Ship',
+    kind: '方法',
+    summary: '在飞船当前位置消耗日用品将其耐久恢复至 100',
+    keywords: 'Ship.repair 修船 维修 耐久 daily_goods',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '在飞船当前停靠位置（地面或空间站）消耗维修用品 `daily_goods`，将飞船耐久立即恢复至 `100`。不同船型消耗不同：小船消耗 **1** 件、中船 **2** 件、大船 **4** 件。',
+      },
+      {
+        kind: 'syntax',
+        code: 'ship.repair(): RetCode',
+      },
+      {
+        kind: 'params',
+        rows: [],
+      },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示修船请求已入队，否则返回负数错误码',
+      },
+      {
+        kind: 'errors',
+        rows: [
+          { code: 'ERR_NOT_OWNER', when: '该飞船不属于本公司' },
+          { code: 'ERR_BUSY', when: '飞船正在航行中（`ship.isBusy === true`）' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '飞船当前耐久已达 `99.9` 及以上（无需维修）；',
+          '飞船当前所在位置的仓库中 `daily_goods` 数量不足（小船 1 / 中船 2 / 大船 4 件）。',
+        ],
+      },
+      {
+        kind: 'example',
+        caption: '当空闲飞船耐久低于 50 且本地维修件足够时自动维修',
+        code: `module.exports.loop = function () {
+  for (const ship of Object.values(Game.ships)) {
+    if (ship.isBusy || ship.durability >= 50) continue;
+
+    const need = ship.size === 'large' ? 4 : ship.size === 'medium' ? 2 : 1;
+    const store = ship.location.startsWith('ST:')
+      ? Game.stations[ship.location] && Game.stations[ship.location].store
+      : Game.planets[ship.location] && Game.planets[ship.location].groundStore;
+
+    if (store && store[RESOURCE_DAILY_GOODS] >= need) {
+      const rc = ship.repair();
+      if (rc !== OK) console.warn('修船失败:', ship.id, rc);
+    }
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Ship', id: 'Ship' },
+          { label: 'Ship.dispatch', id: 'Ship.dispatch' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Store',
+    title: 'Store',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '行星仓、站点仓与飞船货舱共用的只读库存容器',
+    keywords: 'Store 库存 仓库 容量 货舱 只读',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '`planet.groundStore`、`planet.stationStore`、`station.store` 与 `ship.store` 均实现统一的 `Store` 只读接口。支持直接通过物品 ID 下标读取持有数量，或调用容量查询方法。',
+      },
+      {
+        kind: 'syntax',
+        code: 'interface Store {\n  readonly [resourceType: string]: number | undefined;\n  getCapacity(resource?: string): number | null;\n  getUsedCapacity(resource?: string): number | null;\n  getFreeCapacity(resource?: string): number | null;\n}',
+      },
+      {
+        kind: 'methods',
+        rows: [
+          { signature: 'store.getCapacity(resource?: string)', returns: 'number | null', desc: '获取容器总容量（仅飞船货舱有有限容量，地面仓与站仓返回 null）', id: 'Store.getCapacity' },
+          { signature: 'store.getUsedCapacity(resource?: string)', returns: 'number | null', desc: '获取已用容量或指定物品持有量', id: 'Store.getUsedCapacity' },
+          { signature: 'store.getFreeCapacity(resource?: string)', returns: 'number | null', desc: '获取剩余可用容量（地面仓与站仓返回 null）', id: 'Store.getFreeCapacity' },
+        ],
+      },
+      {
+        kind: 'note',
+        level: 'info',
+        title: '下标读取与 Object.keys 行为',
+        text: '通过 `store[item]` 读取时：合法物品但未持有返回 `0`，非法物品名返回 `undefined`。`Object.keys(store)` 只会枚举持有量 `> 0` 的物品键。所有写操作（如 `store.steel = 0`）均会被静默拒绝。',
+      },
+      {
+        kind: 'example',
+        caption: '列出飞船货舱占用与明细',
+        code: `module.exports.loop = function () {
+  const ship = Object.values(Game.ships)[0];
+  if (!ship) return;
+
+  console.log('货舱占用:', ship.store.getUsedCapacity(), '/', ship.store.getCapacity());
+  for (const item of Object.keys(ship.store)) {
+    console.log('装载:', item, ship.store[item]);
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Store.getCapacity', id: 'Store.getCapacity' },
+          { label: 'Store.getUsedCapacity', id: 'Store.getUsedCapacity' },
+          { label: 'Store.getFreeCapacity', id: 'Store.getFreeCapacity' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Store.getCapacity',
+    title: 'getCapacity',
+    group: '实体与数据结构',
+    parent: 'Store',
+    kind: '方法',
+    summary: '返回库存容器的总容量上限（无上限仓库返回 null）',
+    keywords: 'Store.getCapacity 容量 上限',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '查询当前 `Store` 容器的总容量。飞船货舱返回对应的数值上限（如 `40`、`120`、`360`）；行星地面仓与空间站仓库没有容量限制，始终返回 `null`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'store.getCapacity(resource?: string): number | null',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'resource', type: 'string', required: 'optional', desc: '可选物品 ID；若传入非法物品 ID 则返回 `null`' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'number | null',
+        desc: '飞船货舱返回总容量数字；星球地面仓、站点仓或传入非法物品 ID 时返回 `null`',
+      },
+      {
+        kind: 'example',
+        caption: '检查飞船总载货容量',
+        code: `module.exports.loop = function () {
+  const ship = Object.values(Game.ships)[0];
+  if (ship) {
+    console.log('总容量:', ship.store.getCapacity());
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Store', id: 'Store' },
+          { label: 'Store.getUsedCapacity', id: 'Store.getUsedCapacity' },
+          { label: 'Store.getFreeCapacity', id: 'Store.getFreeCapacity' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Store.getUsedCapacity',
+    title: 'getUsedCapacity',
+    group: '实体与数据结构',
+    parent: 'Store',
+    kind: '方法',
+    summary: '返回全部库存总量或指定物品的持有数量',
+    keywords: 'Store.getUsedCapacity 库存 数量 已用容量',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '不传参数时返回该 `Store` 内所有物品的数量总和；传入合法物品 ID 时返回该物品的持有数量（未持有返回 `0`）。',
+      },
+      {
+        kind: 'syntax',
+        code: 'store.getUsedCapacity(resource?: string): number | null',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'resource', type: 'string', required: 'optional', desc: '可选物品 ID 或 `RESOURCE_*` 常量；省略时统计全部物品总量' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'number | null',
+        desc: '不传参时返回所有物品总件数；传入合法物品 ID 时返回该物品持有数（`>= 0`）；传入未知物品 ID 时返回 `null`',
+      },
+      {
+        kind: 'example',
+        caption: '查询母星地面仓的钢材数量',
+        code: `module.exports.loop = function () {
+  const home = Game.planets[Game.company.homePlanetId];
+  if (home) {
+    console.log('钢材库存:', home.groundStore.getUsedCapacity(RESOURCE_STEEL));
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Store', id: 'Store' },
+          { label: 'Store.getCapacity', id: 'Store.getCapacity' },
+          { label: 'Store.getFreeCapacity', id: 'Store.getFreeCapacity' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Store.getFreeCapacity',
+    title: 'getFreeCapacity',
+    group: '实体与数据结构',
+    parent: 'Store',
+    kind: '方法',
+    summary: '返回库存容器的剩余可用容量（无上限仓库返回 null）',
+    keywords: 'Store.getFreeCapacity 剩余容量 可用空间',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '计算 `max(0, 总容量 - 已用总量)`。仅当容器存在有限容量（如飞船货舱）时返回非负整数，行星地面仓与空间站仓库返回 `null`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'store.getFreeCapacity(resource?: string): number | null',
+      },
+      {
+        kind: 'params',
+        rows: [
+          { name: 'resource', type: 'string', required: 'optional', desc: '可选物品 ID；若传入非法物品 ID 则返回 `null`' },
+        ],
+      },
+      {
+        kind: 'returns',
+        type: 'number | null',
+        desc: '飞船货舱返回剩余可装载件数；无容量限制仓库或传入非法物品 ID 时返回 `null`',
+      },
+      {
+        kind: 'example',
+        caption: '读取飞船剩余货舱容量',
+        code: `module.exports.loop = function () {
+  const ship = Object.values(Game.ships)[0];
+  if (ship) {
+    console.log('剩余空间:', ship.store.getFreeCapacity());
+  }
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Store', id: 'Store' },
+          { label: 'Store.getCapacity', id: 'Store.getCapacity' },
+          { label: 'Store.getUsedCapacity', id: 'Store.getUsedCapacity' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'RecipeInfo',
+    title: 'RecipeInfo',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '由 Game.getRecipe 返回的静态配方定义对象',
+    keywords: 'RecipeInfo 配方 inputs outputs cycleTicks powerCost laborCost',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '描述一条生产配方的归属建筑、周期、电耗、基础工资以及每周期投入产出清单。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'id', type: 'string', desc: '配方 ID' },
+          { name: 'buildingId', type: 'string', desc: '该配方适用的建筑类型 ID' },
+          { name: 'cycleTicks', type: 'number', desc: '一个完整生产周期所需的 tick 数' },
+          { name: 'powerCost', type: 'number', desc: '每个周期开始时消耗的 `power` 数量' },
+          { name: 'laborCost', type: 'number', desc: '每个周期开始时的基础工资（实际扣款为 `laborCost × Game.cpi`）' },
+          { name: 'inputs', type: 'Array<{ item: string; qty: number }>', desc: '每周期开始时消耗的原料清单' },
+          { name: 'outputs', type: 'Array<{ item: string; qty: number }>', desc: '每周期结束时产出的成品清单（实际产量再乘以 `building.efficiency` 四舍五入）' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.getRecipe', id: 'Game.getRecipe' },
+          { label: 'Building.setRecipe', id: 'Building.setRecipe' },
+          { label: '默认世界建筑与配方', id: 'constants/world-catalog' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'MarketOrder',
+    title: 'MarketOrder',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '市场订单簿中的一条活跃限价挂单对象',
+    keywords: 'MarketOrder 挂单 订单 order buy sell price amount totalAmount ownerId',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '`Game.market.orders`、`Game.market.getAllOrders` 与 `PublicCompanyDetail.openOrders` 返回的挂单结构。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'id', type: 'string', desc: '订单 ID（数字字符串）' },
+          { name: 'created', type: 'number', desc: '挂单创建时的 tick 序号' },
+          { name: 'type', type: "'buy' | 'sell'", desc: '订单方向（`ORDER_BUY` 或 `ORDER_SELL`）' },
+          { name: 'resourceType', type: 'string', desc: '物品 ID' },
+          { name: 'stationId', type: 'string', desc: '挂单所在站点 ID' },
+          { name: 'price', type: 'number', desc: '限价单价（信用点）' },
+          { name: 'amount', type: 'number', desc: '当前剩余未成交数量' },
+          { name: 'totalAmount', type: 'number', desc: '下单时的初始总数量' },
+          { name: 'ownerId', type: 'string', desc: '挂单方公司 ID（行星需求买单形如 `\'PLANET:P2\'`）' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.orders', id: 'Game.market.orders' },
+          { label: 'Game.market.getAllOrders', id: 'Game.market.getAllOrders' },
+          { label: 'Game.market.deal', id: 'Game.market.deal' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'MarketQuote',
+    title: 'MarketQuote',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '由 Game.market.quote 返回的站点物品盘口行情快照',
+    keywords: 'MarketQuote 行情 买一 卖一 bestBid bestAsk emaFast emaSlow vol50t',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '聚合某个站点上某种物品的盘口最优买卖价、最近成交价、均线与近期成交量。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'stationId', type: 'string', desc: '站点 ID' },
+          { name: 'resourceType', type: 'string', desc: '物品 ID' },
+          { name: 'bestBid', type: 'number | null', desc: '当前最高买价；买盘为空时为 `null`' },
+          { name: 'bestAsk', type: 'number | null', desc: '当前最低卖价；卖盘为空时为 `null`' },
+          { name: 'lastPrice', type: 'number', desc: '最近一次成交价格（未成交过时为基准参考价）' },
+          { name: 'emaFast', type: 'number', desc: '快指数移动均线' },
+          { name: 'emaSlow', type: 'number', desc: '慢指数移动均线' },
+          { name: 'vol50t', type: 'number', desc: '最近 50 个 tick 内的累计成交量' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.quote', id: 'Game.market.quote' },
+          { label: 'Game.market.depth', id: 'Game.market.depth' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'RouteCost',
+    title: 'RouteCost',
+    group: '实体与数据结构',
+    kind: '类型',
+    summary: '由 Game.market.calcRoute 返回的航线耗时与基准油耗对象',
+    keywords: 'RouteCost 航线 ticks fuel 耗时 燃料',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '表示两地之间单程航线的飞行周期与小船满耐久基准油耗。',
+      },
+      {
+        kind: 'fields',
+        rows: [
+          { name: 'ticks', type: 'number', desc: '单程所需 tick 数（按小船满耐久估算）' },
+          { name: 'fuel', type: 'number', desc: '所需燃料数量（按小船估算；地面 ↔ 轨道段中/大船分别按 2 倍/4 倍计）' },
+        ],
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.market.calcRoute', id: 'Game.market.calcRoute' },
+          { label: 'Ship.dispatch', id: 'Ship.dispatch' },
         ],
       },
     ],
@@ -160,29 +879,36 @@ export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'PublicLandPlot',
     title: 'PublicLandPlot',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '行星表面的公开地理格点（城市、已开发企业地、在售挂牌与未开发空地）。',
-    keywords: 'PublicLandPlot slotId lat lon 地块 坐标 地形 加成 归属 挂牌',
+    summary: '行星表面公开格点结构，由 Game.market.getLandPlots 返回',
+    keywords: 'PublicLandPlot 地块 格点 slotId lat lon status isCity cityName price',
     blocks: [
       {
         kind: 'prose',
-        text: '通过 `Game.market.getLandPlots(planetId)` 返回的公开地表数组元素。用于先看坐标、地形、加成和归属，再传 `slotId` 或 `listingId` 调用 `Game.buyPlot`。',
+        text: '代表行星表面的一个永久地理格点（城市、未开发空地、在售挂牌地或私有地块）。可用于购买一手或二手地前的全星选址分析。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'slotId', type: 'number', desc: '永久位置编号（用于购买一手空地）。' },
-          { name: 'planetId', type: 'string', desc: '所属星球 id。' },
-          { name: 'lat / lon', type: 'number', desc: '行星表面经纬度坐标。' },
-          { name: 'terrainName', type: 'string', desc: '地形名称。' },
-          { name: 'capacity / usedSlots', type: 'number', desc: '可用建筑槽位数 / 已占槽位数。' },
-          { name: 'buildingMods', type: 'Record<string, number>', desc: '各类设施在该位置的效率乘数。' },
-          { name: 'status', type: '"city" | "unclaimed" | "listed" | "owned"', desc: '地块公开状态。' },
-          { name: 'ownerId / ownerName', type: 'string | null', desc: '当前归属公司（未开发或城市区为 null）。' },
-          { name: 'buildings', type: 'string[]', desc: '该位置已公开建造的设施类型 id 列表。' },
-          { name: 'listingId', type: 'string | null', desc: '若处于挂牌状态，对应的二手挂牌 id。' },
-          { name: 'price', type: 'number | null', desc: '空地为当前一手地价，挂牌为要价，其余为 null。' },
+          { name: 'slotId', type: 'number', desc: '行星表面永久位置编号（购买一手空地时传给 `Game.buyPlot`）' },
+          { name: 'planetId', type: 'string', desc: '所属行星 ID' },
+          { name: 'lat', type: 'number', desc: '行星表面纬度（度）' },
+          { name: 'lon', type: 'number', desc: '行星表面经度（度）' },
+          { name: 'terrainName', type: 'string', desc: '地形名称' },
+          { name: 'capacity', type: 'number', desc: '可用建筑槽位数' },
+          { name: 'usedSlots', type: 'number', desc: '已占用建筑槽位数' },
+          { name: 'buildingMods', type: 'Record<string, number>', desc: '各建筑类型在该格点的效率乘数' },
+          { name: 'status', type: "'city' | 'unclaimed' | 'listed' | 'owned'", desc: '格点公开状态：城市 / 未开发 / 二手挂牌 / 已私有' },
+          { name: 'isCity', type: 'boolean', desc: '是否为城市规划区（不可购买）' },
+          { name: 'cityName', type: 'string | null', desc: '若为城市区则为城市名称，否则为 `null`' },
+          { name: 'ownerId', type: 'string | null', desc: '当前归属公司 ID；未开发空地或城市区为 `null`' },
+          { name: 'ownerName', type: 'string | null', desc: '当前归属公司名称；未开发空地或城市区为 `null`' },
+          { name: 'isPlayerOwner', type: 'boolean', desc: '归属方是否为玩家公司' },
+          { name: 'plotId', type: 'string | null', desc: '已开发地块的地块 ID；未开发空地或城市区为 `null`' },
+          { name: 'listingId', type: 'string | null', desc: '若 `status === \'listed\'` 则为挂牌编号，否则为 `null`' },
+          { name: 'price', type: 'number | null', desc: '未开发空地为一手地价，挂牌地为挂牌要价，其余状态为 `null`' },
+          { name: 'buildings', type: 'string[]', desc: '该格点上已建成的建筑类型 ID 列表' },
         ],
       },
       {
@@ -198,25 +924,28 @@ export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'PublicCompanySummary',
     title: 'PublicCompanySummary',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '公司公开摘要条目（母星、公开净流动资产、地块/建筑/飞船/挂单规模）。',
-    keywords: 'PublicCompanySummary 公司 摘要 排行榜 净流动资产',
+    summary: '全星系公司公开摘要条目，由 Game.market.listCompanies 返回',
+    keywords: 'PublicCompanySummary 公司摘要 排行 netLiquid shipsBySize',
     blocks: [
       {
         kind: 'prose',
-        text: '由 `Game.market.listCompanies(filter)` 返回的公司公开摘要。不包含职业、现金/存款/负债明细、仓库库存及飞船航线等隐私。',
+        text: '提供任意公司的公开经营规模摘要。出于商业保密，不包含现金/储蓄/负债明细、仓库库存或具体在产配方。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'id / name', type: 'string', desc: '公司 id 与名称。' },
-          { name: 'isPlayer', type: 'boolean', desc: '是否为玩家控制公司。' },
-          { name: 'homePlanetId', type: 'string', desc: '所属母星 id。' },
-          { name: 'netLiquid', type: 'number', desc: '公开净流动资产。' },
-          { name: 'plotsCount / buildingsCount', type: 'number', desc: '名下地块数 / 建筑总数。' },
-          { name: 'shipsCount / shipsBySize', type: 'number / { small, medium, large }', desc: '登记飞船总数及各型号数量。' },
-          { name: 'openOrdersCount', type: 'number', desc: '当前全星系活跃公开挂单数量。' },
+          { name: 'id', type: 'string', desc: '公司 ID' },
+          { name: 'name', type: 'string', desc: '公司名称' },
+          { name: 'isPlayer', type: 'boolean', desc: '是否为玩家公司' },
+          { name: 'homePlanetId', type: 'string', desc: '所属母星 ID' },
+          { name: 'netLiquid', type: 'number', desc: '公开净流动资产估值（信用点）' },
+          { name: 'plotsCount', type: 'number', desc: '名下地块总数' },
+          { name: 'buildingsCount', type: 'number', desc: '名下已完工建筑总数' },
+          { name: 'shipsCount', type: 'number', desc: '名下飞船总数' },
+          { name: 'shipsBySize', type: '{ small: number; medium: number; large: number }', desc: '按船型统计的飞船数量分布' },
+          { name: 'openOrdersCount', type: 'number', desc: '全星系当前活跃挂单数量' },
         ],
       },
       {
@@ -231,21 +960,35 @@ export const ENTITY_ENTRIES: DocEntry[] = [
   {
     id: 'PublicCompanyDetail',
     title: 'PublicCompanyDetail',
-    group: '实体',
+    group: '实体与数据结构',
     kind: '类型',
-    summary: '单家公司的完整公开商业情报（含名下地块、设施分布与公开挂单）。',
-    keywords: 'PublicCompanyDetail 公司详情 地块 建筑 挂单 净资产',
+    summary: '指定公司的完整公开商业情报，由 Game.market.getCompany 返回',
+    keywords: 'PublicCompanyDetail 公司详情 buildingCounts plots openOrders',
     blocks: [
       {
         kind: 'prose',
-        text: '由 `Game.market.getCompany(companyId)` 返回，继承 `PublicCompanySummary` 的全部字段并附加设施聚合统计、公开地块清单与全部活跃挂单。',
+        text: '包含目标公司的全部公开摘要字段以及名下地块建筑明细与活跃挂单。',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'buildingCounts', type: 'Record<string, number>', desc: '按建筑类型汇总的数量映射。' },
-          { name: 'plots', type: 'Array<{ planetId, slotId, plotId, lat, lon, terrainName, capacity, usedSlots, status, listingId, price, buildings }>', desc: '名下全部公开地块与各块地已建建筑类型列表。' },
-          { name: 'openOrders', type: 'MarketOrder[]', desc: '该公司在各空间站的全部活跃公开挂单。' },
+          { name: 'id', type: 'string', desc: '公司 ID' },
+          { name: 'name', type: 'string', desc: '公司名称' },
+          { name: 'isPlayer', type: 'boolean', desc: '是否为玩家公司' },
+          { name: 'homePlanetId', type: 'string', desc: '所属母星 ID' },
+          { name: 'netLiquid', type: 'number', desc: '公开净流动资产估值（信用点）' },
+          { name: 'plotsCount', type: 'number', desc: '名下地块总数' },
+          { name: 'buildingsCount', type: 'number', desc: '名下已完工建筑总数' },
+          { name: 'shipsCount', type: 'number', desc: '名下飞船总数' },
+          { name: 'shipsBySize', type: '{ small: number; medium: number; large: number }', desc: '按船型统计的飞船数量分布' },
+          { name: 'buildingCounts', type: 'Record<string, number>', desc: '按建筑类型汇总的设施数量映射' },
+          {
+            name: 'plots',
+            type: "Array<{ planetId: string; slotId: number; plotId: string | null; lat: number; lon: number; terrainName: string; capacity: number; usedSlots: number; status: 'owned' | 'listed'; listingId: string | null; price: number | null; buildings: string[] }>",
+            desc: '名下全部公开地块与各地块上的建筑列表',
+          },
+          { name: 'openOrdersCount', type: 'number', desc: '全星系活跃公开挂单数' },
+          { name: 'openOrders', type: 'MarketOrder[]', desc: '该公司在各站点的全部活跃公开挂单数组' },
         ],
       },
       {
@@ -254,393 +997,6 @@ export const ENTITY_ENTRIES: DocEntry[] = [
           { label: 'Game.market.getCompany', id: 'Game.market.getCompany' },
           { label: 'PublicCompanySummary', id: 'PublicCompanySummary' },
           { label: 'MarketOrder', id: 'MarketOrder' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'Building',
-    title: 'Building',
-    group: '实体',
-    kind: '类型',
-    summary: '自己厂里的一栋生产建筑：按配方消耗原料、产出成品，可开机停产、可热换配方。',
-    keywords: 'Building 建筑 工厂 生产 配方 recipe 开机 停产 efficiency progress cycleTicks setRecipe setActive',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '生产建筑每 tick 推进 `progress`，跑满 `cycleTicks` 就消耗一批 `inputs` 并产出 `outputs`（配方定义见 RecipeInfo）。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'id', type: 'string', desc: '建筑 id。' },
-          { name: 'type', type: 'string', desc: '建筑类型，如 `"mine_smelter"`。' },
-          { name: 'plotId', type: 'string', desc: '所在的地块 id。' },
-          { name: 'planetId', type: 'string', desc: '所在星球 id。' },
-          { name: 'efficiency', type: 'number', desc: '当前效率 = 地块地形修正 × 职业加成，保留两位小数。' },
-          { name: 'recipeId', type: 'string', desc: '当前绑定的配方 id。' },
-          { name: 'active', type: 'boolean', desc: '是否开机生产。' },
-          { name: 'progress', type: 'number', desc: '当前周期已经跑了多少 tick。' },
-          { name: 'cycleTicks', type: 'number', desc: '当前配方的总周期 tick。' },
-        ],
-      },
-      {
-        kind: 'syntax',
-        code: 'building.setRecipe(recipeId: string): number\nbuilding.setActive(active: boolean): number',
-      },
-      {
-        kind: 'params',
-        rows: [
-          { name: 'recipeId', type: 'string', required: true, desc: '要换上的配方 id（`setRecipe`）。' },
-          { name: 'active', type: 'boolean', required: true, desc: 'true 开机，false 停产（`setActive`）。' },
-        ],
-      },
-      {
-        kind: 'returns',
-        type: 'number',
-        desc: '成功返回 `OK`（0），失败返回负数错误码，见下表。',
-      },
-      {
-        kind: 'errors',
-        rows: [
-          { code: 'ERR_INVALID_ARGS', when: '参数类型不对，例如 `setActive("true")` 传了字符串而不是布尔。' },
-          { code: 'ERR_NOT_OWNER', when: '这栋建筑不属于本公司。' },
-          { code: 'ERR_NOT_FOUND', when: '配方 id 不存在（拿 `Game.getRecipe()` 先确认）。' },
-          { code: 'ERR_INVALID_TARGET', when: '仅 `setRecipe`：这个配方不属于该建筑类型。' },
-          { code: 'ERR_FULL', when: '本 tick 的 32 条 Intent 已经用满，这条没能入队。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`setRecipe` 立即改 `recipeId`，但**进度不清零**：当前周期跑满时按**新配方**结算 outputs。停产（`setActive(false)`）只付轻待机电费，比空转便宜。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '返回 `OK` 只表示 Intent 进了本 tick 的缓冲；这一 tick 里读 `building.recipeId` / `building.active` 还是旧值。',
-      },
-      {
-        kind: 'example',
-        caption: '批量把停机的冶炼厂换成新配方并开机',
-        code: "const STEEL_RECIPE = 'steel_ingot'; // 换成你配方表里真实存在的 id\n\nfor (const b of Object.values(Game.buildings)) {\n  if (b.type !== 'mine_smelter' || b.active) continue;\n\n  const code = b.setRecipe(STEEL_RECIPE);\n  if (code !== OK) {\n    console.log('换配方失败', b.id, code);\n    continue;\n  }\n  b.setActive(true);\n}",
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'RecipeInfo', id: 'RecipeInfo' },
-          { label: 'Plot', id: 'Plot' },
-          { label: 'quotas', id: 'quotas' },
-          { label: 'execution', id: 'execution' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'Ship',
-    title: 'Ship',
-    group: '实体',
-    kind: '类型',
-    summary: '往返于地面、轨道站与 Hub 之间的运输船：一次派一段单程，可混装多种货。',
-    keywords: 'Ship 飞船 运输 dispatch 派船 cargo 载重 durability 耐久 repair 维修 location busyUntil isBusy',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '运输单元。一次 `dispatch` 走一段单程（`P2` 地面 ↔ `ST:P2` 轨道站、轨道站 ↔ `ST:HUB`），同一艘船可以混装多种货物。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'id', type: 'string', desc: '飞船 id。' },
-          { name: 'size', type: "'small' | 'medium' | 'large'", desc: '船型。' },
-          { name: 'capacity', type: 'number', desc: '货舱总容量（`store.getCapacity()` 也返回它）。' },
-          { name: 'durability', type: 'number', desc: '耐久 0..100。' },
-          { name: 'location', type: 'string', desc: '当前位置：`"P2"` 地面、`"ST:P2"` 轨道站、`"ST:HUB"` Hub。' },
-          { name: 'busyUntil', type: 'number', desc: '上次派船算出的预计到达 tick；**到站后不会清零**，空闲判据只看 `isBusy`。' },
-          { name: 'isBusy', type: 'boolean', desc: '是否在途。' },
-          { name: 'store', type: 'Store', desc: '货舱。' },
-        ],
-      },
-      {
-        kind: 'syntax',
-        code: 'ship.dispatch(from: string, to: string, cargo: Record<string, number>): number\nship.repair(): number',
-      },
-      {
-        kind: 'params',
-        rows: [
-          {
-            name: 'from',
-            type: 'string',
-            required: true,
-            desc: '出发地，`"P2"` / `"ST:P2"` / `"ST:HUB"`；必须等于船当前的 location，否则 `ERR_NOT_IN_RANGE`。',
-          },
-          { name: 'to', type: 'string', required: true, desc: '目的地，取值同上；和 from 相同时只会得到 `ERR_NO_PATH`，不是专门的参数错误。' },
-          {
-            name: 'cargo',
-            type: 'Record<string, number>',
-            required: true,
-            desc: '混装货物，如 `{ steel: 20, building_mat: 10 }`。总量不能超过货舱**总容量**（不扣舱内已有货物）。',
-          },
-        ],
-      },
-      {
-        kind: 'returns',
-        type: 'number',
-        desc: '`dispatch` / `repair` 都是成功返回 `OK`（0），失败返回负错误码。',
-      },
-      {
-        kind: 'errors',
-        rows: [
-          { code: 'ERR_INVALID_ARGS', when: 'shipId 解析失败、cargo 不是对象或为空、物品未知、数量 ≤ 0 或取整后为 0。未知地点不报这个码（见下两行）。' },
-          { code: 'ERR_NOT_OWNER', when: '船不是本公司的。' },
-          { code: 'ERR_BUSY', when: '船还在路上（`isBusy` 为 true），到达前不能再派。' },
-          { code: 'ERR_NOT_IN_RANGE', when: 'from 与船当前 location 不一致。' },
-          { code: 'ERR_NO_PATH', when: 'from 到 to 没有可行航线。' },
-          { code: 'ERR_FULL', when: '货物总量超过货舱总容量，或本 tick 的 32 条 Intent 已满。' },
-          { code: 'ERR_NOT_ENOUGH_RESOURCES', when: '出发地燃料不足；仅当 catalog 给这条航线配了 fuel_item。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '到达后 `location` 变成目的地、`isBusy` 自动变 false，但 `busyUntil` **保留上次到达 tick、不会清零**——不要用 `busyUntil === 0` 判断空闲。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '本 tick 里刚 `dispatch` 完立刻读 `ship.isBusy` 仍是 false —— 写入要等 Phase 2 落账（见 execution）。',
-      },
-      {
-        kind: 'example',
-        caption: '把地面仓的钢运到轨道站，顺便修耐久低的船',
-        code: "for (const ship of Object.values(Game.ships)) {\n  if (ship.isBusy) continue;\n\n  if (ship.durability < 40) {\n    const code = ship.repair();\n    if (code !== OK) console.log('修理失败', ship.id, code);\n    continue;\n  }\n\n  if (ship.location !== 'P2') continue;\n\n  const code = ship.dispatch('P2', 'ST:P2', { steel: 20 });\n  if (code !== OK) console.log('派船失败', ship.id, code);\n}",
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'Store', id: 'Store' },
-          { label: 'RouteCost', id: 'RouteCost' },
-          { label: 'Station', id: 'Station' },
-          { label: 'execution', id: 'execution' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'Store',
-    title: 'Store',
-    group: '实体',
-    kind: '类型',
-    summary: '库存容器（星球仓、站仓、飞船货舱共用），只读：读得到量，写不进去。',
-    keywords: 'Store 库存 仓库 容量 getCapacity getUsedCapacity getFreeCapacity 货舱',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '统一的库存容器。`planet.groundStore`、`planet.stationStore`、`station.store`、`ship.store` 都是它。**只读 Proxy**：写入不会生效，货物只能靠引擎搬。',
-      },
-      {
-        kind: 'syntax',
-        code: 'store[item]: number | undefined\nstore.getCapacity(resource?: string): number | null\nstore.getUsedCapacity(resource?: string): number | null\nstore.getFreeCapacity(resource?: string): number | null',
-      },
-      {
-        kind: 'prose',
-        text: '下标读 `store[item]`：没持有该物品返回 `0`；物品名非法返回 `undefined`。方法版不一样：`getUsedCapacity(非法物品名)` 返回 `null`，合法但未持有返回 `0`。',
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '星球仓与站仓的 `getCapacity()` 恒为 `null`（没有容量上限），`getFreeCapacity()` 同理；只有飞船货舱返回真实数值。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '写 `store[item] = n` 或 `delete store[item]` 返回 `false`：松散模式下静默无效，`"use strict"` 下会抛 TypeError。',
-      },
-      {
-        kind: 'note',
-        level: 'danger',
-        text: '脚本**不在严格模式**（`require` 用 `new Function` 执行），所以写库存不会报错，只会悄悄什么都没发生——别用它来"清空仓"。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '`ownKeys` 只列出数量 > 0 的键：`Object.keys(store)` 看不到数量为 0 的物品，"有记录但为 0"和"从没有过"在遍历里没区别。',
-      },
-      {
-        kind: 'example',
-        caption: '统计货舱占用并列出明细',
-        code: "const ship = Object.values(Game.ships)[0];\nif (!ship) return;\n\nconst store = ship.store;\nconst cap = store.getCapacity();\nconst used = store.getUsedCapacity();\nconsole.log('载重', used, '/', cap);\n\nfor (const item of Object.keys(store)) {\n  const qty = store[item];\n  if (qty > 0) console.log(item, qty);\n}",
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'Planet', id: 'Planet' },
-          { label: 'Ship', id: 'Ship' },
-          { label: 'Station', id: 'Station' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'RecipeInfo',
-    title: 'RecipeInfo',
-    group: '实体',
-    kind: '类型',
-    summary: '静态配方表的一条：周期、电费、工资、消耗什么、产出什么。',
-    keywords: 'RecipeInfo 配方 recipe 生产 投入 产出 inputs outputs cycleTicks powerCost laborCost getRecipe',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '由 `Game.getRecipe(recipeId)` 读取的静态配方表条目（查不到返回 `null`）。拿它和 MarketQuote 一起算，就能判断一条配方值不值得开。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'id', type: 'string', desc: '配方 id。' },
-          { name: 'buildingId', type: 'string', desc: '该配方归属的建筑（只有这种建筑能用它）。' },
-          { name: 'cycleTicks', type: 'number', desc: '一个生产周期占多少 tick。' },
-          { name: 'powerCost', type: 'number', desc: '每周期电费。' },
-          { name: 'laborCost', type: 'number', desc: '每周期工资。' },
-          { name: 'inputs', type: 'Array<{ item: string; qty: number }>', desc: '每周期消耗的原料。' },
-          { name: 'outputs', type: 'Array<{ item: string; qty: number }>', desc: '每周期产出的成品。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '把不属于该建筑的配方塞给 `setRecipe`，会得到 `ERR_INVALID_TARGET`——先对一下 `buildingId`。',
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '粗算利润：outputs 按当前 quote 估价 − inputs 成本 − `powerCost` − `laborCost`，再除以 `cycleTicks` 得每 tick 收益。',
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'Building', id: 'Building' },
-          { label: 'MarketQuote', id: 'MarketQuote' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'MarketOrder',
-    title: 'MarketOrder',
-    group: '实体',
-    kind: '类型',
-    summary: '市场里的一条挂单：方向、物品、站点、价格与剩余数量。',
-    keywords: 'MarketOrder 挂单 订单 order buy sell 市场 amount totalAmount price',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '`Game.market.orders` 中只包含**本公司**的活跃挂单；要扫全市场，用 `Game.market.getAllOrders(filter)` 按站点、物品、方向筛选。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'id', type: 'string', desc: '订单 id。' },
-          { name: 'created', type: 'number', desc: '创建时的 tick。' },
-          { name: 'type', type: "'buy' | 'sell'", desc: '买还是卖。' },
-          { name: 'resourceType', type: 'string', desc: '物品 id。' },
-          { name: 'stationId', type: 'string', desc: '所在站点 id。' },
-          { name: 'price', type: 'number', desc: '挂单价格。' },
-          { name: 'amount', type: 'number', desc: '**剩余**数量，成交会变少。' },
-          { name: 'totalAmount', type: 'number', desc: '下单时的总量。' },
-          { name: 'ownerId', type: 'string', desc: '所属公司的 id。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`amount` 是"还剩多少"，`totalAmount` 才是最初挂的量；算成交进度用 `1 - amount / totalAmount`。',
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '本公司全星系活跃挂单上限 64 条，到顶后 `createOrder` 返回 `ERR_FULL`（见 quotas）。',
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'MarketQuote', id: 'MarketQuote' },
-          { label: 'quotas', id: 'quotas' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'MarketQuote',
-    title: 'MarketQuote',
-    group: '实体',
-    kind: '类型',
-    summary: '某个站点、某种物品的行情快照：买一卖一、最新价、两条均线和近期成交量。',
-    keywords: 'MarketQuote 行情 报价 quote 买一 卖一 bestBid bestAsk ema fast slow vol50t 成交量',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '用 `Game.market.quote(stationId, resourceType)` 拿到的一条行情快照。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'stationId', type: 'string', desc: '站点 id。' },
-          { name: 'resourceType', type: 'string', desc: '物品 id。' },
-          { name: 'bestBid', type: 'number | null', desc: '最高买价；null 表示买单侧没有挂单。' },
-          { name: 'bestAsk', type: 'number | null', desc: '最低卖价；null 表示卖单侧没有挂单。' },
-          { name: 'lastPrice', type: 'number', desc: '最近成交价。' },
-          { name: 'emaFast', type: 'number', desc: '快指数均线。' },
-          { name: 'emaSlow', type: 'number', desc: '慢指数均线。' },
-          { name: 'vol50t', type: 'number', desc: '近 50 tick 的成交量，用来判断流动性。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`bestBid` / `bestAsk` 为 `null` 表示那一侧**没有挂单**，不是 0；算价差前先两边都判非空。',
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`emaFast` 上穿 `emaSlow` 常拿来当上涨信号；`vol50t` 太小说明盘口薄，别下大单砸自己。',
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'MarketOrder', id: 'MarketOrder' },
-          { label: 'RecipeInfo', id: 'RecipeInfo' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'RouteCost',
-    title: 'RouteCost',
-    group: '实体',
-    kind: '类型',
-    summary: '一条航线的成本估算：要走几 tick、烧多少燃料。',
-    keywords: 'RouteCost 航线 航程 calcRoute 航耗 fuel ticks 燃料',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '由 `Game.market.calcRoute(fromId, toId)` 返回。派船前先用它估成本，再决定这条线划不划算。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'ticks', type: 'number', desc: '航程 tick 数。' },
-          { name: 'fuel', type: 'number', desc: '燃料消耗。' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '没有可行航线时 `calcRoute` 返回 `null`（不抛错）——这也正是 `dispatch` 返回 `ERR_NO_PATH` 的来源。',
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'Ship', id: 'Ship' },
         ],
       },
     ],

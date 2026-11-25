@@ -12,7 +12,7 @@
    - 支持玩家维护多份代码模块（例如 `main.js`、`market.js`、`logistics.js`），通过 `require('market')` 加载，从内存文档加载器解析。
 2. **资源硬隔离**
    - 单玩家 QuickJS Runtime 硬上限：**堆内存 `4 MB`**，单回合执行中断：**`5 ms`**（或等价指令配额），超时由 Rust `interrupt_handler` 立即熔断。
-   - **按需惰性读取（Lazy Proxy）**：不把整张星系订单簿与星球详情预先序列化进 JS 堆；`Game.market`、`Game.planets` 等只在脚本真正读取对应属性/调用查询方法时才跨 FFI 抓取轻量快照。
+   - **按需惰性读取（`Game.market` FFI 查询）**：不把整张星系订单簿、盘口深度、公开地块与公司列表预先序列化进 JS 堆；`Game.planets` 等核心自身快照随启动注入，而 `Game.market.quote` / `depth` / `getAllOrders` / `calcRoute` / `getLandPlots` / `listCompanies` / `getCompany` 与 `Game.getRecipe` 只在脚本实际调用时才跨 FFI 抓取轻量快照。
    - **`Memory` 持久化**：独立于玩家全局对象之外的 JSON 树，单玩家上限 **`128 KB`**，每回合结束自动序列化落盘 SQLite WAL。
    - **`console` 日志收集**：劫持 `globalThis.console.{log,warn,error}`，单回合最多保留 `200` 条、单条最长 `1 KB`，推送给前端控制台面板，超出截断报错防刷爆内存。
    - **Action 配额**：单家公司每 tick 最多提交 **`32` 条有效 Intent**（防止垃圾循环挂单拖垮盘口）；每位参与者全星系活跃挂单总数上限 **`64` 单**。
@@ -52,8 +52,8 @@ declare const RESOURCES_ALL: readonly string[];
 
 ## 三、Player JS API（`TypeScript` 契约定义）
 
-此接口同时作为前端 **CodeMirror 6 智能补全（`.d.ts`）** 的唯一来源。
-> **2026-11-23 已按 `prelude.js` / `js_runner.rs` 逐条核对**：补上 `Game.cpi` / `Game.plots` / `RetCode` / `landListings`，修正 `demands` 形状与 `quote` 可空性。可交互版本（含错误码矩阵与可运行示例）在游戏左侧「API」窗口或 `/docs/`。
+此接口与 `frontend/src/panels/ScriptIdePanel.tsx` 的 CodeMirror 6 自动补全及 `frontend/src/docs/data/*.ts`（玩家 API 文档，规范见 [API_DOCS_SPEC.md](file:///home/cxxy168/code/html/Meridian/docs/API_DOCS_SPEC.md)）保持严格同步。
+> **2026-11-25 已按 `prelude.js` / `js_runner.rs` 与 `API_DOCS_SPEC.md` 同步**：补齐 `Plot` 的 `slotId / lat / lon`，同步 `Store` 下标可为 `undefined`，并可运行 `node scripts/check-api-docs.mjs` 校验。
 
 ```ts
 /** 写方法的返回码：0 成功，负数为错误码 */
@@ -61,7 +61,7 @@ type RetCode = number;
 
 /** 通用库存容器接口 */
 interface Store {
-  readonly [resourceType: string]: number;
+  readonly [resourceType: string]: number | undefined;
   getCapacity(resource?: string): number | null;
   getFreeCapacity(resource?: string): number | null;
   getUsedCapacity(resource?: string): number | null;
@@ -317,14 +317,14 @@ declare let Memory: Record<string, any>;
 - `OK` / `ERR_*` 常量全部冻结；写方法只可能返回文档里列出的那些码。
 - 每公司每 tick 最多 **32** 条写操作（游戏界面手动操作也占这 32 条，且排在脚本之后），活跃挂单最多 **64** 条。
 - 写方法只把 Intent 写进本 tick 缓冲；Phase 2 校验失败会被静默丢弃，脚本拿不到回执。
-- `market.depth` 的快照只存 **5** 档；`calcRoute().fuel` 是按小船 × 100 耐久估算的近似值。
-- 所有 id 都是字符串；`Game` 与实体对象全部 `Object.freeze`，跨 tick 状态只能写 `Memory`。
+- `market.depth` 的快照只存 **5** 档；`calcRoute().fuel` 与 `ticks` 按小船 × 满耐久估算（地面 ↔ 轨道起降中/大船油耗为 2×/4×，耐久为 0 时耗时翻倍）。
+- 除 `slotId` 与数值型统计字段外，实体 ID（`planetId`、`plotId`、`buildingId`、`shipId`、`orderId`、`listingId`）全部为字符串；`Game` 与实体对象全部 `Object.freeze`，跨 tick 状态只能写 `Memory`。
 
 ---
 
 ## 四、Rust 内核统一 `Intent` 枚举与两段式 Tick
 
-无论来自 `meridian-sandbox::js_runner`（玩家 JS）还是 `meridian-sandbox::brain_runner`（0 硬编码自由 NPC），最终都收敛为同一种 Rust `Intent` 枚举：
+无论来自 `meridian-sandbox::js_runner`（玩家 JS）还是 `meridian-sandbox::npc`（0 硬编码自由 NPC），最终都收敛为同一种 Rust `Intent` 枚举：
 
 ```rust
 pub enum Intent {
@@ -333,7 +333,7 @@ pub enum Intent {
         side: OrderSide,
         item_id: ItemId,
         qty: u32,
-        price: f64,
+        price: Money,
     },
     CancelOrder { order_id: OrderId },
     DealOrder { order_id: OrderId, amount: u32 },
@@ -349,7 +349,7 @@ pub enum Intent {
         cargo: Vec<(ItemId, u32)>,
     },
     RepairShip { ship_id: ShipId },
-    BankOp { planet_id: PlanetId, op: BankOpKind, amount: f64 },
+    BankOp { planet_id: PlanetId, op: BankOpKind, amount: Money },
 }
 ```
 

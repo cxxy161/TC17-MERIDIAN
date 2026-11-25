@@ -1,115 +1,149 @@
 import type { DocEntry } from '../types';
 
-/**
- * 「示例」分组：可直接粘进脚本编辑器跑起来的完整套路。
- * 每个示例都遵守同一条铁律：每 tick 最多 32 条写操作，且写操作下一 tick 才生效。
- */
 export const EXAMPLE_ENTRIES: DocEntry[] = [
   {
-    id: 'example-open',
+    id: 'examples/open',
     title: '开局：买地建厂',
-    group: '示例',
-    kind: '章节',
-    summary: '买一手地块、等一个 tick 地到手、再往上盖厂的两段式起步脚本',
-    keywords: '开局 起步 买地 建厂 buyPlot buildFacility 地块 primaryLandPrice 状态机 Memory',
+    group: '实战示例',
+    kind: '指南',
+    summary: '用 Memory 状态机完成“筛选空地 → 定向买地 → 下一 tick 建厂”的两段式开局脚本',
+    keywords: '示例 开局 买地 建厂 buyPlot buildFacility 状态机 Memory',
     blocks: [
       {
         kind: 'prose',
-        text: '开局只有一块地和一点现金。先用 `Game.market.getLandPlots` 挑出矿冶加成高且未开发的 `slotId`，再用 `Game.buyPlot(planetId, { slotId })` 定向买下，下一 tick 地块出现在 `Game.plots` 里后即可 `Game.buildFacility` 建厂。脚本用 `Memory` 存两段式状态机，每 tick 只发 1 条写操作。',
+        text: '由于写操作要到下一 tick 落账后才会反映到 `Game.plots`，跨 tick 协作需要通过 `Memory` 维护状态机。下面示例先挑出母星矿冶加成最高的一手空地买下，确认地块到账后再发起建造 `mine_smelter`。',
       },
       {
         kind: 'example',
-        caption: 'main.js —— 每 tick 最多 1 条写操作',
-        code: `// 开局：查公开地块挑 slotId → 定向买地 → 下一 tick 出现在 Game.plots → 建厂。
-module.exports.loop = function () {
-  const m = (Memory.open = Memory.open || { step: 'buy', planet: Game.company.homePlanetId });
-  const plots = Object.keys(Game.plots).map((id) => Game.plots[id]);
+        caption: 'main.js —— 两段式买地建厂状态机',
+        code: `module.exports.loop = function () {
+  const m = (Memory.open = Memory.open || {
+    step: 'buy',
+    planet: Game.company.homePlanetId,
+  });
+  if (m.step === 'done') return;
+
+  const plots = Object.values(Game.plots);
 
   if (m.step === 'buy') {
-    const target = (Game.market.getLandPlots(m.planet) || [])
-      .filter((t) => t.status === 'unclaimed' && t.capacity >= 4)
+    const tiles = Game.market.getLandPlots(m.planet);
+    if (!tiles) return;
+
+    const target = tiles
+      .filter((t) => t.status === 'unclaimed' && t.capacity >= 4 && t.price !== null)
       .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
-    if (!target || target.price === null) return console.log('无可用一手空地');
-    // 留 20% 缓冲：现金校验发生在下一 tick 的 Phase 2
-    if (Game.company.cash < target.price * 1.2) return console.log('现金不够买地');
-    const ret = Game.buyPlot(m.planet, { slotId: target.slotId }); // 写操作 1/32
-    if (ret === OK) { m.step = 'wait'; m.at = Game.time; m.plotsBefore = plots.length; }
-    else console.log('buyPlot 返回', ret);
+
+    if (!target || target.price === null) {
+      console.log('无可用一手空地');
+      return;
+    }
+    if (Game.company.cash < target.price * 1.2) {
+      console.log('现金不足以买地，需保留施工费余量');
+      return;
+    }
+
+    const rc = Game.buyPlot(m.planet, { slotId: target.slotId });
+    if (rc === OK) {
+      m.step = 'wait';
+      m.at = Game.time;
+      m.plotsBefore = plots.length;
+    } else {
+      console.warn('buyPlot 返回:', rc);
+    }
     return;
   }
 
   if (m.step === 'wait') {
-    // 写操作 t+1 才落账：地块晚一个 tick 出现在 Game.plots
-    if (plots.length > m.plotsBefore) { m.step = 'build'; console.log('地到手'); }
-    else if (Game.time - m.at > 2) { m.step = 'buy'; console.log('买地没落地'); }
+    if (plots.length > m.plotsBefore) {
+      m.step = 'build';
+      console.log('新地块已到账，准备建厂');
+    } else if (Game.time - m.at > 2) {
+      m.step = 'buy';
+      console.warn('买地未落账，重新选址');
+    }
     return;
   }
 
-  // build：Game.plots 只含本公司地块，挑一个还有空位的
   const plot = plots.find((p) => p.usedSlots < p.capacity);
-  if (!plot) return console.log('地块占满，先拆旧厂');
-  const ret = Game.buildFacility(plot.id, 'mine_smelter');   // 写操作 1/32
-  m.step = 'done';
-  console.log('buildFacility', ret, '下一 tick 核对 Game.buildings');
+  if (!plot) return;
+
+  const ground = Game.planets[plot.planetId].groundStore;
+  if (ground[RESOURCE_BUILDING_MAT] < 8 || Game.company.cash < 80 * Game.cpi) {
+    console.log('等待地面仓建材或施工费就绪');
+    return;
+  }
+
+  const rc = Game.buildFacility(plot.id, 'mine_smelter');
+  if (rc === OK) {
+    m.step = 'done';
+    console.log('已提交建造任务，施工完成后建筑将出现在 Game.buildings');
+  } else {
+    console.warn('buildFacility 返回:', rc);
+  }
 };`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '`buyPlot` / `buildFacility` 返回 `OK` 只代表命令进了 Intent 缓冲：现金不够、地块名额已满、地面仓缺 `building_mat`（常见 6–8 个，船坞要 14）或拿不出 80×cpi 的施工费，都会在下一 tick 的 Phase 2 被**静默丢弃**，脚本拿不到回执。是否真成功只能下一 tick 看 `Game.plots` / `Game.buildings` 有没有变化，而且建厂还要等 `build_ticks` 才出现。',
       },
       {
         kind: 'links',
         items: [
           { label: 'Game.buyPlot', id: 'Game.buyPlot' },
           { label: 'Game.buildFacility', id: 'Game.buildFacility' },
-          { label: 'Planet', id: 'Planet' },
+          { label: '执行与落账机制', id: 'guides/execution' },
           { label: 'Memory', id: 'Memory' },
         ],
       },
     ],
   },
   {
-    id: 'example-quote',
+    id: 'examples/quote',
     title: '盯盘：报价与盘口',
-    group: '示例',
-    kind: '章节',
-    summary: '用 quote 与 depth 读价差和 5 档盘口，把阈值缓存进 Memory',
-    keywords: '盯盘 报价 盘口 quote depth bestBid bestAsk 价差 ema 只读',
+    group: '实战示例',
+    kind: '指南',
+    summary: '纯只读行情扫描：结合 quote 与 depth 计算价差并缓存交易阈值到 Memory',
+    keywords: '示例 盯盘 行情 报价 盘口 quote depth ema 价差',
     blocks: [
       {
         kind: 'prose',
-        text: '价差就是机会：`Game.market.quote` 给买卖一价、最新成交价与快慢 EMA，`Game.market.depth` 给买卖各 5 档。盯盘本身就是纯读，零写操作、零配额消耗，适合把阈值算好存进 `Memory`，让真正下单的脚本直接引用，避免每个 tick 重复判断。',
+        text: '行情查询接口不占用任何写操作配额。可以把高频计算好的参考区间缓存在 `Memory` 中，供交易模块或节流下单时直接读取。',
       },
       {
         kind: 'example',
-        caption: 'main.js —— 只读，写操作 0 条',
-        code: `// 只有读数，没有写操作；把判断结果存进 Memory 供其它脚本复用。
-const WATCH = ['steel', 'building_mat', 'ore'];
+        caption: 'main.js —— 监控母星轨道站核心商品行情',
+        code: `const WATCH = [RESOURCE_STEEL, RESOURCE_BUILDING_MAT, RESOURCE_ORE];
 
 module.exports.loop = function () {
-  // 站点 id 是 'ST:' + 行星 id；默认世界母星轨道站是 ST:P1
-  const home = 'ST:' + Game.company.homePlanetId;
+  const stationId = 'ST:' + Game.company.homePlanetId;
   Memory.watch = Memory.watch || {};
 
   for (const item of WATCH) {
-    const q = Game.market.quote(home, item);
-    if (!q) continue;                       // 该站该物品还没报价时返回 null
-    const spread = q.bestBid !== null && q.bestAsk !== null ? q.bestAsk - q.bestBid : null;
+    const q = Game.market.quote(stationId, item);
+    if (!q) continue;
+
+    const spread =
+      q.bestBid !== null && q.bestAsk !== null ? q.bestAsk - q.bestBid : null;
     const trend = q.emaFast >= q.emaSlow ? 'up' : 'down';
-    // 盘口快照只存 5 档，limit 传更大也没用
-    const d = Game.market.depth(home, item, 5);
-    const ask3 = d.asks.slice(0, 3).reduce((s, l) => s + l.price * l.qty, 0);
-    console.log(item, 'bid', q.bestBid, 'ask', q.bestAsk, 'spread', spread, trend, '卖3档值', ask3.toFixed(0));
-    // emaSlow 下方 3% 视为低估、上方 3% 视为高估，交给补料脚本用
-    Memory.watch[item] = { last: q.lastPrice, low: q.emaSlow * 0.97, high: q.emaSlow * 1.03, tick: Game.time };
+
+    const d = Game.market.depth(stationId, item, 5);
+    const ask3Value = d.asks
+      .slice(0, 3)
+      .reduce((sum, lvl) => sum + lvl.price * lvl.qty, 0);
+
+    console.log(
+      item,
+      '买一:', q.bestBid,
+      '卖一:', q.bestAsk,
+      '价差:', spread,
+      '趋势:', trend,
+      '卖3档货值:', ask3Value.toFixed(0),
+    );
+
+    Memory.watch[item] = {
+      last: q.lastPrice,
+      low: q.emaSlow * 0.97,
+      high: q.emaSlow * 1.03,
+      tick: Game.time,
+    };
   }
 };`,
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`bestBid` / `bestAsk` 可能是 `null`（冷启动、单边或该物品没挂单），先判空再算价差，否则 `null - 1` 会算出 `-1` 这种假信号。`depth` 的快照只有 5 档，`limit` 传 50 也还是 5 档。盯盘不占写操作配额，但 `console` 每 tick 上限 200 行，别在循环里刷屏。',
       },
       {
         kind: 'links',
@@ -117,143 +151,172 @@ module.exports.loop = function () {
           { label: 'Game.market.quote', id: 'Game.market.quote' },
           { label: 'Game.market.depth', id: 'Game.market.depth' },
           { label: 'Memory', id: 'Memory' },
-          { label: 'Game.market.orders', id: 'Game.market.orders' },
         ],
       },
     ],
   },
   {
-    id: 'example-restock',
-    title: '补料：按配方挂买单',
-    group: '示例',
-    kind: '章节',
-    summary: '遍历在用建筑、按配方输入算缺口、在母星轨道站挂买单，写操作计数 + break',
-    keywords: '补料 原料 配方 getRecipe 买单 createOrder 缺口 库存 计数 break',
+    id: 'examples/restock',
+    title: '补料：按配方自动挂买单',
+    group: '实战示例',
+    kind: '指南',
+    summary: '遍历在产建筑原料缺口并在母星轨道站自动挂买单，严格控制写操作配额与预算',
+    keywords: '示例 补料 原料 配方 getRecipe createOrder 计数 预算',
     blocks: [
       {
         kind: 'prose',
-        text: '建筑按配方吃料，断料就停摆。对每栋在用建筑的 `recipe.inputs` 算缺口，补到 4 个周期的量，在母星轨道站挂买单。写操作必须自己数：够 8 张就 `break`，把剩下的 24 条配额留给派船、切配方这些更急的事。',
+        text: '遍历在产建筑的配方需求，结合地面库存与在途买单计算 4 个周期的原料缺口，在母星轨道站挂买单补货。写操作在最内层严格计数，并自行扣减局部变量 `cash` 防止连续下单超支。',
       },
       {
         kind: 'example',
-        caption: 'main.js —— 写操作计数，最多 8 张买单',
-        code: `// 按当前配方算缺口，在母星轨道站挂买单补料。
-const HOME = 'ST:' + Game.company.homePlanetId;
+        caption: 'main.js —— 自动补料并严格限制最多 8 次写操作',
+        code: `module.exports.loop = function () {
+  const homeStation = 'ST:' + Game.company.homePlanetId;
+  const openOrders = Object.values(Game.market.orders);
+  let writes = 0;
+  let cash = Game.company.cash;
 
-module.exports.loop = function () {
-  const buys = Object.keys(Game.market.orders).map((k) => Game.market.orders[k]);
-  let writes = 0;                     // 本 tick 已用写操作数
-  let cash = Game.company.cash;       // 本 tick 读到的都是开盘快照，预算要自己扣
-
-  for (const id of Object.keys(Game.buildings)) {
-    if (writes >= 8) break;           // 给自己 8 单，留余量给派船/切配方
-    const b = Game.buildings[id];
+  for (const b of Object.values(Game.buildings)) {
+    if (writes >= 8) break;
     if (!b.active || !b.recipeId) continue;
+
     const recipe = Game.getRecipe(b.recipeId);
     if (!recipe) continue;
 
     for (const inp of recipe.inputs) {
-      // 已挂未成交的量（amount = 剩余）也算在手库存
-      const pending = buys
-        .filter((o) => o.type === 'buy' && o.stationId === HOME && o.resourceType === inp.item)
-        .reduce((s, o) => s + o.amount, 0);
-      const have = Game.planets[b.planetId].groundStore.getUsedCapacity(inp.item) + pending;
-      const need = inp.qty * 4 - have;        // 备 4 个周期的料
+      if (writes >= 8) break;
+      if (inp.item === 'waste') continue;
+
+      const pending = openOrders
+        .filter((o) => o.type === ORDER_BUY && o.stationId === homeStation && o.resourceType === inp.item)
+        .reduce((sum, o) => sum + o.amount, 0);
+
+      const ground = Game.planets[b.planetId].groundStore;
+      const have = ground.getUsedCapacity(inp.item) + pending;
+      const need = inp.qty * 4 - have;
       if (need <= 0) continue;
-      const q = Game.market.quote(HOME, inp.item);
+
+      const q = Game.market.quote(homeStation, inp.item);
       if (!q || q.bestAsk === null) continue;
-      const price = q.bestAsk + 0.01, cost = need * price;   // 加一分钱抢卖一
-      if (cash < cost) { console.log('现金不足', inp.item, cost); break; }
-      const ret = Game.market.createOrder({ type: 'buy', resourceType: inp.item, price, totalAmount: need, stationId: HOME });
-      if (ret === OK) { writes++; cash -= cost; }        // 写操作一处一处数
-      else if (ret === ERR_FULL) return console.log('挂单满 64 张或本 tick 写满 32 条');
-      else console.log('下单失败', inp.item, ret);       // -14 现金不足 / -7 站点或物品无效
+
+      const price = q.bestAsk + 0.01;
+      const cost = need * price;
+      if (cash < cost) continue;
+
+      const rc = Game.market.createOrder({
+        type: ORDER_BUY,
+        resourceType: inp.item,
+        price,
+        totalAmount: need,
+        stationId: homeStation,
+      });
+
+      if (rc === OK) {
+        writes += 1;
+        cash -= cost;
+      } else if (rc === ERR_FULL) {
+        console.warn('挂单上限或本 tick 写配额已满');
+        return;
+      }
     }
   }
-  if (writes) console.log('本 tick 挂了', writes, '张买单，下一 tick 才出现在 orders 里');
 };`,
       },
       {
         kind: 'note',
-        level: 'warn',
-        text: '`createOrder` 的买单在落账时按 `qty*price` 冻结现金，不够就返回 `ERR_NOT_ENOUGH_CREDITS`；活跃挂单上限 64 张，本 tick 写满 32 条也返回同一个 `ERR_FULL`。`Game.market.orders` 与 `Game.company.cash` 都是开盘快照——刚挂的单不在 `orders` 里，余额也不会变，所以预算必须用局部变量自己扣。注意引擎会拒绝与**自家反向单**交叉的新单（同站点同物品），JS 侧不判、返回 OK 后可能被静默丢弃。成交的料落在**轨道站仓**，要用船运下来才能进地面生产（见「物流」示例）。',
+        level: 'info',
+        text: '买单成交后的普通原料存放在轨道站仓库中，需要再通过 `ship.dispatch` 运回行星地面才能被地面建筑消耗。',
       },
       {
         kind: 'links',
         items: [
           { label: 'Game.getRecipe', id: 'Game.getRecipe' },
           { label: 'Game.market.createOrder', id: 'Game.market.createOrder' },
-          { label: 'Game.market.quote', id: 'Game.market.quote' },
-          { label: 'Game.buildings', id: 'Game.buildings' },
-          { label: 'ERR_FULL', id: 'ERR_FULL' },
+          { label: '物流：地面到轨道站销售', id: 'examples/logistics' },
         ],
       },
     ],
   },
   {
-    id: 'example-logistics',
-    title: '物流：地面→轨道站套利',
-    group: '示例',
-    kind: '章节',
-    summary: '地面产出运上轨道站再挂卖单：calcRoute 算燃料、dispatch 派船、船到了才卖',
-    keywords: '物流 运输 派船 dispatch calcRoute 燃料 capacity 卖单 轨道站 套利',
+    id: 'examples/logistics',
+    title: '物流：地面到轨道站销售',
+    group: '实战示例',
+    kind: '指南',
+    summary: '将行星地面产出的货物运上轨道站，并在到货后按买一价挂单出售',
+    keywords: '示例 物流 派船 dispatch calcRoute 轨道站 卖单',
     blocks: [
       {
         kind: 'prose',
-        text: '产能在行星地面，市场却在轨道站，中间隔着一次 `dispatch`。正确顺序是先 `Game.market.calcRoute` 拿到这一程要烧多少燃料，确认出发地燃料和货物都够，再一次性把货塞上船；船到了站仓，`Game.stations` 里才有这家公司的库存记录，这时才能挂卖单卖掉。',
+        text: '工厂产出落在行星地面仓，而市场挂单在轨道站结算。本示例演示如何检查站点存货卖货，并在站点缺货时先估算航线油耗、再将地面库存装船运往轨道站。',
       },
       {
         kind: 'example',
-        caption: 'main.js —— 最多 6 条写操作，一艘船一 tick 只派一次',
-        code: `// 地面产出 → 运上轨道站 → 挂卖单。写操作计数 + break 是硬习惯。
-const ITEMS = ['steel', 'building_mat'];
+        caption: 'main.js —— 地面产出运至轨道站后出货',
+        code: `const SELL_ITEMS = [RESOURCE_STEEL, RESOURCE_BUILDING_MAT];
 
 module.exports.loop = function () {
-  const pid = Game.company.homePlanetId, home = 'ST:' + pid;   // 默认世界 P1 ↔ ST:P1
-  const ground = Game.planets[pid].groundStore;
-  const station = Game.stations[home];              // 只含本公司有仓记录的站，可能 undefined
-  let writes = 0, shipUsed = false;                 // isBusy 是快照，同一艘船只能派一次
+  const pid = Game.company.homePlanetId;
+  const stationId = 'ST:' + pid;
+  const planet = Game.planets[pid];
+  if (!planet) return;
 
-  for (const item of ITEMS) {
-    if (writes >= 6) break;                         // 计数 + break，别撞 32 条上限
-    const q = Game.market.quote(home, item);
+  const ground = planet.groundStore;
+  const station = Game.stations[stationId];
+  let writes = 0;
+  let dispatchedThisTick = false;
+
+  for (const item of SELL_ITEMS) {
+    if (writes >= 6) break;
+    const q = Game.market.quote(stationId, item);
     if (!q) continue;
-    const stQty = station ? station.store.getUsedCapacity(item) : 0;
 
-    // 1) 站上有货：就着买一价挂卖单（卖单只能从站仓出货）
+    const stQty = station ? station.store.getUsedCapacity(item) : 0;
     if (stQty >= 20 && q.bestBid !== null) {
-      const ret = Game.market.createOrder({ type: 'sell', resourceType: item, price: q.bestBid, totalAmount: 20, stationId: home });
-      if (ret === OK) writes++; else console.log('挂卖单失败', item, ret);
+      const rc = Game.market.createOrder({
+        type: ORDER_SELL,
+        resourceType: item,
+        price: q.bestBid,
+        totalAmount: 20,
+        stationId,
+      });
+      if (rc === OK) writes += 1;
       continue;
     }
 
-    // 2) 站上没货：先算路线拿燃料，再派船（出发地库存不足会被整单丢弃）
-    if (shipUsed) continue;
-    const ship = Object.keys(Game.ships).map((k) => Game.ships[k]).find((s) => !s.isBusy && s.location === pid);
+    if (dispatchedThisTick) continue;
+    const ship = Object.values(Game.ships).find((s) => !s.isBusy && s.location === pid);
     if (!ship) continue;
-    const route = Game.market.calcRoute(pid, home);
+
+    const route = Game.market.calcRoute(pid, stationId);
     if (!route) continue;
-    if (ground.getUsedCapacity('fuel') < route.fuel) { console.log(item, '燃料不够', route.fuel); continue; }
-    const qty = Math.min(ground.getUsedCapacity(item), ship.capacity);
+
+    const fuelNeed =
+      ship.size === 'large' ? route.fuel * 4 : ship.size === 'medium' ? route.fuel * 2 : route.fuel;
+    if (ground[RESOURCE_FUEL] < fuelNeed) continue;
+
+    const qty = Math.min(ground[item], ship.capacity);
     if (qty <= 0) continue;
-    const ret = ship.dispatch(pid, home, { [item]: qty });
-    if (ret === OK) { writes++; shipUsed = true; console.log(item, '派船', qty, '燃料', route.fuel, '耗时', route.ticks); }
+
+    const rc = ship.dispatch(pid, stationId, { [item]: qty });
+    if (rc === OK) {
+      writes += 1;
+      dispatchedThisTick = true;
+      console.log('已派船运送', item, '数量:', qty);
+    }
   }
 };`,
       },
       {
         kind: 'note',
-        level: 'danger',
-        text: '出发地必须是船当前的 `location`（地面 `P1` 还是轨道 `ST:P1` 分得很清）；货量按**件数**计而不是体积，总和不能超过货舱**总容量**（小船 40 件）。燃料按路线从**出发地仓**扣：缺燃料会在 JS 层直接返回 `ERR_NOT_ENOUGH_RESOURCES`(-6)；只有货物不足才是返回 `OK` 后在落地阶段被静默丢弃。另外 `calcRoute` 的 `fuel` 是按小船 × 100 耐久估算的近似值，中大船或低耐久船要按实际船型多备油。回程也要油：船停在轨道站后，从那里出发还得站仓里有燃料。',
+        level: 'warn',
+        text: '飞船到达轨道站后，下一次返程同样需要消耗燃料，请确保轨道站内或回程前备有足够的 `fuel`。',
       },
       {
         kind: 'links',
         items: [
+          { label: 'Ship.dispatch', id: 'Ship.dispatch' },
           { label: 'Game.market.calcRoute', id: 'Game.market.calcRoute' },
-          { label: 'Ship.dispatch', id: 'Ship' },
-          { label: 'Game.market.createOrder', id: 'Game.market.createOrder' },
           { label: 'Game.stations', id: 'Game.stations' },
-          { label: 'Store', id: 'Store' },
         ],
       },
     ],

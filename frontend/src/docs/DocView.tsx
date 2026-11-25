@@ -9,18 +9,18 @@ import {
   Info,
   List,
   Search,
+  ShieldAlert,
   X,
 } from 'lucide-react';
 import {
   DEFAULT_DOC_ID,
   DOC_BY_ID,
-  DOC_SOURCE,
   DOC_VERSION,
   docGroups,
   findEntry,
   searchDocs,
 } from './apiDocs';
-import type { DocBlock, DocEntry } from './types';
+import type { DocBlock, DocEntry, DocParamRequired } from './types';
 
 export interface DocViewProps {
   variant: 'pane' | 'page';
@@ -34,7 +34,7 @@ export interface DocViewProps {
 const cx = (...parts: Array<string | false | null | undefined>): string =>
   parts.filter(Boolean).join(' ');
 
-/** 只处理行内代码与加粗，避免为了一页文档引入 markdown 依赖。 */
+/** 轻量行内解析：支持反引号行内代码与加粗。 */
 const Inline: React.FC<{ text: string }> = ({ text }) => {
   const parts = text.split(/(\u0060[^\u0060]+\u0060|\*\*[^*]+\*\*)/g);
   return (
@@ -62,6 +62,12 @@ const Inline: React.FC<{ text: string }> = ({ text }) => {
     </>
   );
 };
+
+const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="mb-1 text-[9.5px] font-medium uppercase tracking-[0.1em] text-slate-400">
+    {children}
+  </div>
+);
 
 const CopyButton: React.FC<{ label: string; copied: boolean; onCopy: () => void }> = ({
   label,
@@ -125,13 +131,28 @@ const TD: React.FC<{ children: React.ReactNode; className?: string }> = ({ child
   </td>
 );
 
-const ErrorCode: React.FC<{ code: string; onGo?: (id: string) => void }> = ({ code, onGo }) => {
-  const exists = !!DOC_BY_ID[code];
+const RequiredBadge: React.FC<{ state: DocParamRequired }> = ({ state }) => {
+  if (state === 'required') {
+    return <span className="text-[9px] font-medium text-amber-300">必填</span>;
+  }
+  if (state === 'oneOf') {
+    return <span className="text-[9px] font-medium text-sky-300">二选一</span>;
+  }
+  return <span className="text-[9px] text-slate-500">可选</span>;
+};
+
+const ErrorCodePill: React.FC<{ code: string; onGo?: (id: string) => void }> = ({ code, onGo }) => {
+  const targetId = DOC_BY_ID[code] ? code : DOC_BY_ID['constants/return-codes'] ? 'constants/return-codes' : null;
   const cls =
     'mono inline-flex items-center rounded-[2px] border border-rose-500/35 bg-rose-500/[0.06] px-1 py-[1px] text-[10px] text-rose-300';
-  if (!exists || !onGo) return <span className={cls}>{code}</span>;
+  if (!targetId || !onGo) return <span className={cls}>{code}</span>;
   return (
-    <button type="button" onClick={() => onGo(code)} className={cls + ' hover:border-rose-400/70'}>
+    <button
+      type="button"
+      onClick={() => onGo(targetId)}
+      className={cls + ' hover:border-rose-400/70'}
+      title="查看返回码一览"
+    >
       {code}
     </button>
   );
@@ -140,10 +161,11 @@ const ErrorCode: React.FC<{ code: string; onGo?: (id: string) => void }> = ({ co
 const BlockView: React.FC<{
   block: DocBlock;
   entryId: string;
+  blockIndex: number;
   copiedKey: string | null;
   onCopy: (text: string, key: string) => void;
   onGo: (id: string) => void;
-}> = ({ block, entryId, copiedKey, onCopy, onGo }) => {
+}> = ({ block, entryId, blockIndex, copiedKey, onCopy, onGo }) => {
   switch (block.kind) {
     case 'prose':
       return (
@@ -152,11 +174,11 @@ const BlockView: React.FC<{
         </p>
       );
     case 'syntax': {
-      const key = entryId + ':syntax';
+      const key = entryId + ':syntax:' + blockIndex;
       return (
         <CodePanel
           code={block.code}
-          caption="签名"
+          caption="签名（TypeScript）"
           wrap
           copied={copiedKey === key}
           onCopy={() => onCopy(block.code, key)}
@@ -165,66 +187,103 @@ const BlockView: React.FC<{
     }
     case 'params':
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-[10.5px]">
-            <thead>
-              <tr>
-                <TH>参数</TH>
-                <TH>类型</TH>
-                <TH className="w-10">必填</TH>
-                <TH>说明</TH>
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row) => (
-                <tr key={row.name}>
-                  <TD>
-                    <span className="mono text-sky-200">{row.name}</span>
-                  </TD>
-                  <TD>
-                    <span className="mono text-[10px] text-slate-400">
-                      <Inline text={row.type} />
-                    </span>
-                  </TD>
-                  <TD>
-                    {row.required ? (
-                      <span className="text-[9px] text-amber-300">必填</span>
-                    ) : (
-                      <span className="text-[9px] text-slate-600">可选</span>
-                    )}
-                  </TD>
-                  <TD>
-                    <Inline text={row.desc} />
-                  </TD>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div>
+          <SectionLabel>输入参数（Input）</SectionLabel>
+          {block.rows.length === 0 ? (
+            <div className="rounded-[2px] border border-white/[0.06] bg-white/[0.02] px-2 py-1.5 text-[10.5px] text-slate-500">
+              无输入参数
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[10.5px]">
+                <thead>
+                  <tr>
+                    <TH className="w-36">参数</TH>
+                    <TH className="w-40">类型</TH>
+                    <TH className="w-12">必填</TH>
+                    <TH>说明</TH>
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row) => (
+                    <tr key={row.name}>
+                      <TD>
+                        <span className="mono text-sky-200">{row.name}</span>
+                      </TD>
+                      <TD>
+                        <span className="mono text-[10px] text-slate-400">
+                          <Inline text={row.type} />
+                        </span>
+                      </TD>
+                      <TD>
+                        <RequiredBadge state={row.required} />
+                      </TD>
+                      <TD>
+                        <Inline text={row.desc} />
+                      </TD>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       );
     case 'returns':
       return (
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[2px] border border-white/[0.06] bg-white/[0.02] px-2 py-1.5">
-          <span className="text-[9px] uppercase tracking-[0.12em] text-slate-500">返回值</span>
-          <span className="mono text-[11px] text-emerald-300">
-            <Inline text={block.type} />
-          </span>
-          {block.desc && (
-            <span className="text-[10px] text-slate-400">
-              <Inline text={block.desc} />
+        <div>
+          <SectionLabel>返回值（Output）</SectionLabel>
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-[2px] border border-emerald-500/20 bg-emerald-500/[0.03] px-2 py-1.5">
+            <span className="mono text-[11px] text-emerald-300">
+              <Inline text={block.type} />
             </span>
+            {block.desc && (
+              <span className="text-[10.5px] text-slate-300">
+                <Inline text={block.desc} />
+              </span>
+            )}
+          </div>
+          {block.fields && block.fields.length > 0 && (
+            <div className="mt-1.5 overflow-x-auto">
+              <table className="w-full border-collapse text-[10.5px]">
+                <thead>
+                  <tr>
+                    <TH className="w-36">返回字段</TH>
+                    <TH className="w-48">类型</TH>
+                    <TH>说明</TH>
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.fields.map((row) => (
+                    <tr key={row.name}>
+                      <TD>
+                        <span className="mono text-emerald-200">{row.name}</span>
+                      </TD>
+                      <TD>
+                        <span className="mono text-[10px] text-slate-400">
+                          <Inline text={row.type} />
+                        </span>
+                      </TD>
+                      <TD>
+                        <Inline text={row.desc} />
+                      </TD>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       );
     case 'errors':
       return (
         <div>
-          <div className="mb-1 text-[9px] uppercase tracking-[0.12em] text-slate-500">可能返回</div>
+          <SectionLabel>同步返回错误码</SectionLabel>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-[10.5px]">
               <thead>
                 <tr>
-                  <TH className="w-32">错误码</TH>
+                  <TH className="w-44">错误码</TH>
                   <TH>触发条件</TH>
                 </tr>
               </thead>
@@ -232,7 +291,7 @@ const BlockView: React.FC<{
                 {block.rows.map((row) => (
                   <tr key={row.code}>
                     <TD>
-                      <ErrorCode code={row.code} onGo={onGo} />
+                      <ErrorCodePill code={row.code} onGo={onGo} />
                     </TD>
                     <TD>
                       <Inline text={row.when} />
@@ -244,60 +303,128 @@ const BlockView: React.FC<{
           </div>
         </div>
       );
+    case 'settlement':
+      return (
+        <div className="rounded-[2px] border border-amber-500/30 bg-amber-500/[0.05] px-2.5 py-2">
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium text-amber-200">
+            <ShieldAlert size={11} className="shrink-0" />
+            <span>落账阶段失败条件（返回 OK 后仍可能静默丢弃）</span>
+          </div>
+          <ul className="list-disc space-y-0.5 pl-4 text-[10.5px] leading-relaxed text-amber-100/85">
+            {block.items.map((item, idx) => (
+              <li key={idx}>
+                <Inline text={item} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
     case 'fields':
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-[10.5px]">
-            <thead>
-              <tr>
-                <TH className="w-36">字段</TH>
-                <TH className="w-44">类型</TH>
-                <TH>说明</TH>
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row) => (
-                <tr key={row.name}>
-                  <TD>
-                    <span className="mono text-sky-200">{row.name}</span>
-                  </TD>
-                  <TD>
-                    <span className="mono text-[10px] text-slate-400">
-                      <Inline text={row.type} />
-                    </span>
-                  </TD>
-                  <TD>
-                    <Inline text={row.desc} />
-                  </TD>
+        <div>
+          <SectionLabel>{block.title ?? '对象字段（Properties）'}</SectionLabel>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[10.5px]">
+              <thead>
+                <tr>
+                  <TH className="w-36">字段</TH>
+                  <TH className="w-48">类型</TH>
+                  <TH>说明</TH>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {block.rows.map((row) => (
+                  <tr key={row.name}>
+                    <TD>
+                      <span className="mono text-sky-200">{row.name}</span>
+                    </TD>
+                    <TD>
+                      <span className="mono text-[10px] text-slate-400">
+                        <Inline text={row.type} />
+                      </span>
+                    </TD>
+                    <TD>
+                      <Inline text={row.desc} />
+                    </TD>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    case 'methods':
+      return (
+        <div>
+          <SectionLabel>{block.title ?? '方法一览（Methods）'}</SectionLabel>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[10.5px]">
+              <thead>
+                <tr>
+                  <TH>方法</TH>
+                  <TH className="w-36">返回值</TH>
+                  <TH>说明</TH>
+                </tr>
+              </thead>
+              <tbody>
+                {block.rows.map((row) => {
+                  const exists = !!DOC_BY_ID[row.id];
+                  return (
+                    <tr key={row.id}>
+                      <TD>
+                        {exists ? (
+                          <button
+                            type="button"
+                            onClick={() => onGo(row.id)}
+                            className="mono inline-flex items-center gap-0.5 text-left text-sky-300 hover:text-sky-100 hover:underline"
+                          >
+                            <span>{row.signature}</span>
+                            <ArrowUpRight size={9} className="shrink-0 opacity-70" />
+                          </button>
+                        ) : (
+                          <span className="mono text-sky-200">{row.signature}</span>
+                        )}
+                      </TD>
+                      <TD>
+                        <span className="mono text-[10px] text-emerald-300">{row.returns}</span>
+                      </TD>
+                      <TD>
+                        <Inline text={row.desc} />
+                      </TD>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
     case 'table':
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-[10.5px]">
-            <thead>
-              <tr>
-                {block.headers.map((h) => (
-                  <TH key={h}>{h}</TH>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row, i) => (
-                <tr key={i}>
-                  {row.map((cell, j) => (
-                    <TD key={j} className={j === 0 ? 'mono text-sky-200' : undefined}>
-                      {cell}
-                    </TD>
+        <div>
+          {block.title && <SectionLabel>{block.title}</SectionLabel>}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[10.5px]">
+              <thead>
+                <tr>
+                  {block.headers.map((h) => (
+                    <TH key={h}>{h}</TH>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {block.rows.map((row, i) => (
+                  <tr key={i}>
+                    {row.map((cell, j) => (
+                      <TD key={j} className={j === 0 ? 'mono text-sky-200' : undefined}>
+                        <Inline text={cell} />
+                      </TD>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
     case 'note': {
@@ -309,16 +436,22 @@ const BlockView: React.FC<{
             : 'border-sky-500/30 bg-sky-500/[0.06] text-sky-100/85';
       const Icon = block.level === 'info' ? Info : AlertTriangle;
       return (
-        <div className={cx('flex items-start gap-1.5 rounded-[2px] border px-2 py-1.5 text-[10.5px] leading-relaxed', tone)}>
+        <div
+          className={cx(
+            'flex items-start gap-1.5 rounded-[2px] border px-2 py-1.5 text-[10.5px] leading-relaxed',
+            tone,
+          )}
+        >
           <Icon size={11} className="mt-[2px] shrink-0 opacity-80" />
           <span>
+            {block.title && <strong className="mr-1 font-semibold">{block.title}：</strong>}
             <Inline text={block.text} />
           </span>
         </div>
       );
     }
     case 'example': {
-      const key = entryId + ':example:' + (block.caption ?? '') + ':' + block.code.length;
+      const key = entryId + ':example:' + blockIndex;
       return (
         <CodePanel
           code={block.code}
@@ -330,7 +463,7 @@ const BlockView: React.FC<{
     }
     case 'links':
       return (
-        <div className="flex flex-wrap items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1 pt-1">
           <span className="mr-1 text-[9px] uppercase tracking-[0.12em] text-slate-500">相关</span>
           {block.items.map((item) => {
             const exists = !!DOC_BY_ID[item.id];
@@ -346,7 +479,7 @@ const BlockView: React.FC<{
                     ? 'border-sky-500/30 bg-sky-500/[0.06] text-sky-200/90 hover:border-sky-400/70 hover:text-sky-100'
                     : 'cursor-not-allowed border-slate-700/60 text-slate-600',
                 )}
-                title={exists ? item.id : item.id + '（文档暂未收录）'}
+                title={exists ? item.id : item.id + '（暂未收录）'}
               >
                 {item.label}
                 <ArrowUpRight size={9} className="opacity-60" />
@@ -366,7 +499,7 @@ const ResourceChips: React.FC<{
   copiedKey: string | null;
 }> = ({ items, onCopy, copiedKey }) => (
   <div className="mt-4">
-    <div className="mb-1.5 text-[9px] uppercase tracking-[0.12em] text-slate-500">
+    <div className="mb-1.5 text-[9.5px] uppercase tracking-[0.1em] text-slate-400">
       当前世界的物品常量（{items.length}）
     </div>
     <div className="flex flex-wrap gap-1">
@@ -378,11 +511,11 @@ const ResourceChips: React.FC<{
           <button
             key={item.id}
             type="button"
-            onClick={() => onCopy(constant, key)}
+            onClick={() => onCopy(valid ? constant : `globalThis["${constant}"]`, key)}
             title={
               valid
-                ? constant + ' = "' + item.id + '"（点击复制）'
-                : constant + ' 不是合法 JS 标识符，需用 globalThis["' + constant + '"]'
+                ? `${constant} = "${item.id}"（点击复制）`
+                : `${constant} 不是合法 JS 标识符，点击复制 globalThis["${constant}"]`
             }
             className={cx(
               'inline-flex items-center gap-1 rounded-[2px] border px-1 py-[1px] text-[9px] transition-colors',
@@ -467,7 +600,7 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
     }
   };
 
-  const navWidth = page ? 'w-[240px]' : 'w-[156px]';
+  const navWidth = page ? 'w-[240px]' : 'w-[164px]';
 
   return (
     <div className={cx('docs-print-root flex h-full min-h-0 w-full bg-[#0b1017] text-slate-200', className)}>
@@ -485,7 +618,7 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={onSearchKey}
-                placeholder="搜索 API…"
+                placeholder="搜索 API / 字段 / 错误码…"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent text-[10.5px] text-slate-100 outline-none placeholder:text-slate-600"
               />
@@ -525,8 +658,8 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
               )
             ) : (
               groups.map((group) => (
-                <div key={group.group} className="mb-1">
-                  <div className="px-2 pb-[2px] pt-1 text-[8.5px] uppercase tracking-[0.16em] text-slate-600">
+                <div key={group.group} className="mb-1.5">
+                  <div className="px-2 pb-[2px] pt-1 text-[8.5px] font-medium uppercase tracking-[0.14em] text-slate-500">
                     {group.group}
                   </div>
                   {group.entries.map((e) => {
@@ -557,9 +690,7 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
 
           <div className="shrink-0 border-t border-white/[0.05] px-2 py-1.5 text-[8.5px] leading-relaxed text-slate-600">
             <div className="mono">{DOC_VERSION}</div>
-            <div className="truncate" title={'同步自 ' + DOC_SOURCE}>
-              同步自 {DOC_SOURCE}
-            </div>
+            <div className="truncate">Meridian 脚本接口参考</div>
           </div>
         </nav>
       )}
@@ -600,7 +731,13 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
               {entry.parent && (
                 <>
                   <ChevronRight size={9} />
-                  <span>{entry.parent}</span>
+                  <button
+                    type="button"
+                    onClick={() => go(entry.parent!)}
+                    className="hover:text-sky-300"
+                  >
+                    {entry.parent}
+                  </button>
                 </>
               )}
               <ChevronRight size={9} />
@@ -610,7 +747,9 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
               {entry.title}
             </h1>
             <div className="mono mt-0.5 text-[9.5px] text-sky-400/80">{entry.id}</div>
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">{entry.summary}</p>
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+              <Inline text={entry.summary} />
+            </p>
 
             <div className={cx('space-y-3', page ? 'mt-5' : 'mt-3')}>
               {entry.blocks.map((block, i) => (
@@ -618,6 +757,7 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
                   key={i}
                   block={block}
                   entryId={entry.id}
+                  blockIndex={i}
                   copiedKey={copiedKey}
                   onCopy={onCopy}
                   onGo={go}
@@ -630,10 +770,8 @@ export const DocView: React.FC<DocViewProps> = ({ variant, docId, onNavigate, it
             </div>
 
             <div className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.05] pt-2 text-[8.5px] text-slate-600">
-              <span className="mono">
-                {DOC_VERSION} · {DOC_SOURCE}
-              </span>
-              <span>发现文档与代码不一致？以代码为准，并反馈到 docs/PROTOCOL.md。</span>
+              <span className="mono">{DOC_VERSION}</span>
+              <span>Meridian 脚本 API 参考</span>
             </div>
           </div>
         </div>

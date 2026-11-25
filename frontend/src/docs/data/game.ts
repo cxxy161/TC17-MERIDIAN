@@ -4,42 +4,82 @@ export const GAME_ENTRIES: DocEntry[] = [
   {
     id: 'Game',
     title: 'Game',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '脚本的世界入口：只读状态 + 写方法',
-    keywords: 'Game 全局 入口 世界状态',
+    summary: '脚本运行时的全局世界入口，提供只读快照状态与写操作方法',
+    keywords: 'Game 全局 入口 世界 快照 属性 方法',
     blocks: [
       {
         kind: 'prose',
-        text: '`Game` 是每个 tick 的世界入口。它同时提供两类东西：**只读状态**（本 tick 开始时的快照）和**写方法**（把操作写进本 tick 的 Intent 缓冲）。',
+        text: '`Game` 是每个 tick 进入脚本的世界入口对象。其所有属性均为本 tick 开始时冻结的只读快照；全局操作方法则用于发起购买地块、建拆建筑、母星央行存取借还及查询静态配方。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game: GameGlobal',
       },
       {
         kind: 'fields',
+        title: '全局属性（Properties）',
         rows: [
-          { name: 'time', type: 'number', desc: '当前 tick 序号' },
-          { name: 'cpi', type: 'number', desc: '全星系物价指数' },
-          { name: 'cpu', type: 'object', desc: 'CPU 预算与已用量' },
-          { name: 'company', type: 'object', desc: '自己的公司：现金、储蓄、负债' },
-          { name: 'planets', type: 'Record<string, Planet>', desc: '全部行星（含别人所在的）' },
-          { name: 'plots', type: 'Record<string, Plot>', desc: '自己的地块' },
-          { name: 'stations', type: 'Record<string, Station>', desc: '有库存记录的站点' },
-          { name: 'buildings', type: 'Record<string, Building>', desc: '自己的设施' },
-          { name: 'ships', type: 'Record<string, Ship>', desc: '自己的飞船' },
-          { name: 'market', type: 'MarketAPI', desc: '市场查询与下单' },
+          { name: 'time', type: 'number', desc: '当前 tick 序号（从 0 递增）' },
+          { name: 'cpi', type: 'number', desc: '全星系物价指数（初始为 1）' },
+          { name: 'cpu', type: '{ limit: number; getUsed(): number }', desc: '本 tick 的 CPU 预算与实时已用毫秒数' },
+          { name: 'company', type: 'CompanyInfo', desc: '本公司身份与开盘资金快照（现金、储蓄、负债）' },
+          { name: 'planets', type: 'Record<string, Planet>', desc: '全星系所有行星的公开遥测与本公司仓库视图' },
+          { name: 'plots', type: 'Record<string, Plot>', desc: '本公司名下的全部地块' },
+          { name: 'stations', type: 'Record<string, Station>', desc: '本公司当前有库存记录的站点字典' },
+          { name: 'buildings', type: 'Record<string, Building>', desc: '本公司名下的全部建筑' },
+          { name: 'ships', type: 'Record<string, Ship>', desc: '本公司名下的全部飞船' },
+          { name: 'market', type: 'MarketAPI', desc: '市场行情查询、下单、物流估算与公开情报接口' },
+        ],
+      },
+      {
+        kind: 'methods',
+        title: '全局方法（Methods）',
+        rows: [
+          {
+            signature: 'Game.buyPlot(planetId: string, target: { slotId: number } | { listingId: string | number })',
+            returns: 'RetCode',
+            desc: '按位置编号购买一手空地，或按挂牌编号收购二手地块',
+            id: 'Game.buyPlot',
+          },
+          {
+            signature: 'Game.buildFacility(plotId: string, buildingType: string)',
+            returns: 'RetCode',
+            desc: '在自己的地块上建造一座新建筑',
+            id: 'Game.buildFacility',
+          },
+          {
+            signature: 'Game.demolishFacility(plotId: string, buildingId: string)',
+            returns: 'RetCode',
+            desc: '拆除自己地块上的指定建筑',
+            id: 'Game.demolishFacility',
+          },
+          {
+            signature: 'Game.bank(planetId: string, op: \'deposit\' | \'withdraw\' | \'borrow\' | \'repay\', amount: number)',
+            returns: 'RetCode',
+            desc: '在母星央行执行存款、取款、借款或还款操作',
+            id: 'Game.bank',
+          },
+          {
+            signature: 'Game.getRecipe(recipeId: string)',
+            returns: 'RecipeInfo | null',
+            desc: '按配方 ID 查询静态配方输入、输出与消耗明细',
+            id: 'Game.getRecipe',
+          },
         ],
       },
       {
         kind: 'note',
         level: 'warn',
-        text: '`Game` 和它下面的实体对象都被 Object.freeze 冻结：给它们挂自定义字段在非严格模式下静默失败。要存状态请写 `Memory`。',
+        text: '`Game` 及其下属所有快照对象都已被冻结，向其挂载自定义属性不会生效。请使用 `Memory` 保存跨 tick 状态。',
       },
       {
         kind: 'links',
         items: [
-          { label: 'Game.time', id: 'Game.time' },
-          { label: 'Game.planets', id: 'Game.planets' },
+          { label: '执行与落账机制', id: 'guides/execution' },
           { label: 'Game.market', id: 'Game.market' },
-          { label: 'Game.buyPlot', id: 'Game.buyPlot' },
+          { label: 'Memory', id: 'Memory' },
         ],
       },
     ],
@@ -47,26 +87,31 @@ export const GAME_ENTRIES: DocEntry[] = [
   {
     id: 'Game.time',
     title: 'time',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '当前 tick 序号',
-    keywords: 'tick 时间 回合 序号 计时',
+    summary: '当前世界的 tick 序号（从 0 开始单调递增）',
+    keywords: 'Game.time tick 时间 序号 节流',
     blocks: [
       {
         kind: 'prose',
-        text: '本 tick 的序号，从 0 开始单调递增。保存热重载不会重置它，也不会重置世界。',
+        text: '当前模拟 tick 序号，每个模拟步长加 1。保存并热重载脚本不会重置该计数。',
       },
-      { kind: 'syntax', code: 'Game.time: number' },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.time: number',
+      },
       {
         kind: 'example',
-        code: `if (Game.time % 20 === 0) {
-  console.log('每 20 tick 打印一次', Game.time);
-}`,
+        caption: '每 20 个 tick 执行一次低频巡检',
+        code: `module.exports.loop = function () {
+  if (Game.time % 20 !== 0) return;
+  console.log('巡检 tick:', Game.time);
+};`,
       },
       {
         kind: 'links',
         items: [
-          { label: '快速开始', id: 'overview/quickstart' },
+          { label: '快速开始', id: 'guides/quickstart' },
           { label: 'Memory', id: 'Memory' },
         ],
       },
@@ -75,35 +120,40 @@ export const GAME_ENTRIES: DocEntry[] = [
   {
     id: 'Game.cpi',
     title: 'cpi',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '全星系物价指数',
-    keywords: 'cpi 物价 指数 通胀 折算',
+    summary: '全星系综合消费者物价指数（影响工资、施工费与部分固定费用）',
+    keywords: 'Game.cpi cpi 物价 指数 通胀 工资 施工费',
     blocks: [
       {
         kind: 'prose',
-        text: '全星系物价指数，用来把历史成交价折算到当前物价水平。开局接近 1，长期随经济体的货币量变化。',
+        text: '全星系综合物价指数，开局初始为 `1`，随星系内各类商品的长期价格水平动态变化（范围 `0.25..10`）。除用于平减折算真实价格外，建筑生产工资、建厂施工费与初始贷款额度均随 `Game.cpi` 浮动。',
       },
-      { kind: 'syntax', code: 'Game.cpi: number' },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.cpi: number',
+      },
       {
         kind: 'example',
-        code: `const q = Game.market.quote('ST:HUB', RESOURCE_STEEL);
-if (q) {
-  // 把名义价折算成"开局购买力"下的真实价
-  const real = q.lastPrice / Game.cpi;
-  console.log('真实钢价', real);
-}`,
+        caption: '将钢材名义价格折算为基准购买力价格',
+        code: `module.exports.loop = function () {
+  const q = Game.market.quote('ST:HUB', RESOURCE_STEEL);
+  if (q) {
+    const realPrice = q.lastPrice / Game.cpi;
+    console.log('真实钢价:', realPrice.toFixed(2), '当前 CPI:', Game.cpi.toFixed(3));
+  }
+};`,
       },
       {
         kind: 'note',
         level: 'info',
-        text: '这是宏观指数，不是某个物品的价格；单个物品的行情看 `Game.market.quote`。',
+        text: '`Game.cpi` 是全星系宏观指数；查询单个物品的实时报价请调用 `Game.market.quote`。',
       },
       {
         kind: 'links',
         items: [
+          { label: '核心经济规则', id: 'guides/economy' },
           { label: 'Game.market.quote', id: 'Game.market.quote' },
-          { label: 'Game.market', id: 'Game.market' },
         ],
       },
     ],
@@ -111,39 +161,105 @@ if (q) {
   {
     id: 'Game.cpu',
     title: 'cpu',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: 'CPU 预算与已用墙钟毫秒',
-    keywords: 'cpu 性能 5ms 预算 getUsed 超时',
+    summary: '本 tick 的 CPU 墙钟预算与已消耗时间监控对象',
+    keywords: 'Game.cpu limit getUsed 预算 超时 5ms',
     blocks: [
       {
         kind: 'prose',
-        text: 'CPU 预算与用量。`limit` 是本 tick 允许的墙钟毫秒数（默认 5），`getUsed()` 返回本 tick 已经用掉的毫秒数，包含 prelude 加载与宿主绑定开销。',
+        text: '提供当前 tick 允许的墙钟时间上限与实时耗时查询，用于在复杂计算前判断预算余量。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.cpu: {\n  readonly limit: number;\n  getUsed(): number;\n}',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'limit', type: 'number', desc: '本 tick 的毫秒预算' },
-          { name: 'getUsed()', type: '() => number', desc: '本 tick 已用毫秒数（墙钟）' },
+          { name: 'limit', type: 'number', desc: '本 tick 允许的最大墙钟毫秒数（默认为 `5`）' },
         ],
       },
       {
-        kind: 'example',
-        code: `if (Game.cpu.getUsed() > Game.cpu.limit * 0.8) {
-  console.log('本 tick 预算快用完，提前 return');
-  return;
-}`,
+        kind: 'methods',
+        rows: [
+          {
+            signature: 'Game.cpu.getUsed()',
+            returns: 'number',
+            desc: '返回本 tick 从脚本启动到当前调用点的已用毫秒数',
+            id: 'Game.cpu.getUsed',
+          },
+        ],
       },
       {
         kind: 'note',
         level: 'danger',
-        text: '超时后果很重：本 tick 的全部 Intent 被丢弃，Memory 回滚到上一 tick（日志保留）。5ms 是墙钟，不是 CPU 指令数。',
+        title: '超时将导致整 tick 回滚',
+        text: '一旦运行时间达到 `Game.cpu.limit`，脚本会被立即终止，本 tick 的全部写操作丢弃，`Memory` 回滚到上一 tick（已输出日志保留）。',
+      },
+      {
+        kind: 'example',
+        caption: '预算接近上限时提前退出循环',
+        code: `module.exports.loop = function () {
+  for (const item of RESOURCES_ALL) {
+    if (Game.cpu.getUsed() > Game.cpu.limit * 0.8) {
+      console.warn('CPU 接近上限，提前结束扫描');
+      return;
+    }
+    Game.market.quote('ST:HUB', item);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
-          { label: 'quotas', id: 'quotas' },
-          { label: '硬性上限', id: 'overview/limits' },
+          { label: 'Game.cpu.getUsed', id: 'Game.cpu.getUsed' },
+          { label: '配额与限制', id: 'guides/limits' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'Game.cpu.getUsed',
+    title: 'getUsed',
+    group: 'Game 接口',
+    parent: 'Game.cpu',
+    kind: '方法',
+    summary: '获取本 tick 从启动到当前时刻的已消耗墙钟毫秒数',
+    keywords: 'Game.cpu.getUsed 耗时 cpu 性能',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '返回当前 tick 脚本执行累计消耗的墙钟毫秒数（包含沙盒启动与数据查询耗时）。',
+      },
+      {
+        kind: 'syntax',
+        code: 'Game.cpu.getUsed(): number',
+      },
+      {
+        kind: 'params',
+        rows: [],
+      },
+      {
+        kind: 'returns',
+        type: 'number',
+        desc: '已用毫秒数（浮点数，如 `0.42`）',
+      },
+      {
+        kind: 'example',
+        caption: '测量一段扫描逻辑的耗时',
+        code: `module.exports.loop = function () {
+  const t0 = Game.cpu.getUsed();
+  const orders = Game.market.getAllOrders({ stationId: 'ST:HUB' });
+  const cost = Game.cpu.getUsed() - t0;
+  console.log('读取订单数:', orders.length, '耗时(ms):', cost.toFixed(3));
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: 'Game.cpu', id: 'Game.cpu' },
+          { label: '配额与限制', id: 'guides/limits' },
         ],
       },
     ],
@@ -151,37 +267,50 @@ if (q) {
   {
     id: 'Game.company',
     title: 'company',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '自己公司的资金与身份',
-    keywords: 'company 公司 现金 cash 储蓄 savings 负债 debt 职业',
+    summary: '本公司身份信息与本 tick 开盘资金快照',
+    keywords: 'Game.company 公司 现金 cash 储蓄 savings 负债 debt 职业 母星',
     blocks: [
       {
         kind: 'prose',
-        text: '自己公司的身份与资金。金额单位是信用点（credits）。',
+        text: '返回当前脚本所属公司的静态身份与开盘资金状态，所有金额单位均为信用点。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.company: {\n  readonly id: string;\n  readonly name: string;\n  readonly profession: string;\n  readonly homePlanetId: string;\n  readonly cash: number;\n  readonly savings: number;\n  readonly debt: number;\n}',
       },
       {
         kind: 'fields',
         rows: [
-          { name: 'id', type: 'string', desc: '公司 id' },
-          { name: 'name', type: 'string', desc: '公司名' },
-          { name: 'profession', type: 'string', desc: '职业：如 env_recycle / agri_bio / mining_ind' },
-          { name: 'homePlanetId', type: 'string', desc: '母星 id' },
-          { name: 'cash', type: 'number', desc: '现金' },
-          { name: 'savings', type: 'number', desc: '储蓄' },
-          { name: 'debt', type: 'number', desc: '负债' },
+          { name: 'id', type: 'string', desc: '公司 ID' },
+          { name: 'name', type: 'string', desc: '公司名称' },
+          { name: 'profession', type: 'string', desc: '职业 ID，如 `\'env_recycle\'`、`\'agri_bio\'`、`\'mining_ind\'`' },
+          { name: 'homePlanetId', type: 'string', desc: '母星行星 ID（如 `\'P2\'`）；央行操作仅限在母星执行' },
+          { name: 'cash', type: 'number', desc: '本 tick 开盘可用现金（信用点）' },
+          { name: 'savings', type: 'number', desc: '在母星央行的当前存款余额（信用点）' },
+          { name: 'debt', type: 'number', desc: '在母星央行的当前贷款本息余额（信用点）' },
         ],
       },
       {
         kind: 'note',
         level: 'warn',
-        text: '`cash` 是本 tick 开始时的快照：下单、建造、存取款都不会让它在本 tick 内变化，下一 tick 才看得到结果。',
+        text: '`cash`、`savings`、`debt` 均为本 tick 开始时的开盘快照；同一 tick 内多次下单或存取款不会实时更新这些字段，连续下单请自行用局部变量跟踪剩余现金。',
+      },
+      {
+        kind: 'example',
+        caption: '读取公司资产状况',
+        code: `module.exports.loop = function () {
+  const c = Game.company;
+  console.log(c.name, '母星:', c.homePlanetId, '现金:', c.cash, '存款:', c.savings, '负债:', c.debt);
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Game.bank', id: 'Game.bank' },
           { label: 'Game.market.credits', id: 'Game.market.credits' },
+          { label: '执行与落账机制', id: 'guides/execution' },
         ],
       },
     ],
@@ -189,33 +318,37 @@ if (q) {
   {
     id: 'Game.planets',
     title: 'planets',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '全部行星的遥测与仓库',
-    keywords: 'planets 行星 星球 需求 demands 仓库 土地',
+    summary: '全星系全部行星的公开遥测、需求与本公司行星仓库映射',
+    keywords: 'Game.planets 行星 星球 仓库 需求',
     blocks: [
       {
         kind: 'prose',
-        text: '全星系所有行星（不只自己的），键是行星 id，值见 `Planet`。',
+        text: '以行星 ID（如 `\'P1\'`、`\'P2\'`）为键的只读字典，包含星系内所有行星（即使本公司在该行星尚无地块或库存）。每个元素的详细结构见 `Planet`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.planets: Record<string, Planet>',
       },
       {
         kind: 'example',
-        code: `for (const p of Object.values(Game.planets)) {
-  const want = p.demands[RESOURCE_STEEL] && p.demands[RESOURCE_STEEL].qty;
-  if (want > 0) console.log(p.name, '本回合需要钢材', want);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '`demands[item]` 只有 `qty`，**没有 satisfaction**（旧文档写错了）。星球仓库没有容量上限，`groundStore.getCapacity()` 恒为 `null`。',
+        caption: '遍历所有行星并输出钢材本 tick 城市需求',
+        code: `module.exports.loop = function () {
+  for (const planet of Object.values(Game.planets)) {
+    const demand = planet.demands[RESOURCE_STEEL];
+    if (demand && demand.qty > 0) {
+      console.log(planet.name, '钢材需求:', demand.qty);
+    }
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Planet', id: 'Planet' },
-          { label: 'RESOURCE_<ID>', id: 'RESOURCE_<ID>' },
           { label: 'Game.buyPlot', id: 'Game.buyPlot' },
+          { label: 'Game.bank', id: 'Game.bank' },
         ],
       },
     ],
@@ -223,35 +356,37 @@ if (q) {
   {
     id: 'Game.plots',
     title: 'plots',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '自己名下地块与剩余槽位',
-    keywords: 'plots 地块 土地 槽位 capacity usedSlots terrain',
+    summary: '本公司名下全部已持有地块的字典',
+    keywords: 'Game.plots 地块 土地 槽位 建筑',
     blocks: [
       {
         kind: 'prose',
-        text: '自己名下的地块，键是地块 id。`capacity` 与 `usedSlots` 决定还能建几座设施。',
+        text: '以地块 ID（数字字符串，如 `\'1\'`）为键的只读字典，仅包含本公司当前持有的地块。若要浏览全星系公开空地或挂牌二手地，请使用 `Game.market.getLandPlots`。详细字段见 `Plot`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.plots: Record<string, Plot>',
       },
       {
         kind: 'example',
-        code: `for (const plot of Object.values(Game.plots)) {
-  if (plot.usedSlots < plot.capacity) {
-    const rc = Game.buildFacility(plot.id, 'mine_smelter');
-    if (rc !== OK) console.log('建造失败', plot.id, rc);
+        caption: '统计名下地块的总剩余槽位',
+        code: `module.exports.loop = function () {
+  let freeSlots = 0;
+  for (const plot of Object.values(Game.plots)) {
+    freeSlots += Math.max(0, plot.capacity - plot.usedSlots);
   }
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '只包含自己的地块；`buildingMods` 是地形对各类建筑的效率修正（乘数）。',
+  console.log('名下地块数:', Object.keys(Game.plots).length, '剩余槽位:', freeSlots);
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Plot', id: 'Plot' },
-          { label: 'Game.buildFacility', id: 'Game.buildFacility' },
           { label: 'Game.buyPlot', id: 'Game.buyPlot' },
+          { label: 'Game.buildFacility', id: 'Game.buildFacility' },
+          { label: 'Game.market.getLandPlots', id: 'Game.market.getLandPlots' },
         ],
       },
     ],
@@ -259,33 +394,38 @@ if (q) {
   {
     id: 'Game.stations',
     title: 'stations',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '本公司有库存记录的站点',
-    keywords: 'stations 站点 轨道站 hub 仓库 库存',
+    summary: '本公司当前有库存记录的站点字典',
+    keywords: 'Game.stations 站点 轨道站 HUB 仓库',
     blocks: [
       {
         kind: 'prose',
-        text: '本公司有库存记录的站点，键是站点 id（`ST:HUB`、`ST:P1`…），值见 `Station`。**不是**全星系站点表。',
+        text: '以站点 ID（如 `\'ST:P2\'`、`\'ST:HUB\'`）为键的只读字典，仅收录本公司存在库存记录的站点。详细结构见 `Station`。',
       },
       {
-        kind: 'example',
-        code: `for (const sid of Object.keys(Game.stations)) {
-  const st = Game.stations[sid];
-  console.log(sid, '钢材库存', st.store[RESOURCE_STEEL] || 0);
-}`,
+        kind: 'syntax',
+        code: 'readonly Game.stations: Record<string, Station>',
       },
       {
         kind: 'note',
         level: 'warn',
-        text: '新公司可能连 `ST:HUB` 都没有——不要假设某个站点键一定存在。站点仓库同样没有容量上限。',
+        text: '新开局的公司在向某个站点运货或买货前，该站点键可能尚不存在（例如 `Game.stations[\'ST:HUB\']` 为 `undefined`），访问 `.store` 前请务必判空。',
+      },
+      {
+        kind: 'example',
+        caption: '安全读取各站点的钢材库存',
+        code: `module.exports.loop = function () {
+  for (const station of Object.values(Game.stations)) {
+    console.log(station.id, '钢材库存:', station.store[RESOURCE_STEEL]);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Station', id: 'Station' },
           { label: 'Store', id: 'Store' },
-          { label: 'Game.ships', id: 'Game.ships' },
         ],
       },
     ],
@@ -293,34 +433,37 @@ if (q) {
   {
     id: 'Game.buildings',
     title: 'buildings',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '自己的设施、配方与生产进度',
-    keywords: 'buildings 建筑 设施 工厂 配方 生产 进度',
+    summary: '本公司名下全部已完工生产建筑的字典',
+    keywords: 'Game.buildings 建筑 工厂 生产 配方',
     blocks: [
       {
         kind: 'prose',
-        text: '自己名下的设施，键是设施 id。每座设施按当前配方推进生产周期，`progress / cycleTicks` 是本周期进度。',
+        text: '以建筑 ID（数字字符串）为键的只读字典，包含本公司所有已建成的生产建筑。尚处于施工中的建筑不会出现在此字典中（但会占用所在 `Plot.usedSlots`）。详细字段与控制方法见 `Building`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.buildings: Record<string, Building>',
       },
       {
         kind: 'example',
-        code: `for (const b of Object.values(Game.buildings)) {
-  if (!b.active) {
-    const rc = b.setActive(true);
-    if (rc !== OK) console.log('开机失败', b.id, rc);
+        caption: '统计各类建筑数量并开启停产中的建筑',
+        code: `module.exports.loop = function () {
+  for (const b of Object.values(Game.buildings)) {
+    if (!b.active) {
+      b.setActive(true);
+    }
   }
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '同一 tick 改配方或开关不会改变本 tick 的 `recipeId / active / progress` 字段——下一 tick 才生效。',
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Building', id: 'Building' },
-          { label: 'Game.getRecipe', id: 'Game.getRecipe' },
+          { label: 'Building.setRecipe', id: 'Building.setRecipe' },
+          { label: 'Building.setActive', id: 'Building.setActive' },
+          { label: 'Game.buildFacility', id: 'Game.buildFacility' },
         ],
       },
     ],
@@ -328,74 +471,36 @@ if (q) {
   {
     id: 'Game.ships',
     title: 'ships',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '属性',
-    summary: '自己的飞船、货舱与航线状态',
-    keywords: 'ships 飞船 舰队 运输 派船 货舱 耐久',
+    summary: '本公司名下全部运输飞船的字典',
+    keywords: 'Game.ships 飞船 舰队 运输 货舱',
     blocks: [
       {
         kind: 'prose',
-        text: '自己名下的飞船，键是飞船 id。`isBusy` 为 `false` 的飞船可以派活，`busyUntil` 是到达 tick。',
+        text: '以飞船 ID（数字字符串）为键的只读字典，包含本公司拥有的全部飞船。详细字段与调度方法见 `Ship`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'readonly Game.ships: Record<string, Ship>',
       },
       {
         kind: 'example',
-        code: `const idle = Object.values(Game.ships).filter((s) => !s.isBusy);
-for (const ship of idle) {
-  console.log(ship.id, ship.location, ship.durability);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '派船只校验出发地库存与燃料，路线耗时/油耗用 `calcRoute` 先算。`location` 是地面 `P1` 或站点 `ST:P1` / `ST:HUB`。',
+        caption: '列出所有空闲飞船的位置与耐久',
+        code: `module.exports.loop = function () {
+  const idle = Object.values(Game.ships).filter((s) => !s.isBusy);
+  for (const ship of idle) {
+    console.log('空闲飞船:', ship.id, '位置:', ship.location, '耐久:', ship.durability);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Ship', id: 'Ship' },
+          { label: 'Ship.dispatch', id: 'Ship.dispatch' },
+          { label: 'Ship.repair', id: 'Ship.repair' },
           { label: 'Game.market.calcRoute', id: 'Game.market.calcRoute' },
-        ],
-      },
-    ],
-  },
-  {
-    id: 'Game.market',
-    title: 'market',
-    group: 'Game',
-    kind: '属性',
-    summary: '市场查询与下单入口',
-    keywords: 'market 市场 交易所 盘口 挂单 下单',
-    blocks: [
-      {
-        kind: 'prose',
-        text: '市场入口：查询走惰性读取（真正读到才抓数据），写操作进本 tick 的 Intent 缓冲。',
-      },
-      {
-        kind: 'fields',
-        rows: [
-          { name: 'credits', type: 'number', desc: '本 tick 开盘时的现金副本' },
-          { name: 'orders', type: 'Record<string, MarketOrder>', desc: '自己的活跃挂单' },
-          { name: 'quote(stationId, item)', type: 'MarketQuote | null', desc: '盘口快照' },
-          { name: 'depth(stationId, item, limit?)', type: '{ bids, asks }', desc: '买卖深度' },
-          { name: 'getAllOrders(filter?)', type: 'MarketOrder[]', desc: '查询挂单（含他人）' },
-          { name: 'createOrder(params)', type: 'number', desc: '发布限价单' },
-          { name: 'cancelOrder(orderId)', type: 'number', desc: '撤销自己的挂单' },
-          { name: 'deal(orderId, amount)', type: 'number', desc: '直接吃单成交' },
-          { name: 'calcRoute(from, to)', type: 'RouteCost | null', desc: '航线耗时与油耗' },
-        ],
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '`credits` 是本 tick 开盘时的现金副本，不是实时余额；同一 tick 内它与 `Game.company.cash` 相等。',
-      },
-      {
-        kind: 'links',
-        items: [
-          { label: 'Game.market.createOrder', id: 'Game.market.createOrder' },
-          { label: 'Game.market.quote', id: 'Game.market.quote' },
-          { label: 'Game.market.depth', id: 'Game.market.depth' },
-          { label: 'Game.market.getAllOrders', id: 'Game.market.getAllOrders' },
         ],
       },
     ],
@@ -403,53 +508,68 @@ for (const ship of idle) {
   {
     id: 'Game.buyPlot',
     title: 'buyPlot',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '方法',
-    summary: '按具体位置 slotId 购买一手地，或按 listingId 收购二手/银行挂牌地',
-    keywords: '买地 地块 土地 plot slotId listing 一手 二手 定向',
+    summary: '按位置编号购买一手空地，或按挂牌编号收购二手地块',
+    keywords: 'Game.buyPlot 买地 地块 slotId listingId 一手 二手',
     blocks: [
       {
-        kind: 'syntax',
-        code: 'Game.buyPlot(planetId, { slotId } | { listingId }) → number',
+        kind: 'prose',
+        text: '购买指定行星上的一手空地，或收购其他公司/银行清算挂牌的二手地块。购买一手空地前可通过 `Game.market.getLandPlots` 筛选空地的 `slotId`；收购二手地可通过 `planet.landListings` 或 `getLandPlots` 获取 `listingId`。',
       },
       {
-        kind: 'prose',
-        text: '购买指定位置的地块（已移除盲盒式无参数买地）。通过 `Game.market.getLandPlots(planetId)` 挑选未开发空地的 `slotId`，或从 `planet.landListings` / `getLandPlots` 选中挂牌地的 `listingId` 后下单。',
+        kind: 'syntax',
+        code: 'Game.buyPlot(\n  planetId: string,\n  target: { slotId: number } | { listingId: string | number }\n): RetCode',
       },
       {
         kind: 'params',
         rows: [
-          { name: 'planetId', type: 'string', required: true, desc: '行星 id，如 `P1`' },
-          { name: 'target.slotId', type: 'number', required: false, desc: '购买一手空地：来自 `getLandPlots(planetId)` 中 `status === "unclaimed"` 的 `slotId`' },
-          { name: 'target.listingId', type: 'string | number', required: false, desc: '收购二手/清算挂牌地：来自 `landListings[].listingId` 或 `getLandPlots()` 的 `listingId`' },
+          { name: 'planetId', type: 'string', required: 'required', desc: '目标行星 ID，如 `\'P2\'`' },
+          { name: 'target', type: 'object', required: 'required', desc: '购买目标对象，以下两个字段二选一（同时提供时优先按 `listingId` 处理）' },
+          { name: 'target.slotId', type: 'number', required: 'oneOf', desc: '一手空地的永久位置编号，来自 `getLandPlots(planetId)` 中 `status === \'unclaimed\'` 的记录' },
+          { name: 'target.listingId', type: 'string | number', required: 'oneOf', desc: '二手/银行挂牌编号，来自 `planet.landListings[].listingId` 或 `getLandPlots()`' },
         ],
       },
-      { kind: 'returns', type: 'number', desc: '`OK` 或错误码' },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示买地请求已进入本 tick 队列，否则返回负数错误码',
+      },
       {
         kind: 'errors',
         rows: [
-          { code: 'ERR_NOT_FOUND', when: '行星、slotId 或 listingId 不存在' },
-          { code: 'ERR_INVALID_TARGET', when: '目标位置是城市区或已被其他公司占用' },
-          { code: 'ERR_INVALID_ARGS', when: 'planetId 非法，或未提供 `{ slotId }` / `{ listingId }`' },
-          { code: 'ERR_FULL', when: '本 tick 已用满 32 条 Intent' },
+          { code: 'ERR_INVALID_ARGS', when: '`planetId` 非字符串、`target` 缺失，或未提供合法的数字型 `slotId` / `listingId`' },
+          { code: 'ERR_NOT_FOUND', when: '行星不存在，或指定的 `slotId` / `listingId` 不存在' },
+          { code: 'ERR_INVALID_TARGET', when: '按 `slotId` 购买时，目标位置并非未开发空地（城市区、已被占用或正在挂牌）' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '本公司当前存在逾期未还贷款（无法扩张购地）；',
+          '落账时可用现金不足以支付地价（一手地为 `planet.primaryLandPrice`，二手地为 `askPrice`）；',
+          '同一 tick 内目标 `slotId` 或 `listingId` 被其他公司抢先买走（引擎不会自动替换为其他空地）；',
+          '尝试购买本公司自己挂牌出售的地块。',
         ],
       },
       {
         kind: 'example',
-        code: `const p = Game.planets[Game.company.homePlanetId];
-// 1) 定向挑采矿加成最高的一手空地
-const free = (Game.market.getLandPlots(p.id) || [])
-  .filter((t) => t.status === 'unclaimed')
-  .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
-if (free && free.price !== null && Game.company.cash > free.price) {
-  const rc = Game.buyPlot(p.id, { slotId: free.slotId });
-  if (rc !== OK) console.log('定向买地失败', rc);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '所有位置在世界创建时即固定。若目标 `slotId` 在同一 tick 先被他人抢走，落账阶段会拒单，不会随机替换成别的地块。',
+        caption: '挑选母星上矿冶加成最高的一手空地并购买',
+        code: `module.exports.loop = function () {
+  const pid = Game.company.homePlanetId;
+  const tiles = Game.market.getLandPlots(pid);
+  if (!tiles) return;
+
+  const best = tiles
+    .filter((t) => t.status === 'unclaimed' && t.price !== null)
+    .sort((a, b) => (b.buildingMods.mine_smelter || 0) - (a.buildingMods.mine_smelter || 0))[0];
+
+  if (best && best.price !== null && Game.company.cash >= best.price) {
+    const rc = Game.buyPlot(pid, { slotId: best.slotId });
+    if (rc !== OK) console.warn('buyPlot 失败:', rc);
+  }
+};`,
       },
       {
         kind: 'links',
@@ -465,49 +585,69 @@ if (free && free.price !== null && Game.company.cash > free.price) {
   {
     id: 'Game.buildFacility',
     title: 'buildFacility',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '方法',
-    summary: '在地块上建造设施',
-    keywords: '建造 设施 工厂 plot building type',
+    summary: '在自己名下的地块上建造一座指定类型的建筑',
+    keywords: 'Game.buildFacility 建造 建厂 建筑 地块 building_mat',
     blocks: [
-      { kind: 'syntax', code: 'Game.buildFacility(plotId, buildingType) → number' },
-      { kind: 'prose', text: '在自己名下的地块上建造一座设施，消耗现金与建材。' },
+      {
+        kind: 'prose',
+        text: '在自己的地块上发起一座建筑的建造任务。建造需要消耗所在行星地面仓的建材（常见为 6~14 个 `building_mat`）和 `80 × Game.cpi` 信用点施工费，并在施工期（数个 tick）结束后加入 `Game.buildings`。施工期间即占用该地块的 `usedSlots`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'Game.buildFacility(plotId: string, buildingType: string): RetCode',
+      },
       {
         kind: 'params',
         rows: [
-          { name: 'plotId', type: 'string', required: true, desc: '自己的地块 id（`Game.plots` 的键）' },
-          { name: 'buildingType', type: 'string', required: true, desc: '建筑类型 id，如 `mine_smelter`' },
+          { name: 'plotId', type: 'string', required: 'required', desc: '自己的地块 ID（`Game.plots` 的键）' },
+          { name: 'buildingType', type: 'string', required: 'required', desc: '建筑类型 ID，如 `\'mine_smelter\'`（完整清单见「默认世界建筑与配方」）' },
         ],
       },
-      { kind: 'returns', type: 'number', desc: '`OK` 或错误码' },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示建造请求已入队，否则返回负数错误码',
+      },
       {
         kind: 'errors',
         rows: [
-          { code: 'ERR_INVALID_ARGS', when: 'plotId 不是合法数字' },
-          { code: 'ERR_NOT_OWNER', when: '地块不属于自己' },
-          { code: 'ERR_INVALID_TARGET', when: '建筑类型不存在' },
-          { code: 'ERR_FULL', when: '本 tick 已用满 32 条 Intent' },
+          { code: 'ERR_INVALID_ARGS', when: '`plotId` 格式非法（无法解析为数字）或参数类型不对' },
+          { code: 'ERR_NOT_OWNER', when: '地块不存在或不属于本公司' },
+          { code: 'ERR_INVALID_TARGET', when: '指定的 `buildingType` 不存在' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '地块剩余槽位不足（`plot.usedSlots + 建筑占用格数 > plot.capacity`）；',
+          '落账时现金不足 `80 × Game.cpi` 施工费；',
+          '所在行星的地面仓（`planet.groundStore`）中建材数量不足（如 `building_mat`）。',
         ],
       },
       {
         kind: 'example',
-        code: `const empty = Object.values(Game.plots).find((p) => p.usedSlots < p.capacity);
-if (empty) {
-  const rc = Game.buildFacility(empty.id, 'mine_smelter');
-  if (rc !== OK) console.log('建造失败', rc);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '建筑类型目前没有可从脚本枚举的目录（Game 里没有建筑表），只能从已知类型名或游戏界面确认——这是当前 API 的已知缺口。',
+        caption: '在还有空位的地块上建造一座矿业冶炼厂',
+        code: `module.exports.loop = function () {
+  const plot = Object.values(Game.plots).find((p) => p.usedSlots < p.capacity);
+  if (!plot) return;
+
+  const ground = Game.planets[plot.planetId].groundStore;
+  if (ground[RESOURCE_BUILDING_MAT] >= 8 && Game.company.cash >= 80 * Game.cpi) {
+    const rc = Game.buildFacility(plot.id, 'mine_smelter');
+    if (rc !== OK) console.warn('建造失败:', rc);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
+          { label: '默认世界建筑与配方', id: 'constants/world-catalog' },
           { label: 'Game.plots', id: 'Game.plots' },
-          { label: 'Building', id: 'Building' },
           { label: 'Game.demolishFacility', id: 'Game.demolishFacility' },
+          { label: 'Building', id: 'Building' },
         ],
       },
     ],
@@ -515,46 +655,62 @@ if (empty) {
   {
     id: 'Game.demolishFacility',
     title: 'demolishFacility',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '方法',
-    summary: '拆除地块上的设施',
-    keywords: '拆除 拆掉 设施 建筑 plot',
+    summary: '拆除自己地块上的指定已完工建筑并释放槽位',
+    keywords: 'Game.demolishFacility 拆除 建筑 释放槽位',
     blocks: [
-      { kind: 'syntax', code: 'Game.demolishFacility(plotId, buildingId) → number' },
-      { kind: 'prose', text: '拆除自己地块上的设施。' },
+      {
+        kind: 'prose',
+        text: '立即拆除指定地块上的建筑并释放其占用的槽位。拆除不会返还建造成本或建材。',
+      },
+      {
+        kind: 'syntax',
+        code: 'Game.demolishFacility(plotId: string, buildingId: string): RetCode',
+      },
       {
         kind: 'params',
         rows: [
-          { name: 'plotId', type: 'string', required: true, desc: '地块 id' },
-          { name: 'buildingId', type: 'string', required: true, desc: '设施 id（`Game.buildings` 的键）' },
+          { name: 'plotId', type: 'string', required: 'required', desc: '所属地块 ID（`Game.plots` 的键）' },
+          { name: 'buildingId', type: 'string', required: 'required', desc: '待拆除建筑 ID（`Game.buildings` 的键）' },
         ],
       },
-      { kind: 'returns', type: 'number', desc: '`OK` 或错误码' },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示拆除请求已入队，否则返回负数错误码',
+      },
       {
         kind: 'errors',
         rows: [
-          { code: 'ERR_INVALID_ARGS', when: 'id 不是合法数字' },
-          { code: 'ERR_NOT_OWNER', when: '地块不属于自己' },
-          { code: 'ERR_FULL', when: '本 tick 已用满 32 条 Intent' },
+          { code: 'ERR_INVALID_ARGS', when: '`plotId` 或 `buildingId` 无法解析为数字，或参数类型不对' },
+          { code: 'ERR_NOT_OWNER', when: '地块不存在或不属于本公司' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '指定的 `buildingId` 并不存在于该 `plotId` 上（例如输入了错配的建筑 ID，或该建筑尚在建造中）。',
         ],
       },
       {
         kind: 'example',
-        code: `const b = Object.values(Game.buildings)[0];
-if (b && !b.active) {
-  Game.demolishFacility(b.plotId, b.id);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '宿主只校验地块归属，不校验设施是否属于你、是否在该地块上——引擎落地阶段会再校验，失败会静默丢弃。',
+        caption: '拆除已停产的建筑以腾出地块槽位',
+        code: `module.exports.loop = function () {
+  const idle = Object.values(Game.buildings).find((b) => !b.active);
+  if (idle) {
+    const rc = Game.demolishFacility(idle.plotId, idle.id);
+    if (rc !== OK) console.warn('拆除请求失败:', rc);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'Game.buildFacility', id: 'Game.buildFacility' },
           { label: 'Building', id: 'Building' },
+          { label: 'Plot', id: 'Plot' },
         ],
       },
     ],
@@ -562,48 +718,71 @@ if (b && !b.active) {
   {
     id: 'Game.bank',
     title: 'bank',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '方法',
-    summary: '在行星央行存取借还',
-    keywords: '银行 央行 存款 取款 借款 还款 deposit withdraw borrow repay',
+    summary: '在母星央行进行存款、取款、借款或还款操作',
+    keywords: 'Game.bank 银行 央行 存款 取款 借款 还款 deposit withdraw borrow repay 利息 逾期',
     blocks: [
-      { kind: 'syntax', code: "Game.bank(planetId, op, amount) → number" },
-      { kind: 'prose', text: '在指定行星的央行做资金操作。`op` 只能是四个字符串之一。' },
+      {
+        kind: 'prose',
+        text: '在公司所属母星（`Game.company.homePlanetId`）的央行执行资金操作。贷款利率见 `planet.bankRatePct`，存款利率为贷款利率的一半；单笔贷款期限为 360 tick。',
+      },
+      {
+        kind: 'syntax',
+        code: "Game.bank(\n  planetId: string,\n  op: 'deposit' | 'withdraw' | 'borrow' | 'repay',\n  amount: number\n): RetCode",
+      },
       {
         kind: 'params',
         rows: [
-          { name: 'planetId', type: 'string', required: true, desc: '行星 id' },
-          { name: 'op', type: '"deposit" | "withdraw" | "borrow" | "repay"', required: true, desc: '操作类型' },
-          { name: 'amount', type: 'number', required: true, desc: '金额（信用点），必须大于 0' },
+          { name: 'planetId', type: 'string', required: 'required', desc: '行星 ID；**必须等于 `Game.company.homePlanetId`**，否则落账阶段会被拒绝' },
+          { name: 'op', type: "'deposit' | 'withdraw' | 'borrow' | 'repay'", required: 'required', desc: '操作类型：`deposit` 存款、`withdraw` 取款、`borrow` 借款、`repay` 还款' },
+          { name: 'amount', type: 'number', required: 'required', desc: '操作金额（信用点），必须为有限正数（`> 0`）' },
         ],
       },
-      { kind: 'returns', type: 'number', desc: '`OK` 或错误码' },
+      {
+        kind: 'returns',
+        type: 'RetCode',
+        desc: '返回 `OK` 表示银行操作已入队，否则返回负数错误码',
+      },
       {
         kind: 'errors',
         rows: [
-          { code: 'ERR_INVALID_ARGS', when: '行星不存在 / op 非法 / 金额 ≤ 0' },
-          { code: 'ERR_FULL', when: '本 tick 已用满 32 条 Intent' },
+          { code: 'ERR_INVALID_ARGS', when: '行星不存在、`op` 不在四种合法值之中，或 `amount <= 0` / 取整至货币最小精度（0.0001）后为 0' },
+          { code: 'ERR_FULL', when: '本 tick 已用满 32 条写操作配额' },
+        ],
+      },
+      {
+        kind: 'settlement',
+        items: [
+          '`planetId` 不是本公司的母星 `Game.company.homePlanetId`；',
+          '`deposit`：落账时公司现金不足 `amount`；',
+          '`withdraw`：公司储蓄余额不足，或母星央行可用准备金不足；',
+          '`borrow`：存在逾期未还贷款、借款后总负债超过公司授信额度，或央行准备金扣除 25% 存款最低准备后可贷余额不足；',
+          '`repay`：当前无负债或公司现金不足（若 `amount` 超过实际负债，引擎会自动按 `min(amount, debt)` 结清）。',
         ],
       },
       {
         kind: 'example',
-        code: `// 先看利率，再决定存还是借
-const p = Game.planets[Game.company.homePlanetId];
-console.log('年化', p.bankRatePct, '%');
-if (Game.company.cash > 2000) {
-  Game.bank(p.id, 'deposit', 1000);
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'info',
-        text: '利率见 `planet.bankRatePct`。余额、额度与利息在落地阶段校验/结算。',
+        caption: '查看母星利率并在现金充裕时存入闲置资金',
+        code: `module.exports.loop = function () {
+  const homeId = Game.company.homePlanetId;
+  const home = Game.planets[homeId];
+  if (!home) return;
+
+  console.log('母星央行年化贷款利率:', home.bankRatePct, '%');
+  if (Game.company.debt > 0 && Game.company.cash > Game.company.debt) {
+    Game.bank(homeId, 'repay', Game.company.debt);
+  } else if (Game.company.cash > 3000) {
+    Game.bank(homeId, 'deposit', 1000);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
-          { label: 'Planet', id: 'Planet' },
+          { label: '核心经济规则', id: 'guides/economy' },
           { label: 'Game.company', id: 'Game.company' },
+          { label: 'Planet', id: 'Planet' },
         ],
       },
     ],
@@ -611,38 +790,49 @@ if (Game.company.cash > 2000) {
   {
     id: 'Game.getRecipe',
     title: 'getRecipe',
-    group: 'Game',
+    group: 'Game 接口',
     kind: '方法',
-    summary: '按 id 读取静态配方',
-    keywords: '配方 recipe 输入 输出 周期 功耗 工资',
+    summary: '按配方 ID 读取静态配方的输入、输出、周期与成本定义',
+    keywords: 'Game.getRecipe 配方 recipe 输入 输出 周期 电耗 工资',
     blocks: [
-      { kind: 'syntax', code: 'Game.getRecipe(recipeId) → RecipeInfo | null' },
-      { kind: 'prose', text: '读取一条静态配方：输入、输出、周期、电耗与工资。查不到返回 `null`。' },
+      {
+        kind: 'prose',
+        text: '根据配方 ID 查询该配方的静态生产参数。所有默认世界的配方 ID 可在「默认世界建筑与配方」速查表中查看。',
+      },
+      {
+        kind: 'syntax',
+        code: 'Game.getRecipe(recipeId: string): RecipeInfo | null',
+      },
       {
         kind: 'params',
-        rows: [{ name: 'recipeId', type: 'string', required: true, desc: '配方 id' }],
+        rows: [
+          { name: 'recipeId', type: 'string', required: 'required', desc: '配方 ID，如 `\'steel_carbon\'`' },
+        ],
       },
-      { kind: 'returns', type: 'RecipeInfo | null', desc: '配方静态详情；不存在时为 null' },
+      {
+        kind: 'returns',
+        type: 'RecipeInfo | null',
+        desc: '存在时返回静态 `RecipeInfo` 对象；`recipeId` 非字符串、为空或不存在时返回 `null`',
+      },
       {
         kind: 'example',
-        code: `const b = Object.values(Game.buildings)[0];
-if (b) {
+        caption: '读取当前建筑绑定配方的投入与产出',
+        code: `module.exports.loop = function () {
+  const b = Object.values(Game.buildings)[0];
+  if (!b) return;
+
   const recipe = Game.getRecipe(b.recipeId);
   if (recipe) {
-    console.log(recipe.cycleTicks, 'tick 一炉', recipe.inputs, '→', recipe.outputs);
+    console.log(recipe.id, '周期:', recipe.cycleTicks, '投入:', recipe.inputs, '产出:', recipe.outputs);
   }
-}`,
-      },
-      {
-        kind: 'note',
-        level: 'warn',
-        text: '目前没有"列出全部配方"的入口，只能按 id 查询；配方 id 可从工厂界面或 production pack 得知。',
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: 'RecipeInfo', id: 'RecipeInfo' },
-          { label: 'Game.buildings', id: 'Game.buildings' },
+          { label: '默认世界建筑与配方', id: 'constants/world-catalog' },
+          { label: 'Building.setRecipe', id: 'Building.setRecipe' },
         ],
       },
     ],

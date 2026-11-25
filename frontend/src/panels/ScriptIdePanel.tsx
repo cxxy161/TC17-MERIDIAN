@@ -9,36 +9,49 @@ import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 
 const API_COMPLETIONS = [
-  { label: 'Game.time', type: 'property', detail: '当前回合数' },
+  { label: 'Game.time', type: 'property', detail: '当前 tick 序号' },
   { label: 'Game.cpi', type: 'property', detail: '全星系物价指数' },
-  { label: 'Game.cpu.getUsed()', type: 'method', detail: '当前脚本已消耗毫秒数' },
-  { label: 'Game.company', type: 'property', detail: '现金/储蓄/负债/职业信息' },
-  { label: 'Game.planets', type: 'property', detail: '所有行星遥测与仓库 Store' },
-  { label: 'Game.stations', type: 'property', detail: '各轨道站与枢纽站 Store' },
-  { label: 'Game.buildings', type: 'property', detail: '名下设施（setRecipe / setActive）' },
+  { label: 'Game.cpu.limit', type: 'property', detail: '单 tick CPU 毫秒上限' },
+  { label: 'Game.cpu.getUsed()', type: 'method', detail: '本 tick 已消耗毫秒数' },
+  { label: 'Game.company', type: 'property', detail: '本公司现金/储蓄/负债/母星与职业' },
+  { label: 'Game.planets', type: 'property', detail: '全星系行星遥测与本公司仓库' },
+  { label: 'Game.plots', type: 'property', detail: '本公司名下地块（含 slotId / lat / lon / buildingMods）' },
+  { label: 'Game.stations', type: 'property', detail: '本公司有库存记录的站点 Store' },
+  { label: 'Game.buildings', type: 'property', detail: '名下已完工建筑（setRecipe / setActive）' },
   { label: 'Game.ships', type: 'property', detail: '名下飞船（dispatch / repair）' },
-  { label: 'Game.market.quote(stationId, item)', type: 'method', detail: '懒加载查询盘口报价' },
-  { label: 'Game.market.depth(stationId, item, limit)', type: 'method', detail: '查询买卖深度' },
-  { label: 'Game.market.getAllOrders(filter)', type: 'method', detail: '查询市场挂单' },
+  { label: 'Game.market.credits', type: 'property', detail: '本 tick 开盘现金副本' },
+  { label: 'Game.market.orders', type: 'property', detail: '本公司活跃挂单字典' },
+  { label: 'Game.market.quote(stationId, resourceType)', type: 'method', detail: '查询盘口报价' },
+  { label: 'Game.market.depth(stationId, resourceType, limit)', type: 'method', detail: '查询买卖盘口深度（最多 5 档）' },
+  { label: 'Game.market.getAllOrders(filter)', type: 'method', detail: '筛选全星系活跃挂单' },
   { label: 'Game.market.createOrder({ type, resourceType, price, totalAmount, stationId })', type: 'method', detail: '发布限价买卖单' },
-  { label: 'Game.market.cancelOrder(orderId)', type: 'method', detail: '撤销本人挂单' },
+  { label: 'Game.market.cancelOrder(orderId)', type: 'method', detail: '撤销本公司挂单' },
   { label: 'Game.market.deal(orderId, amount)', type: 'method', detail: '直接吃单成交' },
-  { label: 'Game.market.calcRoute(fromId, toId)', type: 'method', detail: '计算航线耗时与油耗' },
-  { label: 'Game.buyPlot(planetId, listingId)', type: 'method', detail: '购买一手或二手地块' },
-  { label: 'Game.buildFacility(plotId, buildingType)', type: 'method', detail: '建造设施' },
-  { label: 'Game.demolishFacility(plotId, buildingId)', type: 'method', detail: '拆除设施' },
-  { label: 'Game.bank(planetId, op, amount)', type: 'method', detail: '央行存取借还' },
-  { label: 'Game.getRecipe(recipeId)', type: 'method', detail: '读取配方静态详情' },
-  { label: 'Memory', type: 'variable', detail: '128KB 持久化 JSON 树' },
-  { label: 'RESOURCES_ALL', type: 'constant', detail: '全物资数组' },
+  { label: 'Game.market.calcRoute(fromId, toId)', type: 'method', detail: '估算航线耗时与基准油耗' },
+  { label: 'Game.market.getLandPlots(planetId)', type: 'method', detail: '获取行星全部公开地表格点' },
+  { label: 'Game.market.listCompanies(filter)', type: 'method', detail: '分页筛选全星系公司公开摘要' },
+  { label: 'Game.market.getCompany(companyId)', type: 'method', detail: '查看指定公司的公开商业情报' },
+  { label: 'Game.buyPlot(planetId, { slotId } | { listingId })', type: 'method', detail: '购买一手空地或收购二手挂牌地' },
+  { label: 'Game.buildFacility(plotId, buildingType)', type: 'method', detail: '在地块上建造建筑' },
+  { label: 'Game.demolishFacility(plotId, buildingId)', type: 'method', detail: '拆除地块上的建筑' },
+  { label: 'Game.bank(planetId, op, amount)', type: 'method', detail: '母星央行存取借还' },
+  { label: 'Game.getRecipe(recipeId)', type: 'method', detail: '读取静态配方详情' },
+  { label: 'Memory', type: 'variable', detail: '128 KB 跨 tick 持久化 JSON 对象' },
+  { label: 'console.log', type: 'method', detail: '输出普通日志（每 tick 限 200 行）' },
+  { label: 'console.warn', type: 'method', detail: '输出警告日志' },
+  { label: 'console.error', type: 'method', detail: '输出错误日志' },
+  { label: 'require(name)', type: 'function', detail: '加载同项目扁平模块' },
+  { label: 'RESOURCES_ALL', type: 'constant', detail: '全部物品 ID 只读数组' },
   { label: 'OK', type: 'constant', detail: '0 成功' },
   { label: 'ERR_NOT_OWNER', type: 'constant', detail: '-1 无权限' },
-  { label: 'ERR_NO_PATH', type: 'constant', detail: '-2 无可用航线' },
+  { label: 'ERR_NO_PATH', type: 'constant', detail: '-2 没有可行航线' },
   { label: 'ERR_BUSY', type: 'constant', detail: '-4 飞船航行中' },
   { label: 'ERR_NOT_FOUND', type: 'constant', detail: '-5 目标不存在' },
-  { label: 'ERR_NOT_ENOUGH_RESOURCES', type: 'constant', detail: '-6 库存/燃料不足' },
-  { label: 'ERR_FULL', type: 'constant', detail: '-8 满载或挂单上限' },
-  { label: 'ERR_NOT_IN_RANGE', type: 'constant', detail: '-9 位置不匹配' },
+  { label: 'ERR_NOT_ENOUGH_RESOURCES', type: 'constant', detail: '-6 出发地燃料不足' },
+  { label: 'ERR_INVALID_TARGET', type: 'constant', detail: '-7 目标无效或不匹配' },
+  { label: 'ERR_FULL', type: 'constant', detail: '-8 满载或配额/挂单上限' },
+  { label: 'ERR_NOT_IN_RANGE', type: 'constant', detail: '-9 飞船不在指定出发地' },
+  { label: 'ERR_INVALID_ARGS', type: 'constant', detail: '-10 参数非法' },
   { label: 'ERR_NOT_ENOUGH_CREDITS', type: 'constant', detail: '-14 现金不足' },
   { label: 'ORDER_BUY', type: 'constant', detail: '"buy"' },
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
@@ -212,7 +225,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
                     setNewFileName('');
                   }
                 }}
-                placeholder="如 market/arb"
+                placeholder="如 market（扁平名）"
                 className="w-28 bg-[#191f27] border border-sky-400/50 px-1.5 py-0 text-[10px] mono outline-none rounded-sm"
               />
               <button onClick={submitNewFile} className="cta-blue py-0 px-1.5 text-[10px]">
@@ -228,9 +241,9 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
 
         <div className="flex items-center gap-2 shrink-0">
           <button
-            onClick={() => openTemp('apidocs', { docId: 'overview/quickstart' })}
+            onClick={() => openTemp('apidocs', { docId: 'guides/quickstart' })}
             className="pill-btn py-0 text-[10px] whitespace-nowrap"
-            title="打开玩家脚本 API 参考（Game / Memory / 错误码）"
+            title="打开玩家脚本 API 参考（Game / Memory / 返回码）"
           >
             API 参考
           </button>

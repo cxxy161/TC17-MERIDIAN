@@ -204,7 +204,10 @@
   for (const pl of boot.plots) {
     plotsMap[pl.id] = Object.freeze({
       id: pl.id,
+      slotId: pl.slotId,
       planetId: pl.planetId,
+      lat: pl.lat,
+      lon: pl.lon,
       terrainName: pl.terrainName,
       capacity: pl.capacity,
       usedSlots: pl.usedSlots,

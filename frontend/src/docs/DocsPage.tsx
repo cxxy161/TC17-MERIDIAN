@@ -5,9 +5,8 @@ import { docTitle } from './apiDocs';
 import type { ProductionPack } from '../types/meridian';
 
 /**
- * 独立文档页（/docs/）：免登录、只读、没有会话逻辑。
- * 与游戏内窗口共用 DocView，区别只在「外壳」和「导航写到哪里」——这里写 location.hash，
- * 所以 #Game.market.createOrder 可以直接分享、前进后退可用。
+ * 独立文档页（/docs/）：免登录、只读、无会话依赖。
+ * 与游戏内窗口共用 DocView，导航状态同步到 location.hash。
  */
 function readHash(): string | undefined {
   const raw = window.location.hash.replace(/^#/, '');
@@ -29,7 +28,6 @@ export const DocsPage: React.FC = () => {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  // /api/catalog 无鉴权：拿到当前世界的物品表，把 RESOURCE_<ID> 清单渲染成真实常量。
   useEffect(() => {
     let alive = true;
     fetch('/api/catalog')
@@ -39,7 +37,7 @@ export const DocsPage: React.FC = () => {
         setItems(pack.items.map((it) => ({ id: it.id, name: it.name })));
       })
       .catch(() => {
-        /* 后端没起来时只显示静态文档，不打断阅读 */
+        /* 后端不可达时仍可正常浏览静态文档 */
       });
     return () => {
       alive = false;
@@ -65,7 +63,7 @@ export const DocsPage: React.FC = () => {
             子午线 · 脚本 API 参考
           </div>
           <div className="mono truncate text-[9px] text-slate-500">
-            Game · Memory · console · require · Store
+            上手指南 · 运行时 · Game 接口 · 实体 · 返回码 · 实战示例
           </div>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-3 text-[10px]">
