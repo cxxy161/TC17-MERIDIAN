@@ -332,7 +332,7 @@ function renderRuntime() {
       <div class="card-bd mono">
         <div class="kv"><span>最近 / 均值 / P95 / 最大</span><b>${Number(rt.tick_last_ms || 0).toFixed(1)} / ${Number(rt.tick_avg_ms || 0).toFixed(1)} / ${Number(rt.tick_p95_ms || 0).toFixed(1)} / ${Number(rt.tick_max_ms || 0).toFixed(1)} ms</b></div>
         <div class="kv"><span>共享快照准备</span><b>${Number(ph.snapshot_ms || 0).toFixed(2)} ms</b></div>
-        <div class="kv"><span>玩家JS + NPC决策</span><b>${Number(ph.actors_ms || 0).toFixed(2)} ms</b></div>
+        <div class="kv"><span>玩家JS / NPC决策</span><b>${Number(ph.players_ms || 0).toFixed(2)} / ${Number(ph.npc_ms || 0).toFixed(2)} ms</b></div>
         <div class="kv"><span>核心经济与撮合</span><b>${Number(ph.world_tick_ms || 0).toFixed(2)} ms</b></div>
         <div class="kv"><span>SQLite 事务落盘</span><b>${Number(ph.persist_ms || 0).toFixed(2)} ms</b></div>
         <div class="kv"><span>广播组装 / 总览生成</span><b>${Number(ph.broadcast_ms || 0).toFixed(2)} / ${Number(rt.overview_gen_ms || 0).toFixed(1)} ms</b></div>

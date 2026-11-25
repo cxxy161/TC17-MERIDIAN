@@ -103,7 +103,7 @@ export const GUIDE_ENTRIES: DocEntry[] = [
     group: '上手指南',
     kind: '指南',
     summary: 'CPU 耗时、内存、写操作数量、活跃挂单、Memory 体积与日志的硬性上限',
-    keywords: '限制 配额 上限 5ms 4MB 32 64 128KB 200 超时 熔断 回滚',
+    keywords: '限制 配额 上限 10ms 4MB 32 64 128KB 200 超时 熔断 回滚',
     blocks: [
       {
         kind: 'prose',
@@ -114,7 +114,7 @@ export const GUIDE_ENTRIES: DocEntry[] = [
         title: '资源与操作上限',
         headers: ['限制项', '上限值', '超出后的行为'],
         rows: [
-          ['单 tick CPU 时间', '5 ms（墙钟）', '立即中断脚本；本 tick 全部写操作丢弃，`Memory` 回滚到上一 tick，已打印日志保留'],
+          ['单 tick CPU 时间', '10 ms（默认，仅计玩家脚本执行）', '立即中断脚本并重置沙盒实例；本 tick 全部写操作丢弃，`Memory` 回滚到上一 tick，已打印日志保留'],
           ['沙盒堆内存', '4 MB', '触发内存溢出报错；本 tick 全部写操作丢弃，`Memory` 回滚到上一 tick'],
           ['单 tick 写操作', '32 条 / 公司', '第 33 条起写方法直接返回 `ERR_FULL`。游戏界面上的手动操作也共享这 32 条配额，且排在脚本之后'],
           ['全星系活跃挂单', '64 条 / 公司', '达到上限后 `Game.market.createOrder` 返回 `ERR_FULL`；撤单或成交释放的名额下一 tick 生效'],
@@ -127,7 +127,7 @@ export const GUIDE_ENTRIES: DocEntry[] = [
         kind: 'note',
         level: 'warn',
         title: '留足 CPU 安全余量',
-        text: '5 ms 为墙钟时间（包含模块加载与查询接口的数据读取耗时），可通过 `Game.cpu.getUsed()` 实时监控。若发现接近 `Game.cpu.limit`，建议提前 `return` 放弃本 tick 次要任务，避免整 tick 回滚。',
+        text: '计时从执行玩家脚本开始计算（不含底层快照准备耗时），可通过 `Game.cpu.getUsed()` 实时监控。若发现接近 `Game.cpu.limit`，建议提前 `return` 放弃本 tick 次要任务，避免整 tick 回滚。',
       },
       {
         kind: 'links',

@@ -11,6 +11,8 @@ use serde::Serialize;
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TickPhases {
     pub snapshot_ms: f64,
+    pub npc_ms: f64,
+    pub players_ms: f64,
     pub actors_ms: f64,
     pub world_tick_ms: f64,
     pub npc_spawn_ms: f64,

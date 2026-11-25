@@ -21,24 +21,28 @@
     Object.defineProperty(global, k, { value: v, enumerable: true, writable: false });
   }
 
-  const boot = global.__MERIDIAN_BOOTSTRAP;
-  delete global.__MERIDIAN_BOOTSTRAP;
-
-  const RESOURCES_LIST = Object.freeze(boot.resources.slice());
-  const RESOURCE_SET = new Set(RESOURCES_LIST);
-  Object.defineProperty(global, "RESOURCES_ALL", {
-    value: RESOURCES_LIST,
-    enumerable: true,
-    writable: false,
-  });
-  for (const res of RESOURCES_LIST) {
-    const constName = "RESOURCE_" + res.toUpperCase();
-    if (!(constName in global)) {
-      Object.defineProperty(global, constName, {
-        value: res,
-        enumerable: true,
-        writable: false,
-      });
+  let resourcesInited = false;
+  let RESOURCES_LIST = Object.freeze([]);
+  let RESOURCE_SET = new Set();
+  function ensureResources(list) {
+    if (resourcesInited) return;
+    resourcesInited = true;
+    RESOURCES_LIST = Object.freeze((list || []).slice());
+    RESOURCE_SET = new Set(RESOURCES_LIST);
+    Object.defineProperty(global, "RESOURCES_ALL", {
+      value: RESOURCES_LIST,
+      enumerable: true,
+      writable: false,
+    });
+    for (const res of RESOURCES_LIST) {
+      const constName = "RESOURCE_" + res.toUpperCase();
+      if (!(constName in global)) {
+        Object.defineProperty(global, constName, {
+          value: res,
+          enumerable: true,
+          writable: false,
+        });
+      }
     }
   }
 
@@ -168,109 +172,18 @@
   }
   global.require = requireFn;
 
-  // 5. Build Game API objects
-  const planetsMap = Object.create(null);
-  for (const p of boot.planets) {
-    const demandsObj = Object.create(null);
-    for (const [itemId, wantQty] of Object.entries(p.demands || {})) {
-      demandsObj[itemId] = Object.freeze({ qty: wantQty });
-    }
-    planetsMap[p.id] = Object.freeze({
-      id: p.id,
-      name: p.name,
-      wealthTier: p.wealthTier,
-      prosperity: p.prosperity,
-      population: p.population,
-      gravity: p.gravity,
-      wasteBacklog: p.wasteBacklog,
-      primaryLandPrice: p.primaryLandPrice,
-      landListings: Object.freeze(p.landListings || []),
-      bankRatePct: p.bankRatePct,
-      groundStore: createStore(p.groundStore, null),
-      stationStore: createStore(p.stationStore, null),
-      demands: Object.freeze(demandsObj),
-    });
-  }
-
-  const stationsMap = Object.create(null);
-  for (const [sid, storeObj] of Object.entries(boot.stations || {})) {
-    stationsMap[sid] = Object.freeze({
-      id: sid,
-      store: createStore(storeObj, null),
-    });
-  }
-
-  const plotsMap = Object.create(null);
-  for (const pl of boot.plots) {
-    plotsMap[pl.id] = Object.freeze({
-      id: pl.id,
-      slotId: pl.slotId,
-      planetId: pl.planetId,
-      lat: pl.lat,
-      lon: pl.lon,
-      terrainName: pl.terrainName,
-      capacity: pl.capacity,
-      usedSlots: pl.usedSlots,
-      buildingMods: Object.freeze(pl.buildingMods || {}),
-    });
-  }
-
-  const buildingsMap = Object.create(null);
-  for (const b of boot.buildings) {
-    const bObj = {
-      id: b.id,
-      type: b.type,
-      plotId: b.plotId,
-      planetId: b.planetId,
-      efficiency: b.efficiency,
-      recipeId: b.recipeId,
-      active: b.active,
-      progress: b.progress,
-      cycleTicks: b.cycleTicks,
-      setRecipe(recipeId) {
-        if (typeof recipeId !== "string" || !recipeId) return CONSTANTS.ERR_INVALID_ARGS;
-        return global.__meridian_set_recipe(b.id, recipeId);
-      },
-      setActive(active) {
-        if (typeof active !== "boolean") return CONSTANTS.ERR_INVALID_ARGS;
-        return global.__meridian_set_active(b.id, active);
-      },
-    };
-    buildingsMap[b.id] = Object.freeze(bObj);
-  }
-
-  const shipsMap = Object.create(null);
-  for (const s of boot.ships) {
-    const sObj = {
-      id: s.id,
-      size: s.size,
-      capacity: s.capacity,
-      durability: s.durability,
-      location: s.location,
-      busyUntil: s.busyUntil,
-      isBusy: s.isBusy,
-      store: createStore(s.cargo, s.capacity),
-      dispatch(from, to, cargo) {
-        if (typeof from !== "string" || typeof to !== "string" || !cargo || typeof cargo !== "object") {
-          return CONSTANTS.ERR_INVALID_ARGS;
-        }
-        return global.__meridian_dispatch_ship(s.id, from, to, JSON.stringify(cargo));
-      },
-      repair() {
-        return global.__meridian_repair_ship(s.id);
-      },
-    };
-    shipsMap[s.id] = Object.freeze(sObj);
-  }
-
-  const ownOrdersMap = Object.create(null);
-  for (const o of boot.ownOrders || []) {
-    ownOrdersMap[o.id] = Object.freeze(o);
-  }
+  // 5. Market & Game API wrappers (marketApi stays stable across warm VM ticks)
+  const EMPTY_FROZEN_MAP = Object.freeze(Object.create(null));
+  let currentCredits = 0;
+  let currentOrders = EMPTY_FROZEN_MAP;
 
   const marketApi = Object.freeze({
-    credits: boot.company.cash,
-    orders: Object.freeze(ownOrdersMap),
+    get credits() {
+      return currentCredits;
+    },
+    get orders() {
+      return currentOrders;
+    },
 
     quote(stationId, resourceType) {
       if (typeof stationId !== "string" || typeof resourceType !== "string") return null;
@@ -374,71 +287,195 @@
     },
   });
 
-  global.Game = Object.freeze({
-    time: boot.tick,
-    cpi: boot.cpi,
-    cpu: Object.freeze({
-      limit: boot.cpuLimitMs,
-      getUsed() {
-        return global.__meridian_cpu_used();
-      },
-    }),
-    company: Object.freeze(boot.company),
-    planets: Object.freeze(planetsMap),
-    stations: Object.freeze(stationsMap),
-    plots: Object.freeze(plotsMap),
-    buildings: Object.freeze(buildingsMap),
-    ships: Object.freeze(shipsMap),
-    market: marketApi,
+  function buyPlotFn(planetId, target) {
+    if (typeof planetId !== "string" || !planetId) return CONSTANTS.ERR_INVALID_ARGS;
+    if (!target || typeof target !== "object") return CONSTANTS.ERR_INVALID_ARGS;
+    if (target.listingId !== undefined && target.listingId !== null) {
+      return global.__meridian_buy_plot(planetId, "listing", String(target.listingId));
+    }
+    if (target.slotId !== undefined && target.slotId !== null) {
+      return global.__meridian_buy_plot(planetId, "slot", String(target.slotId));
+    }
+    return CONSTANTS.ERR_INVALID_ARGS;
+  }
 
-    buyPlot(planetId, target) {
-      if (typeof planetId !== "string" || !planetId) return CONSTANTS.ERR_INVALID_ARGS;
-      if (!target || typeof target !== "object") return CONSTANTS.ERR_INVALID_ARGS;
-      if (target.listingId !== undefined && target.listingId !== null) {
-        return global.__meridian_buy_plot(planetId, "listing", String(target.listingId));
-      }
-      if (target.slotId !== undefined && target.slotId !== null) {
-        return global.__meridian_buy_plot(planetId, "slot", String(target.slotId));
-      }
+  function buildFacilityFn(plotId, buildingType) {
+    if ((typeof plotId !== "string" && typeof plotId !== "number") || typeof buildingType !== "string") {
       return CONSTANTS.ERR_INVALID_ARGS;
-    },
+    }
+    return global.__meridian_build_facility(String(plotId), buildingType);
+  }
 
-    buildFacility(plotId, buildingType) {
-      if ((typeof plotId !== "string" && typeof plotId !== "number") || typeof buildingType !== "string") {
-        return CONSTANTS.ERR_INVALID_ARGS;
+  function demolishFacilityFn(plotId, buildingId) {
+    if (
+      (typeof plotId !== "string" && typeof plotId !== "number") ||
+      (typeof buildingId !== "string" && typeof buildingId !== "number")
+    ) {
+      return CONSTANTS.ERR_INVALID_ARGS;
+    }
+    return global.__meridian_demolish_facility(String(plotId), String(buildingId));
+  }
+
+  function bankFn(planetId, op, amount) {
+    const amt = Number(amount);
+    if (
+      typeof planetId !== "string" ||
+      typeof op !== "string" ||
+      !Number.isFinite(amt) ||
+      amt <= 0
+    ) {
+      return CONSTANTS.ERR_INVALID_ARGS;
+    }
+    return global.__meridian_bank(planetId, op, amt);
+  }
+
+  function getRecipeFn(recipeId) {
+    if (typeof recipeId !== "string" || !recipeId) return null;
+    const json = global.__meridian_get_recipe(recipeId);
+    return json ? JSON.parse(json) : null;
+  }
+
+  global.__sandbox_refresh_game = function (boot) {
+    ensureResources(boot.resources);
+
+    const planetsMap = Object.create(null);
+    for (const p of boot.planets) {
+      const demandsObj = Object.create(null);
+      for (const [itemId, wantQty] of Object.entries(p.demands || {})) {
+        demandsObj[itemId] = Object.freeze({ qty: wantQty });
       }
-      return global.__meridian_build_facility(String(plotId), buildingType);
-    },
+      let cachedListings = null;
+      const planetId = p.id;
+      const planetObj = {
+        id: planetId,
+        name: p.name,
+        wealthTier: p.wealthTier,
+        prosperity: p.prosperity,
+        population: p.population,
+        gravity: p.gravity,
+        wasteBacklog: p.wasteBacklog,
+        primaryLandPrice: p.primaryLandPrice,
+        bankRatePct: p.bankRatePct,
+        groundStore: createStore(p.groundStore, null),
+        stationStore: createStore(p.stationStore, null),
+        demands: Object.freeze(demandsObj),
+      };
+      Object.defineProperty(planetObj, "landListings", {
+        enumerable: true,
+        configurable: false,
+        get() {
+          if (cachedListings === null) {
+            const json = global.__sandbox_land_listings(planetId);
+            cachedListings = Object.freeze(json ? JSON.parse(json) : []);
+          }
+          return cachedListings;
+        },
+      });
+      planetsMap[planetId] = Object.freeze(planetObj);
+    }
 
-    demolishFacility(plotId, buildingId) {
-      if (
-        (typeof plotId !== "string" && typeof plotId !== "number") ||
-        (typeof buildingId !== "string" && typeof buildingId !== "number")
-      ) {
-        return CONSTANTS.ERR_INVALID_ARGS;
-      }
-      return global.__meridian_demolish_facility(String(plotId), String(buildingId));
-    },
+    const stationsMap = Object.create(null);
+    for (const [sid, storeObj] of Object.entries(boot.stations || {})) {
+      stationsMap[sid] = Object.freeze({
+        id: sid,
+        store: createStore(storeObj, null),
+      });
+    }
 
-    bank(planetId, op, amount) {
-      const amt = Number(amount);
-      if (
-        typeof planetId !== "string" ||
-        typeof op !== "string" ||
-        !Number.isFinite(amt) ||
-        amt <= 0
-      ) {
-        return CONSTANTS.ERR_INVALID_ARGS;
-      }
-      return global.__meridian_bank(planetId, op, amt);
-    },
+    const plotsMap = Object.create(null);
+    for (const pl of boot.plots) {
+      plotsMap[pl.id] = Object.freeze({
+        id: pl.id,
+        slotId: pl.slotId,
+        planetId: pl.planetId,
+        lat: pl.lat,
+        lon: pl.lon,
+        terrainName: pl.terrainName,
+        capacity: pl.capacity,
+        usedSlots: pl.usedSlots,
+        buildingMods: Object.freeze(pl.buildingMods || {}),
+      });
+    }
 
-    getRecipe(recipeId) {
-      if (typeof recipeId !== "string" || !recipeId) return null;
-      const json = global.__meridian_get_recipe(recipeId);
-      return json ? JSON.parse(json) : null;
-    },
-  });
+    const buildingsMap = Object.create(null);
+    for (const b of boot.buildings) {
+      const bObj = {
+        id: b.id,
+        type: b.type,
+        plotId: b.plotId,
+        planetId: b.planetId,
+        efficiency: b.efficiency,
+        recipeId: b.recipeId,
+        active: b.active,
+        progress: b.progress,
+        cycleTicks: b.cycleTicks,
+        setRecipe(recipeId) {
+          if (typeof recipeId !== "string" || !recipeId) return CONSTANTS.ERR_INVALID_ARGS;
+          return global.__meridian_set_recipe(b.id, recipeId);
+        },
+        setActive(active) {
+          if (typeof active !== "boolean") return CONSTANTS.ERR_INVALID_ARGS;
+          return global.__meridian_set_active(b.id, active);
+        },
+      };
+      buildingsMap[b.id] = Object.freeze(bObj);
+    }
+
+    const shipsMap = Object.create(null);
+    for (const s of boot.ships) {
+      const sObj = {
+        id: s.id,
+        size: s.size,
+        capacity: s.capacity,
+        durability: s.durability,
+        location: s.location,
+        busyUntil: s.busyUntil,
+        isBusy: s.isBusy,
+        store: createStore(s.cargo, s.capacity),
+        dispatch(from, to, cargo) {
+          if (typeof from !== "string" || typeof to !== "string" || !cargo || typeof cargo !== "object") {
+            return CONSTANTS.ERR_INVALID_ARGS;
+          }
+          return global.__meridian_dispatch_ship(s.id, from, to, JSON.stringify(cargo));
+        },
+        repair() {
+          return global.__meridian_repair_ship(s.id);
+        },
+      };
+      shipsMap[s.id] = Object.freeze(sObj);
+    }
+
+    const ownOrdersMap = Object.create(null);
+    for (const o of boot.ownOrders || []) {
+      ownOrdersMap[o.id] = Object.freeze(o);
+    }
+
+    currentCredits = boot.company.cash;
+    currentOrders = Object.freeze(ownOrdersMap);
+
+    global.Game = Object.freeze({
+      time: boot.tick,
+      cpi: boot.cpi,
+      cpu: Object.freeze({
+        limit: boot.cpuLimitMs,
+        getUsed() {
+          return global.__meridian_cpu_used();
+        },
+      }),
+      company: Object.freeze(boot.company),
+      planets: Object.freeze(planetsMap),
+      stations: Object.freeze(stationsMap),
+      plots: Object.freeze(plotsMap),
+      buildings: Object.freeze(buildingsMap),
+      ships: Object.freeze(shipsMap),
+      market: marketApi,
+      buyPlot: buyPlotFn,
+      buildFacility: buildFacilityFn,
+      demolishFacility: demolishFacilityFn,
+      bank: bankFn,
+      getRecipe: getRecipeFn,
+    });
+  };
 
   // 6. Execute user's module.exports.loop() and serialize Memory
   global.__meridian_run_tick = function () {

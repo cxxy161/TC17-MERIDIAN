@@ -61,7 +61,7 @@ pub struct PlayerRunConfig {
     pub memory_limit_bytes: usize,
     /// QuickJS call stack size limit in bytes (default: 256 KB).
     pub stack_size_bytes: usize,
-    /// Wall-clock interrupt timeout per tick in milliseconds (default: 5 ms).
+    /// Wall-clock interrupt timeout per tick for user script execution in milliseconds (default: 10 ms).
     pub cpu_limit_ms: u64,
     /// Max serialized `Memory` JSON length in bytes (default: 128 KB).
     pub max_memory_json_bytes: usize,
@@ -76,11 +76,24 @@ impl Default for PlayerRunConfig {
         Self {
             memory_limit_bytes: 4 * 1024 * 1024,
             stack_size_bytes: 256 * 1024,
-            cpu_limit_ms: 5,
+            cpu_limit_ms: 10,
             max_memory_json_bytes: 128 * 1024,
             max_console_lines: 200,
             max_console_line_bytes: 1024,
         }
+    }
+}
+
+impl PlayerRunConfig {
+    /// Load default config and apply optional `MERIDIAN_JS_CPU_LIMIT_MS` override.
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(raw) = std::env::var("MERIDIAN_JS_CPU_LIMIT_MS") {
+            if let Ok(ms) = raw.trim().parse::<u64>() {
+                cfg.cpu_limit_ms = ms.clamp(1, 500);
+            }
+        }
+        cfg
     }
 }
 

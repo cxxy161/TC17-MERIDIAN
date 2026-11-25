@@ -5,7 +5,7 @@ pub mod npc;
 pub mod runner;
 pub mod types;
 
-pub use js_runner::run_player_tick;
+pub use js_runner::{run_player_tick, PlayerVmHandle};
 pub use npc::{decide_npc_intents, NpcGenome};
 pub use runner::{PlayerVmState, SimulationRunner};
 pub use types::{

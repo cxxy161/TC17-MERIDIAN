@@ -365,11 +365,11 @@ async fn admin_script_toggle_handler(
     Json(req): Json<ScriptToggleReq>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let mut eng = engine.lock().await;
+    eng.runner.set_player_enabled(&company_id, req.enabled);
     let mem_copy = {
-        let Some(pvm) = eng.runner.players.get_mut(&company_id) else {
+        let Some(pvm) = eng.runner.players.get(&company_id) else {
             return Err((StatusCode::NOT_FOUND, format!("No player sandbox for '{company_id}'")));
         };
-        pvm.enabled = req.enabled;
         pvm.memory_json.clone()
     };
     eng.store

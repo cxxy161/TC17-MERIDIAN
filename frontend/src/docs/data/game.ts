@@ -164,7 +164,7 @@ export const GAME_ENTRIES: DocEntry[] = [
     group: 'Game 接口',
     kind: '属性',
     summary: '本 tick 的 CPU 墙钟预算与已消耗时间监控对象',
-    keywords: 'Game.cpu limit getUsed 预算 超时 5ms',
+    keywords: 'Game.cpu limit getUsed 预算 超时 10ms',
     blocks: [
       {
         kind: 'prose',
@@ -177,7 +177,7 @@ export const GAME_ENTRIES: DocEntry[] = [
       {
         kind: 'fields',
         rows: [
-          { name: 'limit', type: 'number', desc: '本 tick 允许的最大墙钟毫秒数（默认为 `5`）' },
+          { name: 'limit', type: 'number', desc: '本 tick 允许的最大墙钟毫秒数（默认为 `10`）' },
         ],
       },
       {

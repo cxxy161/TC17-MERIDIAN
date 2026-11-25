@@ -410,3 +410,94 @@ fn test_public_company_queries_omit_secrets() {
     let mem: serde_json::Value = serde_json::from_str(&out.memory_json).unwrap();
     assert_eq!(mem["verified"], true);
 }
+
+#[test]
+fn test_vm_reuse_lazy_listings_split_timing_and_dirty_reset() {
+    let catalog = load_catalog();
+    let mut world = World::new_standard(catalog);
+    world
+        .spawn_company("p_vm", "VM Reuse Corp", true, "mining_ind", "P1", 10_000.0)
+        .unwrap();
+    world
+        .spawn_company("npc_vm", "NPC Timer", false, "env_recycle", "P2", 8_000.0)
+        .unwrap();
+
+    // Create a secondary land listing on P1 to test lazy p.landListings getter
+    let pid = world.companies["p_vm"].plots[0];
+    let lid = 999_001u64;
+    world.planets.get_mut("P1").unwrap().land_listings.push(
+        meridian_core::LandListing {
+            listing_id: lid,
+            plot_id: pid,
+            seller_id: "BANK".to_string(),
+            ask_price: meridian_core::to_money(500.0),
+            listed_tick: 0,
+            debt_recovery: 0,
+        },
+    );
+
+    let mut runner = SimulationRunner::new(PlayerRunConfig {
+        cpu_limit_ms: 10,
+        ..Default::default()
+    });
+    runner.register_npc("npc_vm", NpcGenome::from_seed(7));
+    runner.set_player_script(
+        "p_vm",
+        PlayerScriptBundle::single_main(
+            r#"
+            let warmHits = 0;
+            module.exports.loop = function () {
+              warmHits += 1;
+              Memory.warmHits = warmHits;
+              Memory.tickSeen = Game.time;
+              Memory.listingsCount = Game.planets['P1'].landListings.length;
+              Memory.marketCredits = Game.market.credits;
+              if (Game.cpu.limit !== 10) {
+                throw new Error('unexpected cpu limit: ' + Game.cpu.limit);
+              }
+            };
+        "#,
+        ),
+    );
+
+    runner.step_world(&mut world);
+    assert!(runner.last_timing.npc_ms > 0.0 || runner.last_timing.players_ms > 0.0);
+    assert!(
+        (runner.last_timing.actors_ms - (runner.last_timing.npc_ms + runner.last_timing.players_ms))
+            .abs()
+            < 1e-6
+    );
+    let out1 = &runner.last_player_outputs["p_vm"];
+    assert!(out1.error.is_none(), "tick1 error: {:?}", out1.error);
+    let m1: serde_json::Value = serde_json::from_str(&out1.memory_json).unwrap();
+    assert_eq!(m1["warmHits"], 1);
+    assert_eq!(m1["listingsCount"], 1);
+    assert!(runner.players["p_vm"].vm.is_some(), "healthy VM must stay cached");
+
+    // Tick 2 reuses the warm VM without recompiling module
+    runner.step_world(&mut world);
+    let out2 = &runner.last_player_outputs["p_vm"];
+    assert!(out2.error.is_none(), "tick2 error: {:?}", out2.error);
+    let m2: serde_json::Value = serde_json::from_str(&out2.memory_json).unwrap();
+    assert_eq!(m2["warmHits"], 2, "warm VM should retain module cache across ticks");
+
+    // Timeout destroys dirty VM and rolls back Memory cleanly
+    runner.set_player_script(
+        "p_vm",
+        PlayerScriptBundle::single_main(
+            r#"
+            module.exports.loop = function () {
+              Memory.warmHits = 999;
+              while (true) {}
+            };
+        "#,
+        ),
+    );
+    assert!(runner.players["p_vm"].vm.is_none(), "script edit must invalidate cached VM");
+    runner.step_world(&mut world);
+    let out3 = &runner.last_player_outputs["p_vm"];
+    assert!(out3.timed_out);
+    assert!(runner.players["p_vm"].vm.is_none(), "timed-out VM must be dropped");
+    let m3: serde_json::Value = serde_json::from_str(&out3.memory_json).unwrap();
+    assert_eq!(m3["warmHits"], 2, "Memory must roll back to last healthy tick");
+}

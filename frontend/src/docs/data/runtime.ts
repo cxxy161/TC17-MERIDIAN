@@ -32,7 +32,7 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
       {
         kind: 'note',
         level: 'info',
-        text: '模块级变量和 `globalThis` 上的自定义属性每个 tick 都会清空重置，只有 `Memory` 能跨 tick 留存。若脚本在本 tick 触发 CPU 超时或堆内存溢出，`Memory` 也会自动回滚到上一 tick 的内容。',
+        text: '正常连续运行时沙盒实例会在多 tick 间复用（`globalThis` 与模块缓存保留）；一旦修改代码、服务重启，或脚本触发 CPU 超时 / 堆内存溢出 / 未捕获异常，沙盒会立即销毁重建。因此只有 `Memory` 能确保跨异常与重启持久留存，且超时或溢出时 `Memory` 也会自动回滚到上一 tick 的内容。',
       },
       {
         kind: 'example',
@@ -255,7 +255,7 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
     blocks: [
       {
         kind: 'prose',
-        text: '加载脚本编辑器中保存的另一个 JS 模块，执行它并返回其 `module.exports`。模块在同一个 tick 内会被缓存，重复 `require` 同一模块不会重复执行。',
+        text: '加载脚本编辑器中保存的另一个 JS 模块，执行它并返回其 `module.exports`。模块在沙盒实例存活期间会被缓存，重复 `require` 同一模块不会重复解析编译。',
       },
       {
         kind: 'syntax',
@@ -286,8 +286,8 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
       {
         kind: 'note',
         level: 'warn',
-        title: '模块缓存在每个 tick 开始时清空',
-        text: '不要用模块顶层变量保存跨 tick 状态；所有需要持久化的数据必须存入 `Memory`。',
+        title: '不要把关键持久状态放在模块顶层',
+        text: '模块顶层变量仅在当前沙盒实例存活期间作为临时缓存有效（修改代码、超时/OOM 或服务端重启时会重置）；所有需要可靠持久化的数据必须存入 `Memory`。',
       },
       {
         kind: 'example',

@@ -2,9 +2,9 @@
 //! `console`, `require()`, and `OK/ERR_*` constants with strict CPU & heap isolation.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use meridian_core::{
     from_money, to_money, BankOpKind, BuildingId, Intent, ListingId, Order, OrderId, OrderSide,
@@ -21,19 +21,32 @@ use crate::types::{
 };
 
 const PRELUDE_JS: &str = include_str!("prelude.js");
+const INIT_SAFETY_US: u64 = 50_000;
+const REFRESH_SAFETY_US: u64 = 25_000;
+
+fn now_us() -> u64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(Instant::now);
+    epoch.elapsed().as_micros() as u64
+}
 
 struct HostMutable {
     intents: Vec<Intent>,
     logs: Vec<ConsoleEntry>,
     truncated_logs: bool,
+    max_console_lines: usize,
+    max_console_line_bytes: usize,
 }
 
-struct HostState {
+struct HostTickState {
     snapshot: Arc<WorldSnapshot>,
     catalog: Arc<ProductionCatalog>,
     bundle: Arc<PlayerScriptBundle>,
-    config: PlayerRunConfig,
-    started_at: Instant,
+    user_started_at: Instant,
+}
+
+struct HostState {
+    tick: Mutex<HostTickState>,
     mutable: Mutex<HostMutable>,
 }
 
@@ -49,20 +62,18 @@ impl HostState {
 
     fn push_log(&self, level: ConsoleLevel, msg: String) {
         let mut guard = self.mutable.lock().unwrap();
-        if guard.logs.len() >= self.config.max_console_lines {
+        if guard.logs.len() >= guard.max_console_lines {
             if !guard.truncated_logs {
                 guard.truncated_logs = true;
+                let max_lines = guard.max_console_lines;
                 guard.logs.push(ConsoleEntry {
                     level: ConsoleLevel::Warn,
-                    message: format!(
-                        "[sandbox] console output truncated at {} lines",
-                        self.config.max_console_lines
-                    ),
+                    message: format!("[sandbox] console output truncated at {max_lines} lines"),
                 });
             }
             return;
         }
-        let clipped = truncate_utf8(&msg, self.config.max_console_line_bytes);
+        let clipped = truncate_utf8(&msg, guard.max_console_line_bytes);
         guard.logs.push(ConsoleEntry {
             level,
             message: clipped,
@@ -244,7 +255,6 @@ struct BootPlanet<'a> {
     gravity: f64,
     waste_backlog: u32,
     primary_land_price: Option<f64>,
-    land_listings: Vec<BootLandListing<'a>>,
     bank_rate_pct: f64,
     ground_store: &'a HashMap<String, u32>,
     station_store: &'a HashMap<String, u32>,
@@ -357,6 +367,242 @@ struct JsIo<'a> {
     qty: u32,
 }
 
+/// Persistent per-player QuickJS VM reused across healthy ticks (`ctx` drops before `rt`).
+pub struct PlayerVmHandle {
+    ctx: Context,
+    rt: Runtime,
+    host: Arc<HostState>,
+    timed_out_flag: Arc<AtomicBool>,
+    deadline_us: Arc<AtomicU64>,
+}
+
+impl Drop for PlayerVmHandle {
+    fn drop(&mut self) {
+        // Clear interrupt handler & memory limit before Context/Runtime drop so GC teardown cannot re-trigger
+        self.deadline_us.store(u64::MAX, Ordering::Release);
+        self.rt.set_interrupt_handler(None);
+        self.rt.set_memory_limit(usize::MAX);
+    }
+}
+
+impl PlayerVmHandle {
+    pub fn new(
+        snapshot: Arc<WorldSnapshot>,
+        catalog: Arc<ProductionCatalog>,
+        bundle: Arc<PlayerScriptBundle>,
+        previous_memory_json: &str,
+        config: &PlayerRunConfig,
+    ) -> Result<Self, String> {
+        let rt = Runtime::new().map_err(|e| format!("Failed to initialize QuickJS runtime: {e}"))?;
+        rt.set_memory_limit(config.memory_limit_bytes);
+        rt.set_max_stack_size(config.stack_size_bytes);
+
+        let timed_out_flag = Arc::new(AtomicBool::new(false));
+        let deadline_us = Arc::new(AtomicU64::new(now_us().saturating_add(INIT_SAFETY_US)));
+        let timeout_clone = Arc::clone(&timed_out_flag);
+        let deadline_clone = Arc::clone(&deadline_us);
+        rt.set_interrupt_handler(Some(Box::new(move || {
+            let dl = deadline_clone.load(Ordering::Relaxed);
+            if now_us() >= dl {
+                timeout_clone.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        })));
+
+        let ctx = match Context::full(&rt) {
+            Ok(c) => c,
+            Err(e) => {
+                deadline_us.store(u64::MAX, Ordering::Release);
+                rt.set_interrupt_handler(None);
+                rt.set_memory_limit(usize::MAX);
+                return Err(format!("Failed to create QuickJS context: {e}"));
+            }
+        };
+
+        let host = Arc::new(HostState {
+            tick: Mutex::new(HostTickState {
+                snapshot,
+                catalog,
+                bundle,
+                user_started_at: Instant::now(),
+            }),
+            mutable: Mutex::new(HostMutable {
+                intents: Vec::new(),
+                logs: Vec::new(),
+                truncated_logs: false,
+                max_console_lines: config.max_console_lines,
+                max_console_line_bytes: config.max_console_line_bytes,
+            }),
+        });
+
+        let mut init_err: Option<String> = None;
+        ctx.with(|ctx| {
+            if let Err(e) = install_host_bindings(&ctx, Arc::clone(&host)) {
+                init_err = Some(format!("Host binding setup error: {e}"));
+                return;
+            }
+            let safe_mem = if previous_memory_json.trim().is_empty() {
+                "{}"
+            } else {
+                previous_memory_json
+            };
+            let mem_init_script = format!(
+                "globalThis.Memory = JSON.parse({});",
+                serde_json::to_string(safe_mem).unwrap_or_else(|_| "\"{}\"".to_string())
+            );
+            if let Err(err) = ctx.eval::<(), _>(mem_init_script).catch(&ctx) {
+                init_err = Some(format_caught_error(err));
+                return;
+            }
+            if let Err(err) = ctx.eval::<(), _>(PRELUDE_JS).catch(&ctx) {
+                init_err = Some(format_caught_error(err));
+            }
+        });
+
+        deadline_us.store(u64::MAX, Ordering::Release);
+        if let Some(err) = init_err {
+            return Err(err);
+        }
+
+        Ok(Self {
+            ctx,
+            rt,
+            host,
+            timed_out_flag,
+            deadline_us,
+        })
+    }
+
+    /// Execute one tick inside this VM. Returns `(output, keep_vm)`.
+    /// When `keep_vm == false` (timeout / OOM / runtime error), caller must drop this VM.
+    pub fn run_tick(
+        &mut self,
+        snapshot: Arc<WorldSnapshot>,
+        catalog: Arc<ProductionCatalog>,
+        bundle: Arc<PlayerScriptBundle>,
+        previous_memory_json: &str,
+        config: &PlayerRunConfig,
+    ) -> (PlayerRunOutput, bool) {
+        self.rt.set_memory_limit(config.memory_limit_bytes);
+        self.rt.set_max_stack_size(config.stack_size_bytes);
+
+        {
+            let mut tick = self.host.tick.lock().unwrap();
+            tick.snapshot = Arc::clone(&snapshot);
+            tick.catalog = Arc::clone(&catalog);
+            tick.bundle = Arc::clone(&bundle);
+            tick.user_started_at = Instant::now();
+        }
+        {
+            let mut mutable = self.host.mutable.lock().unwrap();
+            mutable.intents.clear();
+            mutable.logs.clear();
+            mutable.truncated_logs = false;
+            mutable.max_console_lines = config.max_console_lines;
+            mutable.max_console_line_bytes = config.max_console_line_bytes;
+        }
+
+        let mut run_error: Option<String> = None;
+        let mut next_memory_json = previous_memory_json.to_string();
+        let mut cpu_used_ms = 0.0;
+        let boot_json = build_boot_json(&snapshot, &catalog, config);
+
+        self.ctx.with(|ctx| {
+            // Phase 1: refresh per-tick Game snapshot under setup guard (not billed to player CPU budget)
+            self.timed_out_flag.store(false, Ordering::Release);
+            self.deadline_us
+                .store(now_us().saturating_add(REFRESH_SAFETY_US), Ordering::Release);
+            let setup_res: Result<(), String> = (|| {
+                let boot_val = ctx
+                    .json_parse(boot_json)
+                    .map_err(|e| format!("Boot JSON parse error: {e}"))?;
+                ctx.globals()
+                    .set("__MERIDIAN_BOOTSTRAP", boot_val)
+                    .map_err(|e| format!("Boot global error: {e}"))?;
+                ctx.eval::<(), _>(
+                    "globalThis.__sandbox_refresh_game(globalThis.__MERIDIAN_BOOTSTRAP); delete globalThis.__MERIDIAN_BOOTSTRAP;",
+                )
+                .catch(&ctx)
+                .map_err(format_caught_error)
+            })();
+            self.deadline_us.store(u64::MAX, Ordering::Release);
+            if let Err(err) = setup_res {
+                run_error = Some(err);
+                return;
+            }
+
+            // Phase 2: execute player code & serialize Memory strictly within cpu_limit_ms
+            let user_started = Instant::now();
+            self.host.tick.lock().unwrap().user_started_at = user_started;
+            self.timed_out_flag.store(false, Ordering::Release);
+            let limit_us = config.cpu_limit_ms.max(1).saturating_mul(1_000);
+            self.deadline_us
+                .store(now_us().saturating_add(limit_us), Ordering::Release);
+
+            let eval_res = ctx
+                .eval::<String, _>("globalThis.__meridian_run_tick()")
+                .catch(&ctx);
+
+            cpu_used_ms = user_started.elapsed().as_secs_f64() * 1000.0;
+            self.deadline_us.store(u64::MAX, Ordering::Release);
+
+            match eval_res {
+                Ok(mem_out) => {
+                    if mem_out.len() > config.max_memory_json_bytes {
+                        run_error = Some(format!(
+                            "Memory serialized size ({} bytes) exceeds limit ({} bytes); Memory changes discarded",
+                            mem_out.len(),
+                            config.max_memory_json_bytes
+                        ));
+                    } else {
+                        next_memory_json = mem_out;
+                    }
+                }
+                Err(err) => {
+                    run_error = Some(format_caught_error(err));
+                }
+            }
+        });
+
+        let timed_out = self.timed_out_flag.load(Ordering::Relaxed);
+        let oom = run_error
+            .as_deref()
+            .map(|s| s.to_ascii_lowercase().contains("out of memory"))
+            .unwrap_or(false);
+
+        if timed_out && run_error.is_none() {
+            run_error = Some(format!(
+                "Script execution timed out after {:.2}ms (limit: {}ms)",
+                cpu_used_ms, config.cpu_limit_ms
+            ));
+        }
+
+        let mut guard = self.host.mutable.lock().unwrap();
+        let logs = std::mem::take(&mut guard.logs);
+        let healthy = run_error.is_none() && !timed_out && !oom;
+        let intents = if !healthy {
+            // Atomic rollback on script crash/timeout/OOM so partial broken intents never land
+            next_memory_json = previous_memory_json.to_string();
+            Vec::new()
+        } else {
+            std::mem::take(&mut guard.intents)
+        };
+
+        let out = PlayerRunOutput {
+            intents,
+            memory_json: next_memory_json,
+            logs,
+            cpu_used_ms,
+            error: run_error,
+            timed_out,
+            oom,
+        };
+        (out, healthy)
+    }
+}
+
 /// Run a single player company's QuickJS `module.exports.loop()` on a read-only `WorldSnapshot`.
 pub fn run_player_tick(
     snapshot: Arc<WorldSnapshot>,
@@ -365,146 +611,26 @@ pub fn run_player_tick(
     previous_memory_json: &str,
     config: &PlayerRunConfig,
 ) -> PlayerRunOutput {
-    let rt = match Runtime::new() {
-        Ok(rt) => rt,
-        Err(e) => {
+    let mut vm = match PlayerVmHandle::new(
+        Arc::clone(&snapshot),
+        Arc::clone(&catalog),
+        Arc::clone(&bundle),
+        previous_memory_json,
+        config,
+    ) {
+        Ok(vm) => vm,
+        Err(err) => {
+            let oom = err.to_ascii_lowercase().contains("out of memory");
             return PlayerRunOutput {
                 memory_json: previous_memory_json.to_string(),
-                error: Some(format!("Failed to initialize QuickJS runtime: {e}")),
+                error: Some(err),
+                oom,
                 ..Default::default()
             };
         }
     };
-
-    rt.set_memory_limit(config.memory_limit_bytes);
-    rt.set_max_stack_size(config.stack_size_bytes);
-
-    let timed_out_flag = Arc::new(AtomicBool::new(false));
-    let timeout_clone = Arc::clone(&timed_out_flag);
-    let started_at = Instant::now();
-    let deadline = Duration::from_millis(config.cpu_limit_ms.max(1));
-    rt.set_interrupt_handler(Some(Box::new(move || {
-        if started_at.elapsed() >= deadline {
-            timeout_clone.store(true, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
-    })));
-
-    let ctx = match Context::full(&rt) {
-        Ok(c) => c,
-        Err(e) => {
-            return PlayerRunOutput {
-                memory_json: previous_memory_json.to_string(),
-                error: Some(format!("Failed to create QuickJS context: {e}")),
-                ..Default::default()
-            };
-        }
-    };
-
-    let host = Arc::new(HostState {
-        snapshot: Arc::clone(&snapshot),
-        catalog: Arc::clone(&catalog),
-        bundle,
-        config: config.clone(),
-        started_at,
-        mutable: Mutex::new(HostMutable {
-            intents: Vec::new(),
-            logs: Vec::new(),
-            truncated_logs: false,
-        }),
-    });
-
-    let mut run_error: Option<String> = None;
-    let mut next_memory_json = previous_memory_json.to_string();
-
-    ctx.with(|ctx| {
-        if let Err(e) = install_host_bindings(&ctx, Arc::clone(&host), &snapshot, &catalog, config)
-        {
-            run_error = Some(format!("Host binding setup error: {e}"));
-            return;
-        }
-
-        // Parse & attach persistent Memory JSON (fallback cleanly to {} if empty)
-        let safe_mem = if previous_memory_json.trim().is_empty() {
-            "{}"
-        } else {
-            previous_memory_json
-        };
-        let mem_init_script = format!("globalThis.Memory = JSON.parse({});", serde_json::to_string(safe_mem).unwrap_or_else(|_| "\"{}\"".to_string()));
-        if let Err(err) = ctx.eval::<(), _>(mem_init_script).catch(&ctx) {
-            run_error = Some(format_caught_error(err));
-            return;
-        }
-
-        // Load player-script prelude
-        if let Err(err) = ctx.eval::<(), _>(PRELUDE_JS).catch(&ctx) {
-            run_error = Some(format_caught_error(err));
-            return;
-        }
-
-        // Execute user loop() and serialize Memory
-        match ctx
-            .eval::<String, _>("globalThis.__meridian_run_tick()")
-            .catch(&ctx)
-        {
-            Ok(mem_out) => {
-                if mem_out.len() > config.max_memory_json_bytes {
-                    run_error = Some(format!(
-                        "Memory serialized size ({} bytes) exceeds limit ({} bytes); Memory changes discarded",
-                        mem_out.len(),
-                        config.max_memory_json_bytes
-                    ));
-                } else {
-                    next_memory_json = mem_out;
-                }
-            }
-            Err(err) => {
-                run_error = Some(format_caught_error(err));
-            }
-        }
-    });
-
-    // Clear interrupt handler and memory limit before dropping Context/Runtime so OOM/timeout teardowns cannot re-trigger during GC
-    rt.set_interrupt_handler(None);
-    rt.set_memory_limit(usize::MAX);
-    drop(ctx);
-    drop(rt);
-
-    let cpu_used_ms = started_at.elapsed().as_secs_f64() * 1000.0;
-    let timed_out = timed_out_flag.load(Ordering::Relaxed);
-    let oom = run_error
-        .as_deref()
-        .map(|s| s.to_ascii_lowercase().contains("out of memory"))
-        .unwrap_or(false);
-
-    if timed_out && run_error.is_none() {
-        run_error = Some(format!(
-            "Script execution timed out after {:.2}ms (limit: {}ms)",
-            cpu_used_ms, config.cpu_limit_ms
-        ));
-    }
-
-    let mut guard = host.mutable.lock().unwrap();
-    let logs = std::mem::take(&mut guard.logs);
-    let intents = if run_error.is_some() || timed_out || oom {
-        // Atomic rollback on script crash/timeout/OOM so partial broken intents never land
-        next_memory_json = previous_memory_json.to_string();
-        Vec::new()
-    } else {
-        std::mem::take(&mut guard.intents)
-    };
-
-    PlayerRunOutput {
-        intents,
-        memory_json: next_memory_json,
-        logs,
-        cpu_used_ms,
-        error: run_error,
-        timed_out,
-        oom,
-    }
+    let (out, _keep) = vm.run_tick(snapshot, catalog, bundle, previous_memory_json, config);
+    out
 }
 
 fn format_caught_error<'js>(err: CaughtError<'js>) -> String {
@@ -532,16 +658,8 @@ fn format_caught_error<'js>(err: CaughtError<'js>) -> String {
 fn install_host_bindings<'js>(
     ctx: &rquickjs::Ctx<'js>,
     host: Arc<HostState>,
-    snap: &WorldSnapshot,
-    catalog: &ProductionCatalog,
-    config: &PlayerRunConfig,
 ) -> rquickjs::Result<()> {
     let globals = ctx.globals();
-
-    // Inject lightweight bootstrap payload (excluding large cross-station depth/order arrays)
-    let boot_json = build_boot_json(snap, catalog, config);
-    let boot_val = ctx.json_parse(boot_json)?;
-    globals.set("__MERIDIAN_BOOTSTRAP", boot_val)?;
 
     // 1. console log bridge
     {
@@ -559,13 +677,13 @@ fn install_host_bindings<'js>(
         )?;
     }
 
-    // 2. CPU elapsed helper
+    // 2. CPU elapsed helper (measures pure user script time in current tick)
     {
         let h = Arc::clone(&host);
         globals.set(
             "__meridian_cpu_used",
             Function::new(ctx.clone(), move || -> f64 {
-                h.started_at.elapsed().as_secs_f64() * 1000.0
+                h.tick.lock().unwrap().user_started_at.elapsed().as_secs_f64() * 1000.0
             })?,
         )?;
     }
@@ -576,7 +694,7 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_get_module",
             Function::new(ctx.clone(), move |name: String| -> Option<String> {
-                h.bundle.resolve(&name).map(|s| s.to_string())
+                h.tick.lock().unwrap().bundle.resolve(&name).map(|s| s.to_string())
             })?,
         )?;
     }
@@ -585,9 +703,41 @@ fn install_host_bindings<'js>(
     {
         let h = Arc::clone(&host);
         globals.set(
+            "__sandbox_land_listings",
+            Function::new(ctx.clone(), move |pid: String| -> String {
+                let tick = h.tick.lock().unwrap();
+                let Some(p) = tick.snapshot.planets.get(&pid) else {
+                    return "[]".to_string();
+                };
+                let out: Vec<BootLandListing<'_>> = p
+                    .land_listings
+                    .iter()
+                    .map(|l| BootLandListing {
+                        listing_id: l.listing_id.to_string(),
+                        plot_id: l.plot_id.to_string(),
+                        slot_id: l.slot_id,
+                        seller_id: &l.seller_id,
+                        ask_price: from_money(l.ask_price),
+                        terrain_name: &l.terrain_name,
+                        lat: l.lat,
+                        lon: l.lon,
+                        capacity: l.capacity,
+                        used_slots: l.used_slots,
+                        building_mods: &l.building_mods,
+                        buildings: &l.buildings,
+                    })
+                    .collect();
+                serde_json::to_string(&out).unwrap_or_else(|_| "[]".to_string())
+            })?,
+        )?;
+    }
+    {
+        let h = Arc::clone(&host);
+        globals.set(
             "__meridian_quote",
             Function::new(ctx.clone(), move |sid: String, item: String| -> Option<String> {
-                let q = h.snapshot.quotes.get(&sid)?.get(&item)?;
+                let tick = h.tick.lock().unwrap();
+                let q = tick.snapshot.quotes.get(&sid)?.get(&item)?;
                 let j = JsQuote {
                     station_id: &q.station_id,
                     resource_type: &q.item_id,
@@ -609,7 +759,8 @@ fn install_host_bindings<'js>(
             Function::new(
                 ctx.clone(),
                 move |sid: String, item: String, limit: usize| -> String {
-                    let depth = match h.snapshot.depths.get(&sid).and_then(|m| m.get(&item)) {
+                    let tick = h.tick.lock().unwrap();
+                    let depth = match tick.snapshot.depths.get(&sid).and_then(|m| m.get(&item)) {
                         Some((bids, asks)) => JsDepth {
                             bids: bids
                                 .iter()
@@ -651,7 +802,8 @@ fn install_host_bindings<'js>(
                         "" => None,
                         _ => return "[]".to_string(),
                     };
-                    let filtered: Vec<JsOrder<'_>> = h
+                    let tick = h.tick.lock().unwrap();
+                    let filtered: Vec<JsOrder<'_>> = tick
                         .snapshot
                         .orders
                         .iter()
@@ -672,7 +824,8 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_calc_route",
             Function::new(ctx.clone(), move |from: String, to: String| -> Option<String> {
-                let (ticks, fuel) = h.snapshot.route_cost(&from, &to)?;
+                let tick = h.tick.lock().unwrap();
+                let (ticks, fuel) = tick.snapshot.route_cost(&from, &to)?;
                 serde_json::to_string(&JsRouteCost { ticks, fuel }).ok()
             })?,
         )?;
@@ -682,7 +835,8 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_get_recipe",
             Function::new(ctx.clone(), move |recipe_id: String| -> Option<String> {
-                let r = h.catalog.recipes.get(&recipe_id)?;
+                let tick = h.tick.lock().unwrap();
+                let r = tick.catalog.recipes.get(&recipe_id)?;
                 let jr = JsRecipe {
                     id: &r.id,
                     building_id: &r.building_id,
@@ -715,7 +869,8 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_get_land_plots",
             Function::new(ctx.clone(), move |pid: String| -> Option<String> {
-                let tiles = h.snapshot.public_tiles.get(&pid)?;
+                let tick = h.tick.lock().unwrap();
+                let tiles = tick.snapshot.public_tiles.get(&pid)?;
                 let out: Vec<JsLandPlot<'_>> = tiles
                     .iter()
                     .map(|t| JsLandPlot {
@@ -758,7 +913,8 @@ fn install_host_bindings<'js>(
                     let q = query.trim().to_ascii_lowercase();
                     let skip = offset.max(0) as usize;
                     let take = limit.clamp(1, 1000) as usize;
-                    let out: Vec<JsPublicCompanySummary<'_>> = h
+                    let tick = h.tick.lock().unwrap();
+                    let out: Vec<JsPublicCompanySummary<'_>> = tick
                         .snapshot
                         .public_companies
                         .iter()
@@ -784,7 +940,8 @@ fn install_host_bindings<'js>(
         globals.set(
             "__meridian_get_company",
             Function::new(ctx.clone(), move |company_id: String| -> Option<String> {
-                let d = h.snapshot.public_company_detail(&company_id)?;
+                let tick = h.tick.lock().unwrap();
+                let d = tick.snapshot.public_company_detail(&company_id)?;
                 let plots = d
                     .plots
                     .into_iter()
@@ -833,14 +990,17 @@ fn install_host_bindings<'js>(
                 let Ok(bid) = bid_str.parse::<BuildingId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                let Some(bld) = h.snapshot.company.buildings.iter().find(|b| b.id == bid) else {
-                    return ERR_NOT_OWNER;
-                };
-                let Some(rdef) = h.catalog.recipes.get(&recipe_id) else {
-                    return ERR_NOT_FOUND;
-                };
-                if rdef.building_id != bld.building_type {
-                    return ERR_INVALID_TARGET;
+                {
+                    let tick = h.tick.lock().unwrap();
+                    let Some(bld) = tick.snapshot.company.buildings.iter().find(|b| b.id == bid) else {
+                        return ERR_NOT_OWNER;
+                    };
+                    let Some(rdef) = tick.catalog.recipes.get(&recipe_id) else {
+                        return ERR_NOT_FOUND;
+                    };
+                    if rdef.building_id != bld.building_type {
+                        return ERR_INVALID_TARGET;
+                    }
                 }
                 h.push_intent(Intent::SetRecipe {
                     building_id: bid,
@@ -857,8 +1017,11 @@ fn install_host_bindings<'js>(
                 let Ok(bid) = bid_str.parse::<BuildingId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                if !h.snapshot.company.buildings.iter().any(|b| b.id == bid) {
-                    return ERR_NOT_OWNER;
+                {
+                    let tick = h.tick.lock().unwrap();
+                    if !tick.snapshot.company.buildings.iter().any(|b| b.id == bid) {
+                        return ERR_NOT_OWNER;
+                    }
                 }
                 h.push_intent(Intent::ToggleBuilding {
                     building_id: bid,
@@ -877,63 +1040,66 @@ fn install_host_bindings<'js>(
                     let Ok(sid) = sid_str.parse::<ShipId>() else {
                         return ERR_INVALID_ARGS;
                     };
-                    let Some(ship) = h.snapshot.company.ships.iter().find(|s| s.id == sid) else {
-                        return ERR_NOT_OWNER;
-                    };
-                    if ship.is_busy {
-                        return ERR_BUSY;
-                    }
-                    if ship.location != from {
-                        return ERR_NOT_IN_RANGE;
-                    }
-                    let Some((_ticks, fuel_needed)) = h.snapshot.route_cost(&from, &to) else {
-                        return ERR_NO_PATH;
-                    };
                     let Ok(raw_map) = serde_json::from_str::<HashMap<String, f64>>(&cargo_json) else {
                         return ERR_INVALID_ARGS;
                     };
                     if raw_map.is_empty() {
                         return ERR_INVALID_ARGS;
                     }
-                    let mut cargo_vec = Vec::with_capacity(raw_map.len());
-                    let mut total_qty = 0u32;
-                    for (item, qf) in raw_map {
-                        if !h.catalog.items.contains_key(&item) || !qf.is_finite() || qf <= 0.0 {
-                            return ERR_INVALID_ARGS;
-                        }
-                        let qty = qf.floor() as u32;
-                        if qty == 0 {
-                            return ERR_INVALID_ARGS;
-                        }
-                        total_qty = total_qty.saturating_add(qty);
-                        cargo_vec.push((item, qty));
-                    }
-                    if total_qty > ship.capacity {
-                        return ERR_FULL;
-                    }
-                    // Quick fuel check against fuel inventory at departure
-                    if let Some(fuel_item) = &h.catalog.fuel_item {
-                        let available_fuel = if let Some(pid) = from.strip_prefix("ST:") {
-                            let _ = pid;
-                            h.snapshot
-                                .company
-                                .station_stores
-                                .get(&from)
-                                .and_then(|m| m.get(fuel_item))
-                                .copied()
-                                .unwrap_or(0)
-                        } else {
-                            h.snapshot
-                                .planets
-                                .get(&from)
-                                .and_then(|p| p.ground_store.get(fuel_item))
-                                .copied()
-                                .unwrap_or(0)
+                    let cargo_vec = {
+                        let tick = h.tick.lock().unwrap();
+                        let Some(ship) = tick.snapshot.company.ships.iter().find(|s| s.id == sid) else {
+                            return ERR_NOT_OWNER;
                         };
-                        if available_fuel < fuel_needed {
-                            return ERR_NOT_ENOUGH_RESOURCES;
+                        if ship.is_busy {
+                            return ERR_BUSY;
                         }
-                    }
+                        if ship.location != from {
+                            return ERR_NOT_IN_RANGE;
+                        }
+                        let Some((_ticks, fuel_needed)) = tick.snapshot.route_cost(&from, &to) else {
+                            return ERR_NO_PATH;
+                        };
+                        let mut cargo_vec = Vec::with_capacity(raw_map.len());
+                        let mut total_qty = 0u32;
+                        for (item, qf) in raw_map {
+                            if !tick.catalog.items.contains_key(&item) || !qf.is_finite() || qf <= 0.0 {
+                                return ERR_INVALID_ARGS;
+                            }
+                            let qty = qf.floor() as u32;
+                            if qty == 0 {
+                                return ERR_INVALID_ARGS;
+                            }
+                            total_qty = total_qty.saturating_add(qty);
+                            cargo_vec.push((item, qty));
+                        }
+                        if total_qty > ship.capacity {
+                            return ERR_FULL;
+                        }
+                        // Quick fuel check against fuel inventory at departure
+                        if let Some(fuel_item) = &tick.catalog.fuel_item {
+                            let available_fuel = if from.starts_with("ST:") {
+                                tick.snapshot
+                                    .company
+                                    .station_stores
+                                    .get(&from)
+                                    .and_then(|m| m.get(fuel_item))
+                                    .copied()
+                                    .unwrap_or(0)
+                            } else {
+                                tick.snapshot
+                                    .planets
+                                    .get(&from)
+                                    .and_then(|p| p.ground_store.get(fuel_item))
+                                    .copied()
+                                    .unwrap_or(0)
+                            };
+                            if available_fuel < fuel_needed {
+                                return ERR_NOT_ENOUGH_RESOURCES;
+                            }
+                        }
+                        cargo_vec
+                    };
                     h.push_intent(Intent::DispatchShip {
                         ship_id: sid,
                         from,
@@ -952,11 +1118,14 @@ fn install_host_bindings<'js>(
                 let Ok(sid) = sid_str.parse::<ShipId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                let Some(ship) = h.snapshot.company.ships.iter().find(|s| s.id == sid) else {
-                    return ERR_NOT_OWNER;
-                };
-                if ship.is_busy {
-                    return ERR_BUSY;
+                {
+                    let tick = h.tick.lock().unwrap();
+                    let Some(ship) = tick.snapshot.company.ships.iter().find(|s| s.id == sid) else {
+                        return ERR_NOT_OWNER;
+                    };
+                    if ship.is_busy {
+                        return ERR_BUSY;
+                    }
                 }
                 h.push_intent(Intent::RepairShip { ship_id: sid })
             })?,
@@ -972,25 +1141,28 @@ fn install_host_bindings<'js>(
                     if qty == 0 || !price_f.is_finite() || price_f <= 0.0 {
                         return ERR_INVALID_ARGS;
                     }
-                    if !h.catalog.items.contains_key(&item_id) || !h.snapshot.quotes.contains_key(&station_id) {
-                        return ERR_INVALID_TARGET;
-                    }
                     let side = match side_str.as_str() {
                         "buy" => OrderSide::Buy,
                         "sell" => OrderSide::Sell,
                         _ => return ERR_INVALID_ARGS,
                     };
-                    if h.snapshot.company.open_orders.len() >= MAX_ACTIVE_ORDERS_PER_COMPANY {
-                        return ERR_FULL;
-                    }
                     let price = to_money(price_f);
                     if price <= 0 {
                         return ERR_INVALID_ARGS;
                     }
-                    if side == OrderSide::Buy {
-                        let cost = qty as i128 * price as i128;
-                        if (h.snapshot.company.cash as i128) < cost {
-                            return ERR_NOT_ENOUGH_CREDITS;
+                    {
+                        let tick = h.tick.lock().unwrap();
+                        if !tick.catalog.items.contains_key(&item_id) || !tick.snapshot.quotes.contains_key(&station_id) {
+                            return ERR_INVALID_TARGET;
+                        }
+                        if tick.snapshot.company.open_orders.len() >= MAX_ACTIVE_ORDERS_PER_COMPANY {
+                            return ERR_FULL;
+                        }
+                        if side == OrderSide::Buy {
+                            let cost = qty as i128 * price as i128;
+                            if (tick.snapshot.company.cash as i128) < cost {
+                                return ERR_NOT_ENOUGH_CREDITS;
+                            }
                         }
                     }
                     h.push_intent(Intent::CreateOrder {
@@ -1012,14 +1184,17 @@ fn install_host_bindings<'js>(
                 let Ok(oid) = oid_str.parse::<OrderId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                if !h
-                    .snapshot
-                    .company
-                    .open_orders
-                    .iter()
-                    .any(|o| o.order_id == oid)
                 {
-                    return ERR_NOT_FOUND;
+                    let tick = h.tick.lock().unwrap();
+                    if !tick
+                        .snapshot
+                        .company
+                        .open_orders
+                        .iter()
+                        .any(|o| o.order_id == oid)
+                    {
+                        return ERR_NOT_FOUND;
+                    }
                 }
                 h.push_intent(Intent::CancelOrder { order_id: oid })
             })?,
@@ -1036,8 +1211,11 @@ fn install_host_bindings<'js>(
                 let Ok(oid) = oid_str.parse::<OrderId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                if !h.snapshot.orders.iter().any(|o| o.order_id == oid) {
-                    return ERR_NOT_FOUND;
+                {
+                    let tick = h.tick.lock().unwrap();
+                    if !tick.snapshot.orders.iter().any(|o| o.order_id == oid) {
+                        return ERR_NOT_FOUND;
+                    }
                 }
                 h.push_intent(Intent::DealOrder {
                     order_id: oid,
@@ -1053,44 +1231,48 @@ fn install_host_bindings<'js>(
             Function::new(
                 ctx.clone(),
                 move |pid: String, mode: String, id_str: String| -> i32 {
-                    let Some(p_view) = h.snapshot.planets.get(&pid) else {
-                        return ERR_NOT_FOUND;
+                    let intent = {
+                        let tick = h.tick.lock().unwrap();
+                        let Some(p_view) = tick.snapshot.planets.get(&pid) else {
+                            return ERR_NOT_FOUND;
+                        };
+                        match mode.as_str() {
+                            "listing" => {
+                                let Ok(lid) = id_str.parse::<ListingId>() else {
+                                    return ERR_INVALID_ARGS;
+                                };
+                                if !p_view.land_listings.iter().any(|l| l.listing_id == lid) {
+                                    return ERR_NOT_FOUND;
+                                }
+                                Intent::BuyPlot {
+                                    planet_id: pid,
+                                    slot_id: None,
+                                    listing_id: Some(lid),
+                                }
+                            }
+                            "slot" => {
+                                let Ok(sid) = id_str.parse::<u32>() else {
+                                    return ERR_INVALID_ARGS;
+                                };
+                                let Some(tiles) = tick.snapshot.public_tiles.get(&pid) else {
+                                    return ERR_NOT_FOUND;
+                                };
+                                let Some(tile) = tiles.iter().find(|t| t.slot_id == sid) else {
+                                    return ERR_NOT_FOUND;
+                                };
+                                if tile.status != "unclaimed" {
+                                    return ERR_INVALID_TARGET;
+                                }
+                                Intent::BuyPlot {
+                                    planet_id: pid,
+                                    slot_id: Some(sid),
+                                    listing_id: None,
+                                }
+                            }
+                            _ => return ERR_INVALID_ARGS,
+                        }
                     };
-                    match mode.as_str() {
-                        "listing" => {
-                            let Ok(lid) = id_str.parse::<ListingId>() else {
-                                return ERR_INVALID_ARGS;
-                            };
-                            if !p_view.land_listings.iter().any(|l| l.listing_id == lid) {
-                                return ERR_NOT_FOUND;
-                            }
-                            h.push_intent(Intent::BuyPlot {
-                                planet_id: pid,
-                                slot_id: None,
-                                listing_id: Some(lid),
-                            })
-                        }
-                        "slot" => {
-                            let Ok(sid) = id_str.parse::<u32>() else {
-                                return ERR_INVALID_ARGS;
-                            };
-                            let Some(tiles) = h.snapshot.public_tiles.get(&pid) else {
-                                return ERR_NOT_FOUND;
-                            };
-                            let Some(tile) = tiles.iter().find(|t| t.slot_id == sid) else {
-                                return ERR_NOT_FOUND;
-                            };
-                            if tile.status != "unclaimed" {
-                                return ERR_INVALID_TARGET;
-                            }
-                            h.push_intent(Intent::BuyPlot {
-                                planet_id: pid,
-                                slot_id: Some(sid),
-                                listing_id: None,
-                            })
-                        }
-                        _ => ERR_INVALID_ARGS,
-                    }
+                    h.push_intent(intent)
                 },
             )?,
         )?;
@@ -1103,11 +1285,14 @@ fn install_host_bindings<'js>(
                 let Ok(plot_id) = plot_str.parse::<PlotId>() else {
                     return ERR_INVALID_ARGS;
                 };
-                if !h.snapshot.company.plots.iter().any(|p| p.id == plot_id) {
-                    return ERR_NOT_OWNER;
-                }
-                if !h.catalog.buildings.contains_key(&btype) {
-                    return ERR_INVALID_TARGET;
+                {
+                    let tick = h.tick.lock().unwrap();
+                    if !tick.snapshot.company.plots.iter().any(|p| p.id == plot_id) {
+                        return ERR_NOT_OWNER;
+                    }
+                    if !tick.catalog.buildings.contains_key(&btype) {
+                        return ERR_INVALID_TARGET;
+                    }
                 }
                 h.push_intent(Intent::BuildFacility {
                     plot_id,
@@ -1128,8 +1313,11 @@ fn install_host_bindings<'js>(
                     else {
                         return ERR_INVALID_ARGS;
                     };
-                    if !h.snapshot.company.plots.iter().any(|p| p.id == plot_id) {
-                        return ERR_NOT_OWNER;
+                    {
+                        let tick = h.tick.lock().unwrap();
+                        if !tick.snapshot.company.plots.iter().any(|p| p.id == plot_id) {
+                            return ERR_NOT_OWNER;
+                        }
                     }
                     h.push_intent(Intent::DemolishFacility {
                         plot_id,
@@ -1146,7 +1334,7 @@ fn install_host_bindings<'js>(
             Function::new(
                 ctx.clone(),
                 move |pid: String, op_str: String, amount_f: f64| -> i32 {
-                    if !price_positive(amount_f) || !h.snapshot.planets.contains_key(&pid) {
+                    if !price_positive(amount_f) {
                         return ERR_INVALID_ARGS;
                     }
                     let op = match op_str.as_str() {
@@ -1159,6 +1347,12 @@ fn install_host_bindings<'js>(
                     let amount = to_money(amount_f);
                     if amount <= 0 {
                         return ERR_INVALID_ARGS;
+                    }
+                    {
+                        let tick = h.tick.lock().unwrap();
+                        if !tick.snapshot.planets.contains_key(&pid) {
+                            return ERR_INVALID_ARGS;
+                        }
                     }
                     h.push_intent(Intent::BankOp {
                         planet_id: pid,
@@ -1198,24 +1392,6 @@ fn build_boot_json(
             gravity: p.gravity,
             waste_backlog: p.waste_backlog,
             primary_land_price: p.primary_land_price.map(from_money),
-            land_listings: p
-                .land_listings
-                .iter()
-                .map(|l| BootLandListing {
-                    listing_id: l.listing_id.to_string(),
-                    plot_id: l.plot_id.to_string(),
-                    slot_id: l.slot_id,
-                    seller_id: &l.seller_id,
-                    ask_price: from_money(l.ask_price),
-                    terrain_name: &l.terrain_name,
-                    lat: l.lat,
-                    lon: l.lon,
-                    capacity: l.capacity,
-                    used_slots: l.used_slots,
-                    building_mods: &l.building_mods,
-                    buildings: &l.buildings,
-                })
-                .collect(),
             bank_rate_pct: p.bank_rate_bps as f64 / 100.0,
             ground_store: &p.ground_store,
             station_store: &p.station_store,

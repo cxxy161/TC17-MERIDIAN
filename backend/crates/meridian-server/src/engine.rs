@@ -235,7 +235,7 @@ impl GameEngine {
         tick_ms: u64,
     ) -> Result<Self, String> {
         let catalog = ProductionCatalog::load_from_file(&data_path)?;
-        let mut runner = SimulationRunner::new(PlayerRunConfig::default());
+        let mut runner = SimulationRunner::new(PlayerRunConfig::from_env());
 
         let (events_tx, _) = broadcast::channel(64);
 
@@ -685,6 +685,8 @@ impl GameEngine {
         }
         let phases = TickPhases {
             snapshot_ms: self.runner.last_timing.snapshot_ms,
+            npc_ms: self.runner.last_timing.npc_ms,
+            players_ms: self.runner.last_timing.players_ms,
             actors_ms: self.runner.last_timing.actors_ms,
             world_tick_ms: self.runner.last_timing.world_tick_ms,
             npc_spawn_ms,
