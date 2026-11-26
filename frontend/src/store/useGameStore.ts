@@ -458,8 +458,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const clean = newName.trim().replace(/^\/+|\/+$/g, '').replace(/\.js$/, '');
     if (!clean || clean === oldName) return;
     set((prev) => {
-      if (!(oldName in prev.draftModules) || clean in prev.draftModules) return prev;
-      const next = { ...prev.draftModules };
+      const base =
+        Object.keys(prev.draftModules).length > 0
+          ? prev.draftModules
+          : (prev.scripts?.modules ?? {});
+      if (!(oldName in base) || clean in base) return prev;
+      const next = { ...base };
       next[clean] = next[oldName];
       delete next[oldName];
       return {
@@ -473,7 +477,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
   deleteDraftModule: (name) => {
     if (name === 'main') return;
     set((prev) => {
-      const next = { ...prev.draftModules };
+      const base =
+        Object.keys(prev.draftModules).length > 0
+          ? prev.draftModules
+          : (prev.scripts?.modules ?? {});
+      if (!(name in base)) return prev;
+      const next = { ...base };
       delete next[name];
       const nextActive =
         prev.activeScriptModule === name

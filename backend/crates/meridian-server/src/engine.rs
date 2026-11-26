@@ -181,6 +181,14 @@ pub struct TickBroadcast {
     pub player_outputs: HashMap<String, PlayerRunOutput>,
 }
 
+fn env_npc_count(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .map(|n| n.min(500))
+        .unwrap_or(default)
+}
+
 pub struct GameEngine {
     pub world: World,
     pub runner: SimulationRunner,
@@ -188,6 +196,8 @@ pub struct GameEngine {
     pub data_path: PathBuf,
     pub paused: bool,
     pub tick_ms: u64,
+    init_npcs: usize,
+    max_npcs: usize,
     next_npc_seq: u64,
     saved_player_memories: HashMap<String, (String, bool)>,
     world_dirty: bool,
@@ -239,6 +249,9 @@ impl GameEngine {
 
         let (events_tx, _) = broadcast::channel(64);
 
+        let max_npcs = env_npc_count("MERIDIAN_MAX_NPCS", 72);
+        let init_npcs = env_npc_count("MERIDIAN_INIT_NPCS", 48).min(max_npcs.max(48));
+
         if let Some(restored_world) = store.load_world()? {
             let bundles = store.load_all_player_bundles()?;
             let memories = store.load_all_player_memories()?;
@@ -281,6 +294,8 @@ impl GameEngine {
                 data_path,
                 paused: false,
                 tick_ms,
+                init_npcs,
+                max_npcs,
                 next_npc_seq,
                 saved_player_memories,
                 world_dirty: false,
@@ -289,7 +304,8 @@ impl GameEngine {
                 telemetry: TelemetryTracker::default(),
             };
             // Heal cohort if an older DB has fewer than the minimum active NPC floor (respecting 90% plot cap)
-            while engine.world.companies.values().filter(|c| !c.is_player).count() < 36 {
+            let floor = 36.min(engine.max_npcs);
+            while engine.world.companies.values().filter(|c| !c.is_player).count() < floor {
                 let before = engine.world.companies.len();
                 engine.respawn_evolved_npc();
                 if engine.world.companies.len() == before {
@@ -300,7 +316,7 @@ impl GameEngine {
         }
 
         let mut world = World::new_generated(catalog, generate_world_seed());
-        Self::seed_initial_actors(&mut world, &mut runner, &mut store)?;
+        Self::seed_initial_actors(&mut world, &mut runner, &mut store, init_npcs)?;
         store.save_world(&world)?;
 
         let mut saved_player_memories = HashMap::new();
@@ -313,6 +329,8 @@ impl GameEngine {
             data_path,
             paused: false,
             tick_ms,
+            init_npcs,
+            max_npcs,
             next_npc_seq: 100,
             saved_player_memories,
             world_dirty: false,
@@ -344,14 +362,13 @@ impl GameEngine {
             .unwrap_or_else(|| "P1".to_string())
     }
 
-    fn allocate_initial_npcs(world: &World) -> Vec<(&'static str, String)> {
+    fn allocate_initial_npcs(world: &World, target_total: usize) -> Vec<(&'static str, String)> {
         let mut planets: Vec<&meridian_core::Planet> = world.planets.values().collect();
         planets.sort_by(|a, b| a.id.cmp(&b.id));
-        if planets.is_empty() {
+        if planets.is_empty() || target_total == 0 {
             return Vec::new();
         }
 
-        const TOTAL_NPCS: usize = 48;
         let weights: Vec<f64> = planets
             .iter()
             .map(|p| {
@@ -369,14 +386,14 @@ impl GameEngine {
         let mut counts: Vec<usize> = weights
             .iter()
             .zip(caps.iter())
-            .map(|(w, &cap)| ((TOTAL_NPCS as f64 * (*w / w_sum)).round() as usize).clamp(1, cap))
+            .map(|(w, &cap)| ((target_total as f64 * (*w / w_sum)).round() as usize).clamp(1, cap))
             .collect();
 
         let mut cur_total: usize = counts.iter().sum();
-        while cur_total < TOTAL_NPCS {
+        while cur_total < target_total {
             let mut progressed = false;
             for idx in 0..planets.len() {
-                if cur_total >= TOTAL_NPCS {
+                if cur_total >= target_total {
                     break;
                 }
                 if counts[idx] < caps[idx] {
@@ -389,7 +406,7 @@ impl GameEngine {
                 break;
             }
         }
-        while cur_total > TOTAL_NPCS {
+        while cur_total > target_total {
             if let Some((idx, _)) = counts
                 .iter()
                 .enumerate()
@@ -445,6 +462,7 @@ impl GameEngine {
         world: &mut World,
         runner: &mut SimulationRunner,
         store: &mut SqliteStore,
+        init_npcs: usize,
     ) -> Result<(), String> {
         let player_home = Self::preferred_player_home_planet(world);
         world.spawn_company(
@@ -460,8 +478,8 @@ impl GameEngine {
         store.save_player_bundle("player1", &starter_bundle)?;
         store.save_player_memory("player1", "{}", true)?;
 
-        // Dynamic 48-NPC cohort distributed across all generated planets within 90% plot cap
-        let cohort = Self::allocate_initial_npcs(world);
+        // Dynamic NPC cohort distributed across all generated planets within 90% plot cap
+        let cohort = Self::allocate_initial_npcs(world, init_npcs);
         for (i, (prof, planet)) in cohort.iter().enumerate() {
             let cid = format!("npc_{i:02}");
             let name = Self::generate_npc_name(world, i as u64);
@@ -745,7 +763,8 @@ impl GameEngine {
         self.next_npc_seq = seq + 1;
 
         // Preserve ecosystem profession & planet niche diversity dynamically across all generated planets
-        let target_niches: Vec<(&'static str, String, usize)> = Self::allocate_initial_npcs(&self.world)
+        let target_niches: Vec<(&'static str, String, usize)> =
+            Self::allocate_initial_npcs(&self.world, self.init_npcs)
             .into_iter()
             .fold(HashMap::<(&'static str, String), usize>::new(), |mut acc, pair| {
                 *acc.entry(pair).or_insert(0) += 1;
@@ -896,17 +915,17 @@ impl GameEngine {
         Some((new_cid, genome))
     }
 
-    /// Market-driven NPC startups on planets with profitable shortages (capped at 90% planet land & <=72 NPCs).
+    /// Market-driven NPC startups on planets with profitable shortages (capped at 90% planet land & `max_npcs`).
     fn run_npc_startups(&mut self) -> Vec<(String, NpcGenome)> {
         let mut spawned = Vec::new();
-        const MAX_GLOBAL_NPCS: usize = 72;
+        let max_global_npcs = self.max_npcs;
         let mut total_npcs = self
             .world
             .companies
             .values()
             .filter(|c| !c.is_player)
             .count();
-        if total_npcs >= MAX_GLOBAL_NPCS {
+        if total_npcs >= max_global_npcs {
             return spawned;
         }
 
@@ -946,17 +965,23 @@ impl GameEngine {
             .sum::<f64>()
             .max(1.0);
 
+        let init_target = (self.init_npcs as f64).max(1.0);
+        let per_planet_ceiling = ((max_global_npcs as f64 / planet_order.len().max(1) as f64) * 1.45)
+            .ceil()
+            .max(42.0) as usize;
         for (pid, cc, hab) in &planet_order {
-            if total_npcs >= MAX_GLOBAL_NPCS {
+            if total_npcs >= max_global_npcs {
                 break;
             }
             let Some(p) = self.world.planets.get(pid) else {
                 continue;
             };
             let w = 1.0 + (*cc as f64).sqrt() * 1.8 + *hab * 1.6;
-            let min_p = ((48.0 * w / total_p_weight).round() as usize).clamp(4, 24);
+            let min_p = ((init_target * w / total_p_weight).round() as usize)
+                .clamp(4, per_planet_ceiling);
             let cap_p = ((min_p as f64 * 1.65).ceil() as usize + (p.population / 500.0) as usize)
-                .min(42)
+                .min(self.world.npc_plot_cap_on(pid) as usize)
+                .min(per_planet_ceiling)
                 .max(min_p);
             let mut cur_on_p = self
                 .world
@@ -978,7 +1003,7 @@ impl GameEngine {
             let n_spawn = if cur_on_p < min_p { 2 } else { 1 };
 
             for _ in 0..n_spawn {
-                if total_npcs >= MAX_GLOBAL_NPCS
+                if total_npcs >= max_global_npcs
                     || cur_on_p >= cap_p
                     || self.world.npc_plot_count_on(pid) >= self.world.npc_plot_cap_on(pid)
                 {
@@ -1156,7 +1181,7 @@ impl GameEngine {
         self.runner.last_player_outputs.clear();
 
         let mut new_world = World::new_generated(catalog, generate_world_seed());
-        Self::seed_initial_actors(&mut new_world, &mut self.runner, &mut self.store)?;
+        Self::seed_initial_actors(&mut new_world, &mut self.runner, &mut self.store, self.init_npcs)?;
         self.store.save_world(&new_world)?;
         self.world = new_world;
         self.next_npc_seq = 100;

@@ -1262,3 +1262,79 @@ fn test_deal_order_enforces_price_priority_and_ema_ramps_smoothly() {
     assert_eq!(rep_skip.rejected_intents, 1, "DealOrder must not skip better-priced ask");
     assert_eq!(world.stations["ST:HUB"].ema_slow["steel"], ema_before);
 }
+
+#[test]
+fn test_out_of_band_evicted_valid_bid_refunds_escrow_and_conserves_currency() {
+    let catalog = load_production_catalog();
+    let mut world = World::new_standard(catalog);
+    spawn_test_company(&mut world, "buyer", 500_000.0, "P1");
+    spawn_test_company(&mut world, "seller", 0.0, "P1");
+    world
+        .companies
+        .get_mut("seller")
+        .unwrap()
+        .add_station_qty("ST:HUB", "oxygen", 10);
+
+    // Simulate a market where oxygen previously traded at a high price (100 credits)
+    // so a high bid at 4,000 credits is valid inside the 100x band when placed.
+    world
+        .stations
+        .get_mut("ST:HUB")
+        .unwrap()
+        .last_trade_price
+        .insert("oxygen".to_string(), to_money(100.0));
+
+    let bid_price = to_money(4_000.0);
+    let rep = world.step_tick(vec![(
+        "buyer".to_string(),
+        vec![Intent::CreateOrder {
+            station_id: "ST:HUB".to_string(),
+            side: OrderSide::Buy,
+            item_id: "oxygen".to_string(),
+            qty: 5,
+            price: bid_price,
+        }],
+    )]);
+    assert_eq!(rep.rejected_intents, 0);
+    assert_eq!(world.conservation_error(), 0);
+    let cash_after_bid = world.companies["buyer"].cash;
+
+    // Later, oxygen reference price collapses to 10 credits so band_max = 1,000 credits.
+    // When a crossing ask arrives, the stale 4,000-credit bid is out of band and evicted;
+    // its 20,000 credits of locked escrow must be refunded to buyer with zero conservation drift.
+    world
+        .stations
+        .get_mut("ST:HUB")
+        .unwrap()
+        .last_trade_price
+        .insert("oxygen".to_string(), to_money(10.0));
+
+    let rep2 = world.step_tick(vec![(
+        "seller".to_string(),
+        vec![Intent::CreateOrder {
+            station_id: "ST:HUB".to_string(),
+            side: OrderSide::Sell,
+            item_id: "oxygen".to_string(),
+            qty: 1,
+            price: to_money(10.0),
+        }],
+    )]);
+    assert_eq!(rep2.rejected_intents, 0);
+    assert_eq!(
+        world.companies["buyer"].cash,
+        cash_after_bid + 5 * bid_price,
+        "valid out-of-band bid must refund its locked escrow cleanly on eviction"
+    );
+    assert_eq!(
+        world.conservation_error(),
+        0,
+        "evicting a validly escrowed out-of-band order must preserve currency conservation"
+    );
+    assert!(
+        !world.stations["ST:HUB"]
+            .bids
+            .get("oxygen")
+            .is_some_and(|v| v.iter().any(|o| o.price == bid_price)),
+        "out-of-band bid must be removed from top of book so it does not wedge matching"
+    );
+}

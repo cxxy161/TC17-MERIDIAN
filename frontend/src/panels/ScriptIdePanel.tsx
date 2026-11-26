@@ -1,46 +1,178 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { EditorState } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { javascript } from '@codemirror/lang-javascript';
-import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
+import {
+  crosshairCursor,
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  highlightSpecialChars,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from '@codemirror/view';
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import {
+  bracketMatching,
+  defaultHighlightStyle,
+  foldGutter,
+  foldKeymap,
+  indentOnInput,
+  syntaxHighlighting,
+} from '@codemirror/language';
+import {
+  completionPath,
+  javascript,
+  javascriptLanguage,
+  scopeCompletionSource,
+} from '@codemirror/lang-javascript';
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completeAnyWord,
+  completionKeymap,
+  snippetCompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from '@codemirror/autocomplete';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { useGameStore } from '../store/useGameStore';
 import type { PaneProps } from '../layout/paneRegistry';
 
-const API_COMPLETIONS = [
-  { label: 'Game.time', type: 'property', detail: '当前 tick 序号' },
-  { label: 'Game.cpi', type: 'property', detail: '全星系物价指数' },
-  { label: 'Game.cpu.limit', type: 'property', detail: '单 tick CPU 毫秒上限' },
-  { label: 'Game.cpu.getUsed()', type: 'method', detail: '本 tick 已消耗毫秒数' },
-  { label: 'Game.company', type: 'property', detail: '本公司现金/储蓄/负债/母星与职业' },
-  { label: 'Game.planets', type: 'property', detail: '全星系行星遥测与本公司仓库' },
-  { label: 'Game.plots', type: 'property', detail: '本公司名下地块（含 slotId / lat / lon / buildingMods）' },
-  { label: 'Game.stations', type: 'property', detail: '本公司有库存记录的站点 Store' },
-  { label: 'Game.buildings', type: 'property', detail: '名下已完工建筑（setRecipe / setActive）' },
-  { label: 'Game.ships', type: 'property', detail: '名下飞船（dispatch / repair）' },
-  { label: 'Game.market.credits', type: 'property', detail: '本 tick 开盘现金副本' },
-  { label: 'Game.market.orders', type: 'property', detail: '本公司活跃挂单字典' },
-  { label: 'Game.market.quote(stationId, resourceType)', type: 'method', detail: '查询盘口报价' },
-  { label: 'Game.market.depth(stationId, resourceType, limit)', type: 'method', detail: '查询买卖盘口深度（最多 5 档）' },
-  { label: 'Game.market.getAllOrders(filter)', type: 'method', detail: '筛选全星系活跃挂单' },
-  { label: 'Game.market.createOrder({ type, resourceType, price, totalAmount, stationId })', type: 'method', detail: '发布限价买卖单' },
-  { label: 'Game.market.cancelOrder(orderId)', type: 'method', detail: '撤销本公司挂单' },
-  { label: 'Game.market.deal(orderId, amount)', type: 'method', detail: '直接吃单成交' },
-  { label: 'Game.market.calcRoute(fromId, toId)', type: 'method', detail: '估算航线耗时与基准油耗' },
-  { label: 'Game.market.getLandPlots(planetId)', type: 'method', detail: '获取行星全部公开地表格点' },
-  { label: 'Game.market.listCompanies(filter)', type: 'method', detail: '分页筛选全星系公司公开摘要' },
-  { label: 'Game.market.getCompany(companyId)', type: 'method', detail: '查看指定公司的公开商业情报' },
-  { label: 'Game.buyPlot(planetId, { slotId } | { listingId })', type: 'method', detail: '购买一手空地或收购二手挂牌地' },
-  { label: 'Game.buildFacility(plotId, buildingType)', type: 'method', detail: '在地块上建造建筑' },
-  { label: 'Game.demolishFacility(plotId, buildingId)', type: 'method', detail: '拆除地块上的建筑' },
-  { label: 'Game.bank(planetId, op, amount)', type: 'method', detail: '母星央行存取借还' },
-  { label: 'Game.getRecipe(recipeId)', type: 'method', detail: '读取静态配方详情' },
+const GAME_ROOT_COMPLETIONS: Completion[] = [
+  { label: 'time', type: 'property', detail: '当前 tick 序号' },
+  { label: 'cpi', type: 'property', detail: '全星系物价指数' },
+  { label: 'cpu', type: 'namespace', detail: 'CPU 配额与耗时查询' },
+  { label: 'company', type: 'property', detail: '本公司现金/储蓄/负债/母星与职业' },
+  { label: 'planets', type: 'property', detail: '全星系行星遥测与本公司仓库' },
+  { label: 'plots', type: 'property', detail: '本公司名下地块（含 slotId / lat / lon / buildingMods）' },
+  { label: 'stations', type: 'property', detail: '本公司有库存记录的站点 Store' },
+  { label: 'buildings', type: 'property', detail: '名下已完工建筑（setRecipe / setActive）' },
+  { label: 'ships', type: 'property', detail: '名下飞船（dispatch / repair）' },
+  { label: 'market', type: 'namespace', detail: '星际交易所与公开情报接口' },
+  snippetCompletion('buyPlot(${planetId}, { slotId: ${slotId} })', {
+    label: 'buyPlot',
+    type: 'method',
+    detail: '购买一手空地或收购二手挂牌地',
+  }),
+  snippetCompletion('buildFacility(${plotId}, ${buildingType})', {
+    label: 'buildFacility',
+    type: 'method',
+    detail: '在地块上建造建筑',
+  }),
+  snippetCompletion('demolishFacility(${plotId}, ${buildingId})', {
+    label: 'demolishFacility',
+    type: 'method',
+    detail: '拆除地块上的建筑',
+  }),
+  snippetCompletion('bank(${planetId}, ${op}, ${amount})', {
+    label: 'bank',
+    type: 'method',
+    detail: '母星央行存取借还',
+  }),
+  snippetCompletion('getRecipe(${recipeId})', {
+    label: 'getRecipe',
+    type: 'method',
+    detail: '读取静态配方详情',
+  }),
+];
+
+const GAME_CPU_COMPLETIONS: Completion[] = [
+  { label: 'limit', type: 'property', detail: '单 tick CPU 毫秒上限' },
+  { label: 'getUsed', type: 'method', apply: 'getUsed()', detail: '本 tick 已消耗毫秒数' },
+];
+
+const GAME_MARKET_COMPLETIONS: Completion[] = [
+  { label: 'credits', type: 'property', detail: '本 tick 开盘现金副本' },
+  { label: 'orders', type: 'property', detail: '本公司活跃挂单字典' },
+  snippetCompletion('quote(${stationId}, ${resourceType})', {
+    label: 'quote',
+    type: 'method',
+    detail: '查询盘口报价',
+  }),
+  snippetCompletion('depth(${stationId}, ${resourceType}, ${5})', {
+    label: 'depth',
+    type: 'method',
+    detail: '查询买卖盘口深度（最多 5 档）',
+  }),
+  snippetCompletion('getAllOrders(${filter})', {
+    label: 'getAllOrders',
+    type: 'method',
+    detail: '筛选全星系活跃挂单',
+  }),
+  snippetCompletion(
+    'createOrder({ type: ${ORDER_BUY}, resourceType: ${resourceType}, price: ${price}, totalAmount: ${qty}, stationId: ${stationId} })',
+    {
+      label: 'createOrder',
+      type: 'method',
+      detail: '发布限价买卖单',
+    },
+  ),
+  snippetCompletion('cancelOrder(${orderId})', {
+    label: 'cancelOrder',
+    type: 'method',
+    detail: '撤销本公司挂单',
+  }),
+  snippetCompletion('deal(${orderId}, ${amount})', {
+    label: 'deal',
+    type: 'method',
+    detail: '直接吃单成交',
+  }),
+  snippetCompletion('calcRoute(${fromId}, ${toId})', {
+    label: 'calcRoute',
+    type: 'method',
+    detail: '估算航线耗时与基准油耗',
+  }),
+  snippetCompletion('getLandPlots(${planetId})', {
+    label: 'getLandPlots',
+    type: 'method',
+    detail: '获取行星全部公开地表格点',
+  }),
+  snippetCompletion('listCompanies(${filter})', {
+    label: 'listCompanies',
+    type: 'method',
+    detail: '分页筛选全星系公司公开摘要',
+  }),
+  snippetCompletion('getCompany(${companyId})', {
+    label: 'getCompany',
+    type: 'method',
+    detail: '查看指定公司的公开商业情报',
+  }),
+];
+
+const CONSOLE_COMPLETIONS: Completion[] = [
+  snippetCompletion('log(${msg})', {
+    label: 'log',
+    type: 'method',
+    detail: '输出普通日志（每 tick 限 200 行）',
+  }),
+  snippetCompletion('warn(${msg})', {
+    label: 'warn',
+    type: 'method',
+    detail: '输出警告日志',
+  }),
+  snippetCompletion('error(${msg})', {
+    label: 'error',
+    type: 'method',
+    detail: '输出错误日志',
+  }),
+];
+
+const TOP_LEVEL_API_COMPLETIONS: Completion[] = [
+  { label: 'Game', type: 'variable', detail: '游戏世界状态与全部动作 API 根对象' },
   { label: 'Memory', type: 'variable', detail: '128 KB 跨 tick 持久化 JSON 对象' },
-  { label: 'console.log', type: 'method', detail: '输出普通日志（每 tick 限 200 行）' },
-  { label: 'console.warn', type: 'method', detail: '输出警告日志' },
-  { label: 'console.error', type: 'method', detail: '输出错误日志' },
-  { label: 'require(name)', type: 'function', detail: '加载同项目扁平模块' },
+  { label: 'console', type: 'variable', detail: '脚本控制台日志输出对象' },
+  snippetCompletion("require('${module}')", {
+    label: 'require',
+    type: 'function',
+    detail: '加载当前项目模块',
+  }),
+  { label: 'exports', type: 'variable', detail: 'CommonJS 模块导出对象' },
+  { label: 'module', type: 'variable', detail: '当前 CommonJS 模块元数据' },
   { label: 'RESOURCES_ALL', type: 'constant', detail: '全部物品 ID 只读数组' },
   { label: 'OK', type: 'constant', detail: '0 成功' },
   { label: 'ERR_NOT_OWNER', type: 'constant', detail: '-1 无权限' },
@@ -56,6 +188,29 @@ const API_COMPLETIONS = [
   { label: 'ORDER_BUY', type: 'constant', detail: '"buy"' },
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
 ];
+
+/** QuickJS 沙箱内置标准库，配合 scopeCompletionSource 提供 Math. / JSON. / Array. 等属性补全 */
+const SANDBOX_STD_SCOPE = {
+  Math,
+  JSON,
+  Object,
+  Array,
+  String,
+  Number,
+  Boolean,
+  Date,
+  RegExp,
+  Map,
+  Set,
+  Error,
+  TypeError,
+  RangeError,
+  parseInt,
+  parseFloat,
+  isNaN,
+  isFinite,
+};
+const sandboxScopeCompletions = scopeCompletionSource(SANDBOX_STD_SCOPE);
 
 export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
   const scripts = useGameStore((s) => s.scripts);
@@ -75,36 +230,86 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
 
-  const dynamicResourceCompletions = useMemo(() => {
+  const topLevelCompletions = useMemo<Completion[]>(() => {
     const items = catalog?.items ?? [];
     const valid = items.filter((it) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(`RESOURCE_${it.id.toUpperCase()}`));
-    const constants = valid.map((it) => ({
+    const constants: Completion[] = valid.map((it) => ({
       label: `RESOURCE_${it.id.toUpperCase()}`,
-      type: 'constant' as const,
+      type: 'constant',
       detail: `${it.name} (${JSON.stringify(it.id)})`,
     }));
     // Chinese-name aliases: you know "金属钢材", but not whether the constant is RESOURCE_STEEL or
     // RESOURCE_BUILDING_MAT. Typing the Chinese name now suggests (and inserts) the right constant.
-    const aliases = valid.map((it) => ({
+    const aliases: Completion[] = valid.map((it) => ({
       label: it.name,
-      type: 'property' as const,
+      type: 'property',
       detail: `→ RESOURCE_${it.id.toUpperCase()}`,
       apply: `RESOURCE_${it.id.toUpperCase()}`,
     }));
-    return [...API_COMPLETIONS, ...constants, ...aliases];
+    return [...TOP_LEVEL_API_COMPLETIONS, ...constants, ...aliases];
   }, [catalog]);
+
+  const moduleNames = useMemo(
+    () =>
+      Object.keys(draftModules).length > 0
+        ? Object.keys(draftModules)
+        : Object.keys(scripts?.modules ?? { main: '' }),
+    [draftModules, scripts],
+  );
+
+  const topLevelRef = useRef<Completion[]>(topLevelCompletions);
+  topLevelRef.current = topLevelCompletions;
+  const moduleNamesRef = useRef<string[]>(moduleNames);
+  moduleNamesRef.current = moduleNames;
+  const updateDraftRef = useRef(updateDraftModule);
+  updateDraftRef.current = updateDraftModule;
+  const saveDraftRef = useRef(saveDraftScripts);
+  saveDraftRef.current = saveDraftScripts;
 
   useEffect(() => {
     const host = editorHostRef.current;
     if (!host) return;
 
-    const apiCompletionSource = (context: CompletionContext) => {
-      // CJK included so Chinese item names trigger the alias completions.
-      const word = context.matchBefore(/[\w.\u4e00-\u9fa5]+/);
+    const apiCompletionSource = (context: CompletionContext): CompletionResult | null => {
+      // Complete require('...') with project module names
+      const reqMatch = context.matchBefore(/require\(\s*['"][^'"]*$/);
+      if (reqMatch) {
+        const quoteIdx = Math.max(reqMatch.text.lastIndexOf("'"), reqMatch.text.lastIndexOf('"'));
+        const from = reqMatch.from + quoteIdx + 1;
+        const options: Completion[] = moduleNamesRef.current
+          .filter((m) => m !== activeMod)
+          .map((m) => ({ label: m, type: 'text', detail: `${m}.js` }));
+        return { from, options, validFor: /^[^'"]*$/ };
+      }
+
+      // Context-aware property completion for Game.*, Game.market.*, Game.cpu.*, console.*
+      const prop = completionPath(context);
+      if (prop && prop.path.length > 0) {
+        const prefix = prop.path.join('.');
+        const word = context.matchBefore(/[\w$]*$/);
+        const from = word ? word.from : context.pos;
+        if (prefix === 'Game') {
+          return { from, options: GAME_ROOT_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'Game.market') {
+          return { from, options: GAME_MARKET_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'Game.cpu') {
+          return { from, options: GAME_CPU_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'console') {
+          return { from, options: CONSOLE_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        return null;
+      }
+
+      // Top-level identifiers & Chinese resource aliases
+      const word = context.matchBefore(/[\w$\u4e00-\u9fa5]+/);
       if (!word || (word.from === word.to && !context.explicit)) return null;
       return {
         from: word.from,
-        options: dynamicResourceCompletions,
+        options: topLevelRef.current,
+        validFor: /^[\w$\u4e00-\u9fa5]*$/,
       };
     };
 
@@ -113,14 +318,48 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
       doc: startDoc,
       extensions: [
         lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightSpecialChars(),
         history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        foldGutter(),
+        drawSelection(),
+        dropCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        indentOnInput(),
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        bracketMatching(),
+        closeBrackets(),
+        highlightActiveLine(),
+        rectangularSelection(),
+        crosshairCursor(),
         javascript(),
+        javascriptLanguage.data.of({ autocomplete: apiCompletionSource }),
+        javascriptLanguage.data.of({ autocomplete: sandboxScopeCompletions }),
+        javascriptLanguage.data.of({ autocomplete: completeAnyWord }),
         oneDark,
-        autocompletion({ override: [apiCompletionSource] }),
+        autocompletion({ activateOnTyping: true }),
+        keymap.of([
+          { key: 'Tab', run: acceptCompletion },
+          {
+            key: 'Mod-s',
+            preventDefault: true,
+            run: () => {
+              void saveDraftRef.current();
+              setSaveNote('已热重载部署');
+              window.setTimeout(() => setSaveNote(''), 2000);
+              return true;
+            },
+          },
+          ...closeBracketsKeymap,
+          ...defaultKeymap,
+          ...historyKeymap,
+          ...foldKeymap,
+          ...completionKeymap,
+          indentWithTab,
+        ]),
         EditorView.updateListener.of((upd) => {
           if (upd.docChanged) {
-            updateDraftModule(activeMod, upd.state.doc.toString());
+            updateDraftRef.current(activeMod, upd.state.doc.toString());
           }
         }),
         EditorView.theme(
@@ -151,6 +390,14 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
               backgroundColor: '#222a36',
               color: '#94a3b8',
             },
+            '.cm-matchingBracket': {
+              backgroundColor: 'rgba(56, 189, 248, 0.24)',
+              outline: '1px solid rgba(56, 189, 248, 0.55)',
+            },
+            '.cm-tooltip.cm-tooltip-autocomplete': {
+              backgroundColor: '#181e27',
+              border: '1px solid rgba(56, 189, 248, 0.28)',
+            },
           },
           { dark: true },
         ),
@@ -164,7 +411,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
       view.destroy();
       viewRef.current = null;
     };
-  }, [activeMod, dynamicResourceCompletions, updateDraftModule]);
+  }, [activeMod]);
 
   // Sync content when active file is updated externally (e.g., reset or initial load)
   useEffect(() => {
@@ -177,10 +424,6 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
       });
     }
   }, [draftModules, scripts, activeMod, dirty]);
-
-  const moduleNames = Object.keys(draftModules).length > 0
-    ? Object.keys(draftModules)
-    : Object.keys(scripts?.modules ?? { main: '' });
 
   const handleSave = async () => {
     await saveDraftScripts();

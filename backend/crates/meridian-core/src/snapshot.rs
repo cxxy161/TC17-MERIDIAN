@@ -1,8 +1,30 @@
 //! Read-only WorldSnapshot exported identically to QuickJS Game API and free-play NPC brains.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+
+mod arc_serde {
+    use std::sync::Arc;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S, T>(val: &Arc<T>, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize,
+    {
+        T::serialize(val.as_ref(), s)
+    }
+
+    pub fn deserialize<'de, D, T>(d: D) -> Result<Arc<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        T::deserialize(d).map(Arc::new)
+    }
+}
 
 use crate::exchange::{DepthLevel, MarketQuote, Order};
 use crate::logistics::ShipSize;
@@ -119,7 +141,8 @@ pub struct PlanetView {
     pub habitability: f64,
     pub waste_backlog: u32,
     pub primary_land_price: Option<Money>,
-    pub land_listings: Vec<LandListingView>,
+    #[serde(with = "arc_serde")]
+    pub land_listings: Arc<Vec<LandListingView>>,
     pub bank_rate_bps: u32,
     pub ground_store: HashMap<ItemId, u32>,
     pub station_store: HashMap<ItemId, u32>,
@@ -198,15 +221,18 @@ pub struct PublicCompanyDetail {
 
 #[derive(Debug, Clone)]
 pub struct SharedSnapshot {
-    pub quotes: HashMap<StationId, HashMap<ItemId, MarketQuote>>,
-    pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
-    pub all_orders: Vec<Order>,
+    pub quotes: Arc<HashMap<StationId, HashMap<ItemId, MarketQuote>>>,
+    pub depths: Arc<HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>>,
+    pub all_orders: Arc<Vec<Order>>,
     pub open_orders_by_owner: HashMap<CompanyId, Vec<Order>>,
-    pub systems: HashMap<String, StarSystemView>,
+    pub systems: Arc<HashMap<String, StarSystemView>>,
     pub planet_templates: Vec<(PlanetId, StationId, PlanetView)>,
-    pub public_tiles_by_planet: HashMap<PlanetId, Vec<PublicLandTileView>>,
-    pub public_companies: Vec<PublicCompanySummary>,
-    pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
+    pub public_tiles_by_planet: Arc<HashMap<PlanetId, Vec<PublicLandTileView>>>,
+    pub public_companies: Arc<Vec<PublicCompanySummary>>,
+    pub routes: Arc<HashMap<String, HashMap<String, (u32, u32)>>>,
+    pub empty_depths: Arc<HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>>,
+    pub empty_orders: Arc<Vec<Order>>,
+    pub empty_companies: Arc<Vec<PublicCompanySummary>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,17 +240,21 @@ pub struct WorldSnapshot {
     pub tick: u64,
     pub cpi: f64,
     pub company: SelfView,
-    #[serde(default)]
-    pub systems: HashMap<String, StarSystemView>,
+    #[serde(default, with = "arc_serde")]
+    pub systems: Arc<HashMap<String, StarSystemView>>,
     pub planets: HashMap<PlanetId, PlanetView>,
-    pub quotes: HashMap<StationId, HashMap<ItemId, MarketQuote>>,
-    pub depths: HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>,
-    pub orders: Vec<Order>,
-    pub routes: HashMap<String, HashMap<String, (u32, u32)>>,
-    #[serde(default, skip_serializing)]
-    pub public_tiles: HashMap<PlanetId, Vec<PublicLandTileView>>,
-    #[serde(default, skip_serializing)]
-    pub public_companies: Vec<PublicCompanySummary>,
+    #[serde(with = "arc_serde")]
+    pub quotes: Arc<HashMap<StationId, HashMap<ItemId, MarketQuote>>>,
+    #[serde(with = "arc_serde")]
+    pub depths: Arc<HashMap<StationId, HashMap<ItemId, (Vec<DepthLevel>, Vec<DepthLevel>)>>>,
+    #[serde(with = "arc_serde")]
+    pub orders: Arc<Vec<Order>>,
+    #[serde(with = "arc_serde")]
+    pub routes: Arc<HashMap<String, HashMap<String, (u32, u32)>>>,
+    #[serde(default, skip_serializing, with = "arc_serde")]
+    pub public_tiles: Arc<HashMap<PlanetId, Vec<PublicLandTileView>>>,
+    #[serde(default, skip_serializing, with = "arc_serde")]
+    pub public_companies: Arc<Vec<PublicCompanySummary>>,
 }
 
 impl WorldSnapshot {

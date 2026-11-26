@@ -1181,6 +1181,17 @@ fn valid_email(email: &str) -> bool {
     domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
+fn valid_nickname(nickname: &str) -> Result<(), &'static str> {
+    let nick_len = nickname.chars().count();
+    if !(2..=16).contains(&nick_len) {
+        return Err("昵称需 2–16 个字符");
+    }
+    if nickname.contains('@') {
+        return Err("昵称不能包含 @ 符号");
+    }
+    Ok(())
+}
+
 fn user_agent(headers: &HeaderMap) -> String {
     headers
         .get(header::USER_AGENT)
@@ -1294,9 +1305,8 @@ async fn register_handler(
     if !valid_email(&email) {
         return Err(ApiError::field(StatusCode::BAD_REQUEST, "请输入有效邮箱地址", "email"));
     }
-    let nick_len = nickname.chars().count();
-    if !(2..=16).contains(&nick_len) {
-        return Err(ApiError::field(StatusCode::BAD_REQUEST, "昵称需 2–16 个字符", "nickname"));
+    if let Err(msg) = valid_nickname(&nickname) {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, msg, "nickname"));
     }
     let pwd_len = req.password.chars().count();
     if pwd_len < 8 {
@@ -1383,6 +1393,7 @@ async fn register_handler(
 
 #[derive(Deserialize)]
 struct LoginReq {
+    #[serde(alias = "account", alias = "identifier")]
     email: String,
     password: String,
     #[serde(default)]
@@ -1390,10 +1401,10 @@ struct LoginReq {
 }
 
 /// 记录一次账号登录失败，达到阈值时返回 429（带解锁时间戳）。
-async fn login_failure(engine: &SharedEngine, email: &str) -> ApiError {
+async fn login_failure(engine: &SharedEngine, account_key: &str) -> ApiError {
     let locked_until = {
         let eng = engine.lock().await;
-        eng.auth.record_login_failure(email)
+        eng.auth.record_login_failure(account_key)
     };
     if let Some(until) = locked_until {
         return ApiError::cooldown(
@@ -1401,7 +1412,7 @@ async fn login_failure(engine: &SharedEngine, email: &str) -> ApiError {
             until,
         );
     }
-    ApiError::new(StatusCode::UNAUTHORIZED, "邮箱或密码错误")
+    ApiError::new(StatusCode::UNAUTHORIZED, "邮箱/昵称或密码错误")
 }
 
 async fn login_handler(
@@ -1412,34 +1423,40 @@ async fn login_handler(
 ) -> Result<([(header::HeaderName, String); 1], Json<serde_json::Value>), ApiError> {
     // 全局在途上限：超出直接 429，不让慢请求无限堆积。
     let _slot = auth_inflight_slot()?;
-    let email = req.email.trim().to_lowercase();
+    let identifier = req.email.trim().to_lowercase();
+    if identifier.is_empty() {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, "请输入邮箱或昵称", "email"));
+    }
     let ip = client_ip(&headers, client.connect_info());
-    {
+    let found = {
         let eng = engine.lock().await;
         if let Err(msg) = eng.auth.check_login(&ip) {
             return Err(ApiError::new(StatusCode::TOO_MANY_REQUESTS, msg));
         }
-        // 按账号维度的失败锁定：换 IP 也无法继续猜密码。
-        if let Some(until) = eng.auth.account_lock_until(&email) {
+        eng.store.user_by_login(&identifier)
+    };
+    // 归一化锁定键：同一账号无论用邮箱还是昵称登录，共用同一个失败次数与锁定窗口，防止双渠道绕过
+    let lock_key = found
+        .as_ref()
+        .map(|(u, _, _)| u.email.to_lowercase())
+        .unwrap_or_else(|| identifier.clone());
+    {
+        let eng = engine.lock().await;
+        if let Some(until) = eng.auth.account_lock_until(&lock_key) {
             return Err(ApiError::cooldown(
                 format!("该账号因多次密码错误已被临时锁定，解锁时间戳 {until}"),
                 until,
             ));
         }
     }
-
-    let found = {
-        let eng = engine.lock().await;
-        eng.store.user_by_email(&email)
-    };
     let Some((user, salt, hash)) = found else {
         // 用户不存在也跑一次哈希，避免通过响应时间探测账号是否注册
         let _ = hash_blocking(req.password.clone()).await;
-        return Err(login_failure(&engine, &email).await);
+        return Err(login_failure(&engine, &lock_key).await);
     };
     let ok = verify_blocking(req.password.clone(), salt, hash).await?;
     if !ok {
-        return Err(login_failure(&engine, &email).await);
+        return Err(login_failure(&engine, &lock_key).await);
     }
     if user.status != "active" {
         return Err(ApiError::new(StatusCode::FORBIDDEN, "账号已被禁用"));
@@ -1455,7 +1472,7 @@ async fn login_handler(
     {
         let eng = engine.lock().await;
         // 登录成功：清零该账号的失败计数。
-        eng.auth.clear_login_failures(&email);
+        eng.auth.clear_login_failures(&lock_key);
         eng.store
             .create_session(
                 user.id,
@@ -1543,9 +1560,8 @@ async fn update_account_handler(
     Json(req): Json<UpdateAccountReq>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let nickname = req.nickname.trim().to_string();
-    let nick_len = nickname.chars().count();
-    if !(2..=16).contains(&nick_len) {
-        return Err(ApiError::field(StatusCode::BAD_REQUEST, "昵称需 2–16 个字符", "nickname"));
+    if let Err(msg) = valid_nickname(&nickname) {
+        return Err(ApiError::field(StatusCode::BAD_REQUEST, msg, "nickname"));
     }
     if nickname == user.user.nickname {
         return Ok(Json(serde_json::json!({ "ok": true, "nickname": nickname })));

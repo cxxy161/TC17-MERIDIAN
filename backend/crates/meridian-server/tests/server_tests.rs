@@ -1095,6 +1095,43 @@ async fn test_login_account_lockout_cannot_be_bypassed_by_spoofed_xff() {
     assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
 }
 
+#[tokio::test]
+async fn test_login_by_nickname_case_insensitive_and_shared_lockout() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 2000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    let (st, _, _) = send(&app, register_request("nicklogin@meridian.test", "VegaPilot", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+
+    // 昵称含 @ 必须拒绝，防止与邮箱混淆
+    let (st, _, _) = send(&app, register_request("other@meridian.test", "Bad@Name", "password-123")).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+
+    // 通过昵称（忽略大小写）登录成功
+    let (st, body, _) = send(&app, login_request("vegapilot", "password-123")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["email"], "nicklogin@meridian.test");
+    assert_eq!(body["nickname"], "VegaPilot");
+
+    // 混用邮箱与昵称输错 5 次也应共同触发账号锁定，锁定后昵称和邮箱都拒绝
+    for _ in 0..3 {
+        let (st, _, _) = send(&app, login_request("nicklogin@meridian.test", "wrong-1")).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+    }
+    let (st, _, _) = send(&app, login_request("VegaPilot", "wrong-2")).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, _) = send(&app, login_request("VegaPilot", "wrong-3")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+
+    let (st, _, _) = send(&app, login_request("nicklogin@meridian.test", "password-123")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    let (st, _, _) = send(&app, login_request("VegaPilot", "password-123")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+}
+
 #[test]
 fn test_manual_intent_queue_has_per_company_cap() {
     let _serial = serial_guard();

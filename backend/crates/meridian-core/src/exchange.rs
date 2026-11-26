@@ -238,11 +238,16 @@ impl CLOBStation {
         self.last_trade_price.get(item_id).copied().unwrap_or(0)
     }
 
-    /// Evict a corrupt top-of-book order and zero its escrow so that it can never be refunded as
-    /// phantom money (escrow truncation bug: `(qty * price) as Money` could lock less than the
-    /// nominal notional). Dropping the residual escrow only ever burns already-locked cash of the
-    /// offending order; it can never create a refund larger than what was actually escrowed.
-    fn evict_top(&mut self, item: &str, side: OrderSide) -> bool {
+    /// Evict a top-of-book order.
+    ///
+    /// When `allow_refund` is true (e.g. a resting order whose limit price drifted outside the
+    /// reference price band after market moves), validly escrowed Buy orders (`escrow_cash == qty
+    /// * price`) and Sell orders (`qty > 0`) are returned intact so the world layer can refund
+    /// their locked cash/inventory and preserve currency conservation.
+    ///
+    /// Corrupt/under-escrowed legacy orders (`escrow_cash != qty * price` or negative escrow)
+    /// always have `escrow_cash` zeroed and are dropped without refunding phantom cash.
+    fn evict_top(&mut self, item: &str, side: OrderSide, allow_refund: bool) -> (bool, Option<Order>) {
         let removed = match side {
             OrderSide::Buy => self
                 .bids
@@ -254,22 +259,8 @@ impl CLOBStation {
                 .and_then(|v| if v.is_empty() { None } else { Some(v.remove(0)) }),
         };
         let Some(mut order) = removed else {
-            return false;
+            return (false, None);
         };
-        let dropped_escrow = order.escrow_cash;
-        order.escrow_cash = 0;
-        eprintln!(
-            "[meridian-core] evicting corrupt {} order {} on {} (price={}, qty={}, dropped_escrow={})",
-            match side {
-                OrderSide::Buy => "bid",
-                OrderSide::Sell => "ask",
-            },
-            order.order_id,
-            item,
-            order.price,
-            order.qty,
-            dropped_escrow
-        );
         let empty = match side {
             OrderSide::Buy => self.bids.get(item).map(|v| v.is_empty()).unwrap_or(true),
             OrderSide::Sell => self.asks.get(item).map(|v| v.is_empty()).unwrap_or(true),
@@ -284,7 +275,47 @@ impl CLOBStation {
                 }
             }
         }
-        true
+
+        let is_valid_escrow = match side {
+            OrderSide::Buy => {
+                allow_refund
+                    && order.qty > 0
+                    && order.escrow_cash > 0
+                    && checked_notional(order.qty, order.price) == Some(order.escrow_cash)
+            }
+            OrderSide::Sell => allow_refund && order.qty > 0,
+        };
+        if is_valid_escrow {
+            eprintln!(
+                "[meridian-core] evicting out-of-band {} order {} on {} with clean refund (price={}, qty={}, escrow={})",
+                match side {
+                    OrderSide::Buy => "bid",
+                    OrderSide::Sell => "ask",
+                },
+                order.order_id,
+                item,
+                order.price,
+                order.qty,
+                order.escrow_cash
+            );
+            return (true, Some(order));
+        }
+
+        let dropped_escrow = order.escrow_cash;
+        order.escrow_cash = 0;
+        eprintln!(
+            "[meridian-core] evicting corrupt {} order {} on {} (price={}, qty={}, dropped_escrow={})",
+            match side {
+                OrderSide::Buy => "bid",
+                OrderSide::Sell => "ask",
+            },
+            order.order_id,
+            item,
+            order.price,
+            order.qty,
+            dropped_escrow
+        );
+        (true, None)
     }
 
     /// Match crossing bids and asks across all items present on this station.
@@ -292,10 +323,17 @@ impl CLOBStation {
     ///
     /// Every notional is computed with 128-bit checked math and every escrow invariant is verified
     /// *before* mutating the book: `0 <= escrowed_for_take <= bid.escrow_cash` and
-    /// `0 <= buyer_refund <= escrowed_for_take`. Corrupt resting orders are evicted instead of
-    /// allowing a fill that mints cash.
+    /// `0 <= buyer_refund <= escrowed_for_take`. Out-of-band orders are evicted and returned for
+    /// clean refund; corrupt under-escrowed resting orders are evicted without refunding phantom cash.
     pub fn match_all(&mut self, tick: u64) -> Vec<TradeFill> {
+        self.match_all_with_evictions(tick).0
+    }
+
+    /// Same as [`Self::match_all`], also returning validly escrowed orders evicted for drifting
+    /// outside the admissible price band so callers can refund their locked cash/inventory.
+    pub fn match_all_with_evictions(&mut self, tick: u64) -> (Vec<TradeFill>, Vec<Order>) {
         let mut fills = Vec::new();
+        let mut evicted_refunds = Vec::new();
         let item_keys: Vec<ItemId> = self.bids.keys().cloned().collect();
 
         for item in item_keys {
@@ -333,14 +371,26 @@ impl CLOBStation {
                 let ref_price = self.reference_price(&item);
 
                 // Bid-side invariants: sane price band and non-negative escrow.
-                if bid_qty == 0 || bid_escrow < 0 || !price_in_band(bid_price, ref_price) {
-                    if !self.evict_top(&item, OrderSide::Buy) {
+                let bid_corrupt = bid_qty == 0 || bid_escrow < 0;
+                if bid_corrupt || !price_in_band(bid_price, ref_price) {
+                    let (evicted, refund_order) =
+                        self.evict_top(&item, OrderSide::Buy, !bid_corrupt);
+                    if let Some(o) = refund_order {
+                        evicted_refunds.push(o);
+                    }
+                    if !evicted {
                         break;
                     }
                     continue;
                 }
-                if ask_qty == 0 || !price_in_band(ask_price, ref_price) {
-                    if !self.evict_top(&item, OrderSide::Sell) {
+                let ask_corrupt = ask_qty == 0;
+                if ask_corrupt || !price_in_band(ask_price, ref_price) {
+                    let (evicted, refund_order) =
+                        self.evict_top(&item, OrderSide::Sell, !ask_corrupt);
+                    if let Some(o) = refund_order {
+                        evicted_refunds.push(o);
+                    }
+                    if !evicted {
                         break;
                     }
                     continue;
@@ -355,19 +405,19 @@ impl CLOBStation {
 
                 // All three amounts are checked; any failure evicts the offending bid.
                 let Some(escrowed_for_take) = checked_notional(take, bid_price) else {
-                    if !self.evict_top(&item, OrderSide::Buy) {
+                    if !self.evict_top(&item, OrderSide::Buy, false).0 {
                         break;
                     }
                     continue;
                 };
                 let Some(notional) = checked_notional(take, trade_price) else {
-                    if !self.evict_top(&item, OrderSide::Buy) {
+                    if !self.evict_top(&item, OrderSide::Buy, false).0 {
                         break;
                     }
                     continue;
                 };
                 let Some(new_bid_escrow) = bid_escrow.checked_sub(escrowed_for_take) else {
-                    if !self.evict_top(&item, OrderSide::Buy) {
+                    if !self.evict_top(&item, OrderSide::Buy, false).0 {
                         break;
                     }
                     continue;
@@ -382,7 +432,7 @@ impl CLOBStation {
                     || buyer_refund < 0
                     || buyer_refund > escrowed_for_take
                 {
-                    if !self.evict_top(&item, OrderSide::Buy) {
+                    if !self.evict_top(&item, OrderSide::Buy, false).0 {
                         break;
                     }
                     continue;
@@ -435,7 +485,7 @@ impl CLOBStation {
 
         // Roll 50T volume windows cleanly
         self.prune_50t_windows(tick);
-        fills
+        (fills, evicted_refunds)
     }
 
     pub fn record_trade_stats(&mut self, item: &str, tick: u64, qty: u32, price: Money) {

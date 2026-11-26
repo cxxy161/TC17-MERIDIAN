@@ -227,14 +227,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
 
   const validate = (): Record<string, string> => {
     const errs: Record<string, string> = {};
-    if (!EMAIL_RE.test(email.trim())) errs.email = '请输入有效邮箱地址';
     if (isRegister) {
+      if (!EMAIL_RE.test(email.trim())) errs.email = '请输入有效邮箱地址';
       const nick = nickname.trim();
       if (nick.length < 2 || nick.length > 16) errs.nickname = '昵称需 2–16 个字符';
+      else if (nick.includes('@')) errs.nickname = '昵称不能包含 @ 符号';
       else if (!NICKNAME_RE.test(nick)) errs.nickname = '昵称首尾不能是空格';
       if (password.length < 8) errs.password = '密码至少 8 位';
       if (confirm !== password) errs.confirm = '两次输入的密码不一致';
     } else {
+      if (!email.trim()) errs.email = '请输入邮箱或昵称';
       if (!password) errs.password = '请输入密码';
     }
     return errs;
@@ -273,7 +275,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
         if (payload?.field) {
           setFieldErrors({ [payload.field]: message });
         } else if (err.status === 401) {
-          setBanner('邮箱或密码错误');
+          setBanner('邮箱/昵称或密码错误');
         } else if (err.status === 429) {
           setBanner('请求过于频繁，请稍后再试');
         } else if (err.status === 404) {
@@ -376,18 +378,22 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
 
               <div>
                 <label htmlFor="email" className="mb-1 block text-[10px] tracking-[0.18em] text-slate-500">
-                  邮箱
+                  {isRegister ? '邮箱' : '邮箱或昵称'}
                 </label>
                 <div className="relative">
-                  <Mail size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                  {isRegister ? (
+                    <Mail size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                  ) : (
+                    <User size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                  )}
                   <input
                     id="email"
-                    type="email"
+                    type={isRegister ? 'email' : 'text'}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     autoComplete="username"
                     spellCheck={false}
-                    placeholder="pilot@meridian.space"
+                    placeholder={isRegister ? 'pilot@meridian.space' : '邮箱地址或角色昵称'}
                     className={inputClass(Boolean(fieldErrors.email))}
                   />
                 </div>

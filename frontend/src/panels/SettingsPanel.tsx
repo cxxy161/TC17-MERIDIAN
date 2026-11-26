@@ -304,6 +304,10 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       setNickError('昵称需 2–16 个字符');
       return;
     }
+    if (next.includes('@')) {
+      setNickError('昵称不能包含 @ 符号');
+      return;
+    }
     if (next === account.nickname) {
       setNickDraft(next);
       setNickError(null);

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -101,32 +101,149 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
-  const [dragItem, setDragItem] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
+  const [dragItem, setDragItem] = useState<{
+    kind: 'file' | 'folder';
+    path: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const [moveNotice, setMoveNotice] = useState<string | null>(null);
+  const suppressClickRef = useRef(false);
 
-  const moveDraggedToFolder = (targetFolderPath: string) => {
-    if (!dragItem) return;
-    const baseName = dragItem.path.split('/').pop();
+  const canDropToFolder = (
+    drag: { kind: 'file' | 'folder'; path: string },
+    targetFolderPath: string,
+  ): boolean => {
+    const baseName = drag.path.split('/').pop();
+    if (!baseName) return false;
+    const destPath = targetFolderPath ? `${targetFolderPath}/${baseName}` : baseName;
+    if (destPath === drag.path) return false;
+    if (drag.kind === 'folder') {
+      if (targetFolderPath === drag.path || targetFolderPath.startsWith(`${drag.path}/`)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const resolveDropFolderAtPoint = (
+    clientX: number,
+    clientY: number,
+    drag: { kind: 'file' | 'folder'; path: string },
+  ): { folderPath: string; targetKey: string } | null => {
+    const el = document.elementFromPoint(clientX, clientY);
+    if (!el) return null;
+    const folderEl = el.closest('[data-drop-folder]') as HTMLElement | null;
+    if (folderEl) {
+      const folderPath = folderEl.getAttribute('data-drop-folder') ?? '';
+      if (!canDropToFolder(drag, folderPath)) return null;
+      return { folderPath, targetKey: folderPath || '__ROOT__' };
+    }
+    const rootEl = el.closest('[data-drop-root]') as HTMLElement | null;
+    if (rootEl && canDropToFolder(drag, '')) {
+      return { folderPath: '', targetKey: '__ROOT__' };
+    }
+    return null;
+  };
+
+  const moveDraggedToFolder = (
+    drag: { kind: 'file' | 'folder'; path: string },
+    targetFolderPath: string,
+  ) => {
+    if (!canDropToFolder(drag, targetFolderPath)) return;
+    const baseName = drag.path.split('/').pop();
     if (!baseName) return;
     const destPath = targetFolderPath ? `${targetFolderPath}/${baseName}` : baseName;
-    if (destPath === dragItem.path) return;
-    if (dragItem.kind === 'file') {
-      if (dragItem.path === 'main') return;
-      renameDraftModule(dragItem.path, destPath);
-    } else {
-      if (
-        targetFolderPath === dragItem.path ||
-        targetFolderPath.startsWith(`${dragItem.path}/`)
-      ) {
+    if (drag.kind === 'file') {
+      if (drag.path === 'main') return;
+      const mods =
+        Object.keys(draftModules).length > 0 ? draftModules : (scripts?.modules ?? {});
+      if (destPath in mods) {
+        setMoveNotice(`目标目录已存在 ${destPath}.js`);
         return;
       }
-      renameScriptFolder(dragItem.path, destPath);
+      renameDraftModule(drag.path, destPath);
+    } else {
+      renameScriptFolder(drag.path, destPath);
     }
+    setMoveNotice(null);
     if (targetFolderPath) {
       setExpanded((prev) => ({ ...prev, [targetFolderPath]: true }));
     }
-    setDragItem(null);
-    setDropTarget(null);
+  };
+
+  useEffect(() => {
+    if (!moveNotice) return;
+    const id = window.setTimeout(() => setMoveNotice(null), 2600);
+    return () => window.clearTimeout(id);
+  }, [moveNotice]);
+
+  const startPointerDrag = (
+    e: React.PointerEvent<HTMLElement>,
+    kind: 'file' | 'folder',
+    path: string,
+  ) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button, input, a, [data-no-drag="true"]')) return;
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const item = { kind, path };
+    let started = false;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!started && dx * dx + dy * dy < 25) return;
+      started = true;
+      suppressClickRef.current = true;
+      setDragItem({ kind, path, x: ev.clientX, y: ev.clientY });
+      const resolved = resolveDropFolderAtPoint(ev.clientX, ev.clientY, item);
+      setDropTarget(resolved ? resolved.targetKey : null);
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
+      window.removeEventListener('blur', onPointerCancel);
+      window.removeEventListener('keydown', onKeyDown);
+      setDragItem(null);
+      setDropTarget(null);
+      if (started) {
+        window.setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 0);
+      }
+    };
+
+    const onPointerUp = (ev: PointerEvent) => {
+      if (started) {
+        const resolved = resolveDropFolderAtPoint(ev.clientX, ev.clientY, item);
+        if (resolved) {
+          moveDraggedToFolder(item, resolved.folderPath);
+        }
+      }
+      cleanup();
+    };
+
+    const onPointerCancel = () => {
+      cleanup();
+    };
+
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        cleanup();
+      }
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerCancel);
+    window.addEventListener('blur', onPointerCancel);
+    window.addEventListener('keydown', onKeyDown);
   };
 
   const modNames = useMemo(() => {
@@ -187,46 +304,19 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
         return (
           <div key={`folder:${item.path}`}>
             <div
-              draggable={!isRenamingThis}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', `folder:${item.path}`);
-                setDragItem({ kind: 'folder', path: item.path });
-              }}
-              onDragEnd={() => {
-                setDragItem(null);
-                setDropTarget(null);
-              }}
-              onDragOver={(e) => {
-                if (!dragItem || dragItem.path === item.path) return;
-                if (
-                  dragItem.kind === 'folder' &&
-                  item.path.startsWith(`${dragItem.path}/`)
-                ) {
-                  return;
-                }
-                e.preventDefault();
-                e.stopPropagation();
-                e.dataTransfer.dropEffect = 'move';
-                if (dropTarget !== item.path) setDropTarget(item.path);
-              }}
-              onDragLeave={(e) => {
-                if (e.currentTarget === e.target && dropTarget === item.path) {
-                  setDropTarget(null);
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                moveDraggedToFolder(item.path);
+              data-drop-folder={item.path}
+              onPointerDown={(e) => {
+                if (!isRenamingThis) startPointerDrag(e, 'folder', item.path);
               }}
               onClick={() => {
+                if (suppressClickRef.current) return;
                 setSelectedFolder(item.path);
                 setExpanded((prev) => ({ ...prev, [item.path]: !open }));
               }}
               style={{ paddingLeft: 6 + depth * 14 }}
               className={`group flex items-center justify-between pr-2 py-1 text-[11px] cursor-pointer hover:bg-sky-500/10 ${
+                dragItem?.kind === 'folder' && dragItem.path === item.path ? 'opacity-50 ' : ''
+              }${
                 isDropOver
                   ? 'bg-sky-500/25 ring-1 ring-inset ring-sky-400 text-sky-100'
                   : isSel
@@ -334,48 +424,27 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
 
       const isActive = activeMod === item.path;
       const canDragFile = item.path !== 'main' && !isRenamingThis;
+      const parentDir = item.path.includes('/')
+        ? item.path.split('/').slice(0, -1).join('/')
+        : '';
       return (
         <div key={`file:${item.path}`}>
           <div
-            draggable={canDragFile}
-            onDragStart={(e) => {
-              if (!canDragFile) return;
-              e.stopPropagation();
-              e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', `file:${item.path}`);
-              setDragItem({ kind: 'file', path: item.path });
-            }}
-            onDragEnd={() => {
-              setDragItem(null);
-              setDropTarget(null);
-            }}
-            onDragOver={(e) => {
-              if (!dragItem || dragItem.path === item.path) return;
-              const parentDir = item.path.includes('/')
-                ? item.path.split('/').slice(0, -1).join('/')
-                : '';
-              const targetKey = parentDir || '__ROOT__';
-              e.preventDefault();
-              e.stopPropagation();
-              e.dataTransfer.dropEffect = 'move';
-              if (dropTarget !== targetKey) setDropTarget(targetKey);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              const parentDir = item.path.includes('/')
-                ? item.path.split('/').slice(0, -1).join('/')
-                : '';
-              moveDraggedToFolder(parentDir);
+            data-drop-folder={parentDir}
+            onPointerDown={(e) => {
+              if (canDragFile) startPointerDrag(e, 'file', item.path);
             }}
             title={canDragFile ? '拖动到文件夹或空白根目录可移动分类' : '入口模块 main.js 固定在根目录'}
             onClick={() => {
+              if (suppressClickRef.current) return;
               setActiveMod(item.path);
               const dir = item.path.includes('/') ? item.path.split('/').slice(0, -1).join('/') : '';
               setSelectedFolder(dir);
             }}
             style={{ paddingLeft: 10 + depth * 14 }}
             className={`group flex items-center justify-between pr-2 py-1 text-[11px] cursor-pointer ${
+              dragItem?.kind === 'file' && dragItem.path === item.path ? 'opacity-50 ' : ''
+            }${
               isActive
                 ? 'bg-sky-500/20 text-sky-200 border-l-2 border-sky-400'
                 : 'text-slate-300 hover:bg-sky-500/10'
@@ -507,34 +576,42 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
 
       {/* Tree */}
       <div
+        data-drop-root="true"
         className={`flex-1 overflow-y-auto py-1 bg-[#1b212b] ${
           dropTarget === '__ROOT__' && dragItem
             ? 'ring-1 ring-inset ring-sky-400/70 bg-sky-500/10'
             : ''
         }`}
-        onDragOver={(e) => {
-          if (!dragItem) return;
-          e.preventDefault();
-          e.stopPropagation();
-          e.dataTransfer.dropEffect = 'move';
-          if (dropTarget !== '__ROOT__') setDropTarget('__ROOT__');
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget === e.target && dropTarget === '__ROOT__') {
-            setDropTarget(null);
-          }
-        }}
-        onDrop={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          moveDraggedToFolder('');
-        }}
         onClick={(e) => {
+          if (suppressClickRef.current) return;
           if (e.target === e.currentTarget) setSelectedFolder('');
         }}
       >
         {renderItems(tree, 0)}
       </div>
+
+      {moveNotice && (
+        <div className="px-2.5 py-1 bg-amber-500/15 border-t border-amber-400/30 text-[10px] text-amber-200 shrink-0">
+          {moveNotice}
+        </div>
+      )}
+
+      {dragItem && (
+        <div
+          style={{ left: dragItem.x + 12, top: dragItem.y + 12 }}
+          className="fixed pointer-events-none z-[9999] px-2 py-1 rounded-sm bg-[#141a23]/95 border border-sky-400/70 text-[11px] text-sky-100 shadow-lg flex items-center gap-1.5"
+        >
+          {dragItem.kind === 'folder' ? (
+            <Folder className="w-3.5 h-3.5 text-sky-400" />
+          ) : (
+            <FileCode2 className="w-3.5 h-3.5 text-emerald-400" />
+          )}
+          <span className="mono">
+            {dragItem.path.split('/').pop()}
+            {dragItem.kind === 'file' ? '.js' : ''}
+          </span>
+        </div>
+      )}
 
       {/* Bottom Dirty Status */}
       <div className="px-2.5 py-1.5 border-t border-sky-500/15 bg-[#232a36] flex items-center justify-between text-[10px]">

@@ -880,6 +880,34 @@ impl SqliteStore {
             .flatten()
     }
 
+    /// 按昵称查找用户（忽略大小写，schema 中 nickname 为 UNIQUE COLLATE NOCASE）
+    pub fn user_by_nickname(&self, nickname: &str) -> Option<(UserRow, String, String)> {
+        self.conn
+            .query_row(
+                &format!("SELECT {USER_COLUMNS}, salt, pwd_hash FROM users WHERE nickname = ?1"),
+                params![nickname],
+                |row| {
+                    let user = map_user(row)?;
+                    let salt: String = row.get(9)?;
+                    let hash: String = row.get(10)?;
+                    Ok((user, salt, hash))
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// 支持邮箱或昵称登录查找；含 `@` 时优先按邮箱匹配，并兜底兼容历史上含 `@` 的旧昵称
+    pub fn user_by_login(&self, identifier: &str) -> Option<(UserRow, String, String)> {
+        if identifier.contains('@') {
+            self.user_by_email(identifier)
+                .or_else(|| self.user_by_nickname(identifier))
+        } else {
+            self.user_by_nickname(identifier)
+        }
+    }
+
     pub fn user_by_id(&self, id: i64) -> Option<UserRow> {
         self.conn
             .query_row(

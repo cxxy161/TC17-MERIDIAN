@@ -1,6 +1,7 @@
 //! Deterministic Two-Phase World simulation kernel.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -933,7 +934,14 @@ impl World {
         let mut all_fills = Vec::new();
         let sids: Vec<StationId> = self.stations.keys().cloned().collect();
         for sid in sids {
-            let fills = self.stations.get_mut(&sid).unwrap().match_all(t);
+            let (fills, evicted) = self
+                .stations
+                .get_mut(&sid)
+                .unwrap()
+                .match_all_with_evictions(t);
+            for ev in evicted {
+                self.refund_evicted_order(ev);
+            }
             for fill in &fills {
                 self.settle_trade_fill(fill);
             }
@@ -2189,6 +2197,31 @@ impl World {
         }
     }
 
+    fn refund_evicted_order(&mut self, order: Order) {
+        match order.side {
+            OrderSide::Buy => {
+                if order.escrow_cash <= 0 {
+                    return;
+                }
+                if let Some(pid) = order.owner_id.strip_prefix("PLANET:") {
+                    if let Some(p) = self.planets.get_mut(pid) {
+                        credit_cash(&mut p.treasury, order.escrow_cash);
+                    }
+                } else if let Some(c) = self.companies.get_mut(&order.owner_id) {
+                    credit_cash(&mut c.cash, order.escrow_cash);
+                }
+            }
+            OrderSide::Sell => {
+                if order.qty == 0 {
+                    return;
+                }
+                if let Some(c) = self.companies.get_mut(&order.owner_id) {
+                    c.add_station_qty(&order.station_id, &order.item_id, order.qty as i64);
+                }
+            }
+        }
+    }
+
     fn settle_trade_fill(&mut self, fill: &TradeFill) {
         // 1. Refund excess buy escrow (price improvement), checked against i64 wrap-around.
         if fill.buyer_refund > 0 {
@@ -2680,7 +2713,7 @@ impl World {
                 habitability: p.habitability,
                 waste_backlog: p.waste_backlog,
                 primary_land_price: primary_px,
-                land_listings,
+                land_listings: Arc::new(land_listings),
                 bank_rate_bps: p.bank.annual_rate_bps,
                 ground_store: HashMap::new(),
                 station_store: HashMap::new(),
@@ -2765,15 +2798,18 @@ impl World {
         });
 
         SharedSnapshot {
-            quotes,
-            depths,
-            all_orders,
+            quotes: Arc::new(quotes),
+            depths: Arc::new(depths),
+            all_orders: Arc::new(all_orders),
             open_orders_by_owner,
-            systems: systems_view,
+            systems: Arc::new(systems_view),
             planet_templates,
-            public_tiles_by_planet,
-            public_companies,
-            routes,
+            public_tiles_by_planet: Arc::new(public_tiles_by_planet),
+            public_companies: Arc::new(public_companies),
+            routes: Arc::new(routes),
+            empty_depths: Arc::new(HashMap::new()),
+            empty_orders: Arc::new(Vec::new()),
+            empty_companies: Arc::new(Vec::new()),
         }
     }
 
@@ -3044,12 +3080,16 @@ impl World {
             .unwrap_or_default();
         let (depths, orders, public_companies) = if include_full_book {
             (
-                shared.depths.clone(),
-                shared.all_orders.clone(),
-                shared.public_companies.clone(),
+                Arc::clone(&shared.depths),
+                Arc::clone(&shared.all_orders),
+                Arc::clone(&shared.public_companies),
             )
         } else {
-            (HashMap::new(), Vec::new(), Vec::new())
+            (
+                Arc::clone(&shared.empty_depths),
+                Arc::clone(&shared.empty_orders),
+                Arc::clone(&shared.empty_companies),
+            )
         };
 
         let mut planets_view = HashMap::with_capacity(shared.planet_templates.len());
@@ -3081,13 +3121,13 @@ impl World {
                 station_stores: comp.station_inv.clone(),
                 open_orders,
             },
-            systems: shared.systems.clone(),
+            systems: Arc::clone(&shared.systems),
             planets: planets_view,
-            quotes: shared.quotes.clone(),
+            quotes: Arc::clone(&shared.quotes),
             depths,
             orders,
-            routes: shared.routes.clone(),
-            public_tiles: shared.public_tiles_by_planet.clone(),
+            routes: Arc::clone(&shared.routes),
+            public_tiles: Arc::clone(&shared.public_tiles_by_planet),
             public_companies,
         })
     }
