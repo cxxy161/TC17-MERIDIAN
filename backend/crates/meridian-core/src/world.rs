@@ -752,35 +752,38 @@ impl World {
         Ok(())
     }
 
-    pub const PLAYER_STARTER_CASH: f64 = 2_000.0;
+    pub const PLAYER_STARTER_CASH: f64 = 3_500.0;
 
-    /// Returns starter ground inventory `(item_id, qty)` tailored to a chosen starting profession.
-    /// Zero factories are granted; supplies provide materials to build initial facilities and ship/sell first goods.
+    /// Returns generous starter ground inventory `(item_id, qty)` tailored to a chosen starting profession.
+    /// Zero factories are granted; supplies comfortably cover building 3–4 initial facilities, multi-cycle runs, and first ship dispatches.
     pub fn starter_supplies_for_profession(profession: &str) -> Vec<(&'static str, u32)> {
         match profession {
             "env_recycle" => vec![
-                ("building_mat", 14),
-                ("power", 40),
-                ("fuel", 36),
-                ("water", 45),
-                ("oxygen", 30),
+                ("building_mat", 28),
+                ("power", 120),
+                ("water", 120),
+                ("fuel", 60),
+                ("oxygen", 60),
+                ("bio_fiber", 20),
             ],
             "agri_bio" => vec![
-                ("building_mat", 14),
-                ("power", 40),
-                ("fuel", 24),
-                ("water", 36),
-                ("bio_crop", 24),
-                ("rations", 30),
-                ("beverage", 10),
+                ("building_mat", 28),
+                ("power", 100),
+                ("water", 100),
+                ("fuel", 45),
+                ("bio_crop", 60),
+                ("bio_fiber", 30),
+                ("rations", 60),
+                ("beverage", 25),
             ],
             "mining_ind" | _ => vec![
-                ("building_mat", 14),
-                ("power", 40),
-                ("fuel", 24),
-                ("ore", 36),
-                ("steel", 18),
-                ("daily_goods", 8),
+                ("building_mat", 28),
+                ("power", 100),
+                ("fuel", 45),
+                ("ore", 80),
+                ("steel", 45),
+                ("bio_fiber", 25),
+                ("daily_goods", 20),
             ],
         }
     }

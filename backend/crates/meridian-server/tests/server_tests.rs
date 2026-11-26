@@ -1268,12 +1268,19 @@ async fn test_player_deferred_onboarding_flow_and_conservation() {
     .await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(opts["professions"].as_array().unwrap().len(), 3);
+    assert_eq!(opts["starter_cash"], 3500.0);
+    assert!(opts["system"]["star_class"].is_string());
     let planet = opts["planets"]
         .as_array()
         .unwrap()
         .iter()
         .find(|p| p["unclaimed_count"].as_u64().unwrap_or(0) > 0)
         .expect("at least one planet with unclaimed tiles");
+    assert!(planet["orbit_radius"].as_f64().unwrap_or(0.0) > 0.0);
+    assert!(planet["solar_mult"].is_f64());
+    assert!(planet["mineral_mult"].is_f64());
+    assert!(planet["water_mult"].is_f64());
+    assert!(planet["launch_cost"].is_array());
     let planet_id = planet["id"].as_str().unwrap().to_string();
     let slot_id = planet["tiles"][0]["slot_id"].as_u64().unwrap();
 
@@ -1311,8 +1318,8 @@ async fn test_player_deferred_onboarding_flow_and_conservation() {
         let pl = &eng.world.plots[&comp.plots[0]];
         assert_eq!(pl.slot_id, slot_id as u32);
         assert!(pl.building_ids.is_empty(), "starter company must have zero factories");
-        assert!(comp.ground_qty(&planet_id, "rations") > 0);
-        assert!(comp.ground_qty(&planet_id, "building_mat") >= 14);
+        assert!(comp.ground_qty(&planet_id, "rations") >= 60);
+        assert!(comp.ground_qty(&planet_id, "building_mat") >= 28);
         assert!(!eng.runner.players["player1"].bundle.modules["main"].contains("dispatch("));
     }
 

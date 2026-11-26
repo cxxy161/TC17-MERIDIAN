@@ -86,6 +86,23 @@ export interface OnboardingTile {
   building_mods: Record<string, number>;
 }
 
+export interface OnboardingPlanetDemand {
+  item_id: string;
+  item_name: string;
+  qty: number;
+}
+
+export interface OnboardingSystem {
+  id: string;
+  name: string;
+  star_class: string;
+  luminosity: number;
+  hub_station_id: string;
+  hub_orbit_radius: number;
+  hub_orbit_days: number;
+  hub_orbit_angle: number;
+}
+
 export interface OnboardingPlanet {
   id: string;
   system_id: string;
@@ -96,12 +113,34 @@ export interface OnboardingPlanet {
   population: number;
   gravity: number;
   habitability: number;
+  orbit_radius: number;
+  orbit_angle: number;
+  rotation_days: number;
+  visual_seed: number;
+  solar_mult: number;
+  mineral_mult: number;
+  water_mult: number;
+  ocean_ratio: number;
+  city_count: number;
+  city_level: number;
+  city_capacity: number;
+  treasury: number;
+  bank_reserves: number;
+  bank_rate_bps: number;
+  resident_count: number;
+  launch_cost: [number, number] | null;
+  hub_cost: [number, number] | null;
+  demands: OnboardingPlanetDemand[];
   unclaimed_count: number;
   tiles: OnboardingTile[];
 }
 
 export interface OnboardingOptions {
   starter_cash: number;
+  tick: number;
+  tick_ms: number;
+  ticks_per_day: number;
+  system: OnboardingSystem;
   professions: OnboardingProfession[];
   planets: OnboardingPlanet[];
 }

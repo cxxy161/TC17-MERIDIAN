@@ -1675,6 +1675,36 @@ async fn onboarding_options_handler(
         })
         .collect();
 
+    let mut sys_ids: Vec<&String> = eng.world.systems.keys().collect();
+    sys_ids.sort();
+    let primary_sys = sys_ids
+        .first()
+        .and_then(|sid| eng.world.systems.get(*sid))
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "name": s.name,
+                "star_class": s.star_class,
+                "luminosity": s.luminosity,
+                "hub_station_id": s.hub_station_id,
+                "hub_orbit_radius": s.hub_orbit_radius,
+                "hub_orbit_days": s.hub_orbit_days,
+                "hub_orbit_angle": s.hub_orbit_angle,
+            })
+        })
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": "S1",
+                "name": "新伊甸星系",
+                "star_class": "G2V 黄矮星",
+                "luminosity": 1.0,
+                "hub_station_id": "ST:HUB",
+                "hub_orbit_radius": eng.world.hub_orbit_radius,
+                "hub_orbit_days": eng.world.hub_orbit_days,
+                "hub_orbit_angle": eng.world.hub_orbit_angle,
+            })
+        });
+
     let mut planet_ids: Vec<String> = eng.world.planets.keys().cloned().collect();
     planet_ids.sort();
     let planets: Vec<serde_json::Value> = planet_ids
@@ -1698,6 +1728,69 @@ async fn onboarding_options_handler(
                     })
                 })
                 .collect();
+
+            let station_id = format!("ST:{pid}");
+            let hub_id = eng
+                .world
+                .systems
+                .get(&p.system_id)
+                .map(|s| s.hub_station_id.as_str())
+                .unwrap_or("ST:HUB");
+            let launch_cost = meridian_core::compute_route_in_systems(
+                &pid,
+                &station_id,
+                meridian_core::ShipSize::Small,
+                1.0,
+                &eng.world.planets,
+                &eng.world.systems,
+                eng.world.hub_orbit_radius,
+                eng.world.hub_orbit_angle,
+            )
+            .map(|r| serde_json::json!([r.ticks, r.fuel]));
+            let hub_cost = meridian_core::compute_route_in_systems(
+                &station_id,
+                hub_id,
+                meridian_core::ShipSize::Small,
+                1.0,
+                &eng.world.planets,
+                &eng.world.systems,
+                eng.world.hub_orbit_radius,
+                eng.world.hub_orbit_angle,
+            )
+            .map(|r| serde_json::json!([r.ticks, r.fuel]));
+
+            let mut demands: Vec<(&String, u32)> = p
+                .last_demands
+                .iter()
+                .filter(|(_, q)| **q > 0)
+                .map(|(k, q)| (k, *q))
+                .collect();
+            demands.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+            let demands_json: Vec<serde_json::Value> = demands
+                .into_iter()
+                .map(|(item_id, qty)| {
+                    let item_name = eng
+                        .world
+                        .catalog
+                        .items
+                        .get(item_id)
+                        .map(|it| it.name.as_str())
+                        .unwrap_or(item_id.as_str());
+                    serde_json::json!({
+                        "item_id": item_id,
+                        "item_name": item_name,
+                        "qty": qty,
+                    })
+                })
+                .collect();
+
+            let resident_count = eng
+                .world
+                .companies
+                .values()
+                .filter(|c| c.home_planet_id == pid)
+                .count();
+
             Some(serde_json::json!({
                 "id": p.id,
                 "system_id": p.system_id,
@@ -1708,6 +1801,24 @@ async fn onboarding_options_handler(
                 "population": p.population,
                 "gravity": p.gravity,
                 "habitability": p.habitability,
+                "orbit_radius": p.orbit_radius,
+                "orbit_angle": p.orbit_angle,
+                "rotation_days": p.rotation_days,
+                "visual_seed": p.visual_seed,
+                "solar_mult": p.solar_mult,
+                "mineral_mult": p.mineral_mult,
+                "water_mult": p.water_mult,
+                "ocean_ratio": p.ocean_ratio,
+                "city_count": p.city_count,
+                "city_level": p.city_level,
+                "city_capacity": p.city_capacity,
+                "treasury": meridian_core::from_money(p.treasury),
+                "bank_reserves": meridian_core::from_money(p.bank.reserves),
+                "bank_rate_bps": p.bank.annual_rate_bps,
+                "resident_count": resident_count,
+                "launch_cost": launch_cost,
+                "hub_cost": hub_cost,
+                "demands": demands_json,
                 "unclaimed_count": tiles.len(),
                 "tiles": tiles,
             }))
@@ -1716,6 +1827,10 @@ async fn onboarding_options_handler(
 
     Json(serde_json::json!({
         "starter_cash": meridian_core::World::PLAYER_STARTER_CASH,
+        "tick": eng.world.tick,
+        "tick_ms": eng.tick_ms,
+        "ticks_per_day": eng.world.catalog.pack.meta.ticks_per_day,
+        "system": primary_sys,
         "professions": professions,
         "planets": planets,
     }))
