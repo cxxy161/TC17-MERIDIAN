@@ -48,7 +48,7 @@ async fn main() {
     let tick_ms: u64 = std::env::var("MERIDIAN_TICK_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(2000);
+        .unwrap_or(1000);
 
     let store = SqliteStore::open(&db_path).expect("failed to open SQLite WAL database");
     let mut engine = GameEngine::bootstrap(data_path.clone(), store, tick_ms)

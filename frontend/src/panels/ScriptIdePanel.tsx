@@ -48,36 +48,22 @@ const GAME_ROOT_COMPLETIONS: Completion[] = [
   { label: 'cpi', type: 'property', detail: '全星系物价指数' },
   { label: 'cpu', type: 'namespace', detail: 'CPU 配额与耗时查询' },
   { label: 'company', type: 'property', detail: '本公司现金/储蓄/负债/母星与职业' },
-  { label: 'planets', type: 'property', detail: '全星系行星遥测与本公司仓库' },
-  { label: 'plots', type: 'property', detail: '本公司名下地块（含 slotId / lat / lon / buildingMods）' },
-  { label: 'stations', type: 'property', detail: '本公司有库存记录的站点 Store' },
-  { label: 'buildings', type: 'property', detail: '名下已完工建筑（setRecipe / setActive）' },
-  { label: 'ships', type: 'property', detail: '名下飞船（dispatch / repair）' },
-  { label: 'market', type: 'namespace', detail: '星际交易所与公开情报接口' },
-  snippetCompletion('buyPlot(${planetId}, { slotId: ${slotId} })', {
-    label: 'buyPlot',
+  { label: 'systems', type: 'property', detail: '全星系恒星系字典' },
+  { label: 'planets', type: 'property', detail: '全星系行星遥测（含 stationId / groundStore / stationStore / landListings）' },
+  { label: 'stations', type: 'property', detail: '全星系空间站对象与库存 Store' },
+  { label: 'plots', type: 'property', detail: '本公司名下地块（含 buildings / sites / build()）' },
+  { label: 'buildings', type: 'property', detail: '名下已完工建筑（setRecipe / setActive / demolish）' },
+  { label: 'sites', type: 'property', detail: '名下在建工程字典（ticksRemaining）' },
+  { label: 'ships', type: 'property', detail: '名下飞船（dispatch(to, cargo) / repair）' },
+  { label: 'catalog', type: 'namespace', detail: '全量只读静态规则（items / buildings / recipes / recipesByBuilding）' },
+  { label: 'lastTick', type: 'namespace', detail: '上一回合真实成交 fills 与被拒 rejected 回执' },
+  { label: 'map', type: 'namespace', detail: '星图、航线、公开格点与一手买地接口' },
+  { label: 'market', type: 'namespace', detail: '星际交易所与二级土地市场接口' },
+  { label: 'bank', type: 'namespace', detail: '母星央行存取借还接口' },
+  snippetCompletion('getObjectById(${id})', {
+    label: 'getObjectById',
     type: 'method',
-    detail: '购买一手空地或收购二手挂牌地',
-  }),
-  snippetCompletion('buildFacility(${plotId}, ${buildingType})', {
-    label: 'buildFacility',
-    type: 'method',
-    detail: '在地块上建造建筑',
-  }),
-  snippetCompletion('demolishFacility(${plotId}, ${buildingId})', {
-    label: 'demolishFacility',
-    type: 'method',
-    detail: '拆除地块上的建筑',
-  }),
-  snippetCompletion('bank(${planetId}, ${op}, ${amount})', {
-    label: 'bank',
-    type: 'method',
-    detail: '母星央行存取借还',
-  }),
-  snippetCompletion('getRecipe(${recipeId})', {
-    label: 'getRecipe',
-    type: 'method',
-    detail: '读取静态配方详情',
+    detail: '按字符串 ID 检索建筑/地块/工地/飞船/行星/站点',
   }),
 ];
 
@@ -86,23 +72,56 @@ const GAME_CPU_COMPLETIONS: Completion[] = [
   { label: 'getUsed', type: 'method', apply: 'getUsed()', detail: '本 tick 已消耗毫秒数' },
 ];
 
+const GAME_MAP_COMPLETIONS: Completion[] = [
+  snippetCompletion('calcRoute(${fromId}, ${toId})', {
+    label: 'calcRoute',
+    type: 'method',
+    detail: '估算航线耗时、油耗与类型（orbital / interplanetary）',
+  }),
+  snippetCompletion('getLandPlots(${planetId})', {
+    label: 'getLandPlots',
+    type: 'method',
+    detail: '获取行星全部公开地表格点与价格',
+  }),
+  snippetCompletion('buyPlot(${planetId}, ${slotId})', {
+    label: 'buyPlot',
+    type: 'method',
+    detail: '购买星球一手未认领空地',
+  }),
+  snippetCompletion('listCompanies(${filter})', {
+    label: 'listCompanies',
+    type: 'method',
+    detail: '分页筛选全星系公司公开摘要',
+  }),
+  snippetCompletion('getCompany(${companyId})', {
+    label: 'getCompany',
+    type: 'method',
+    detail: '查看指定公司的公开商业情报',
+  }),
+];
+
 const GAME_MARKET_COMPLETIONS: Completion[] = [
-  { label: 'credits', type: 'property', detail: '本 tick 开盘现金副本' },
   { label: 'orders', type: 'property', detail: '本公司活跃挂单字典' },
+  { label: 'transactions', type: 'property', detail: '上一 tick 本公司成交流水列表' },
   snippetCompletion('quote(${stationId}, ${resourceType})', {
     label: 'quote',
     type: 'method',
-    detail: '查询盘口报价',
+    detail: '查询盘口报价与 EMA 锚价',
   }),
   snippetCompletion('depth(${stationId}, ${resourceType}, ${5})', {
     label: 'depth',
     type: 'method',
-    detail: '查询买卖盘口深度（最多 5 档）',
+    detail: '查询买卖盘口深度（默认最多 5 档）',
   }),
   snippetCompletion('getAllOrders(${filter})', {
     label: 'getAllOrders',
     type: 'method',
-    detail: '筛选全星系活跃挂单',
+    detail: '分页筛选全星系活跃挂单（支持 offset / limit）',
+  }),
+  snippetCompletion('getOrderById(${orderId})', {
+    label: 'getOrderById',
+    type: 'method',
+    detail: '按订单 ID 精确查询挂单',
   }),
   snippetCompletion(
     'createOrder({ type: ${ORDER_BUY}, resourceType: ${resourceType}, price: ${price}, totalAmount: ${qty}, stationId: ${stationId} })',
@@ -122,26 +141,46 @@ const GAME_MARKET_COMPLETIONS: Completion[] = [
     type: 'method',
     detail: '直接吃单成交',
   }),
-  snippetCompletion('calcRoute(${fromId}, ${toId})', {
-    label: 'calcRoute',
+  snippetCompletion('buyLand(${listingId})', {
+    label: 'buyLand',
     type: 'method',
-    detail: '估算航线耗时与基准油耗',
+    detail: '收购二手挂牌工业地块',
   }),
-  snippetCompletion('getLandPlots(${planetId})', {
-    label: 'getLandPlots',
+];
+
+const GAME_BANK_COMPLETIONS: Completion[] = [
+  snippetCompletion('deposit(${amount})', {
+    label: 'deposit',
     type: 'method',
-    detail: '获取行星全部公开地表格点',
+    detail: '存入现金到母星央行赚取利息',
   }),
-  snippetCompletion('listCompanies(${filter})', {
-    label: 'listCompanies',
+  snippetCompletion('withdraw(${amount})', {
+    label: 'withdraw',
     type: 'method',
-    detail: '分页筛选全星系公司公开摘要',
+    detail: '从母星央行提取储蓄',
   }),
-  snippetCompletion('getCompany(${companyId})', {
-    label: 'getCompany',
+  snippetCompletion('borrow(${amount})', {
+    label: 'borrow',
     type: 'method',
-    detail: '查看指定公司的公开商业情报',
+    detail: '向母星央行申请信用贷款',
   }),
+  snippetCompletion('repay(${amount})', {
+    label: 'repay',
+    type: 'method',
+    detail: '偿还母星央行贷款本息',
+  }),
+];
+
+const GAME_CATALOG_COMPLETIONS: Completion[] = [
+  { label: 'items', type: 'property', detail: '全部物品定义字典' },
+  { label: 'buildings', type: 'property', detail: '全部建筑定义与建造成本字典' },
+  { label: 'recipes', type: 'property', detail: '全部生产配方定义字典' },
+  { label: 'recipesByBuilding', type: 'property', detail: '按建筑类型分组的配方 ID 列表' },
+];
+
+const GAME_LAST_TICK_COMPLETIONS: Completion[] = [
+  { label: 'fills', type: 'property', detail: '上一回合本公司全部真实成交记录' },
+  { label: 'rejected', type: 'property', detail: '上一回合结算阶段被拒意图及原因列表' },
 ];
 
 const CONSOLE_COMPLETIONS: Completion[] = [
@@ -187,6 +226,7 @@ const TOP_LEVEL_API_COMPLETIONS: Completion[] = [
   { label: 'ERR_NOT_ENOUGH_CREDITS', type: 'constant', detail: '-14 现金不足' },
   { label: 'ORDER_BUY', type: 'constant', detail: '"buy"' },
   { label: 'ORDER_SELL', type: 'constant', detail: '"sell"' },
+  { label: 'MONEY_SCALE', type: 'constant', detail: '10000（1 信用点 = 10000 定点单位）' },
 ];
 
 /** QuickJS 沙箱内置标准库，配合 scopeCompletionSource 提供 Math. / JSON. / Array. 等属性补全 */
@@ -291,8 +331,20 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
         if (prefix === 'Game') {
           return { from, options: GAME_ROOT_COMPLETIONS, validFor: /^[\w$]*$/ };
         }
+        if (prefix === 'Game.map') {
+          return { from, options: GAME_MAP_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
         if (prefix === 'Game.market') {
           return { from, options: GAME_MARKET_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'Game.bank') {
+          return { from, options: GAME_BANK_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'Game.catalog') {
+          return { from, options: GAME_CATALOG_COMPLETIONS, validFor: /^[\w$]*$/ };
+        }
+        if (prefix === 'Game.lastTick') {
+          return { from, options: GAME_LAST_TICK_COMPLETIONS, validFor: /^[\w$]*$/ };
         }
         if (prefix === 'Game.cpu') {
           return { from, options: GAME_CPU_COMPLETIONS, validFor: /^[\w$]*$/ };
@@ -375,8 +427,14 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
             },
             '.cm-content': {
-              backgroundColor: '#1b212b',
+              backgroundColor: 'transparent',
               caretColor: '#38bdf8',
+            },
+            '.cm-cursor, .cm-dropCursor': {
+              borderLeftColor: '#38bdf8',
+            },
+            '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground': {
+              backgroundColor: 'rgba(56, 189, 248, 0.28)',
             },
             '.cm-gutters': {
               backgroundColor: '#181e27',
@@ -491,7 +549,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
             API 参考
           </button>
           <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
-            耗时 {cpuMs.toFixed(2)} / 5.00 ms
+            耗时 {cpuMs.toFixed(2)} / {(scripts?.cpu_limit_ms ?? 10).toFixed(2)} ms
           </span>
           <button onClick={() => void handleSave()} className="cta-green text-[10px] py-0.5 whitespace-nowrap">
             {dirty ? '保存并热重载 *' : saveNote || '保存热重载'}

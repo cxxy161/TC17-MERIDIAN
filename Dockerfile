@@ -30,7 +30,7 @@ ENV MERIDIAN_ADDR=0.0.0.0:18420 \
     MERIDIAN_DATA_PATH=/app/production.json \
     MERIDIAN_DB_PATH=/app/data/meridian.db \
     MERIDIAN_DIST_DIR=/app/dist \
-    MERIDIAN_TICK_MS=2000
+    MERIDIAN_TICK_MS=1000
 
 EXPOSE 18420
 CMD ["meridian-server"]

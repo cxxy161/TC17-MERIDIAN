@@ -9,8 +9,8 @@ pub use js_runner::{run_player_tick, PlayerVmHandle};
 pub use npc::{decide_npc_intents, NpcGenome};
 pub use runner::{PlayerVmState, SimulationRunner};
 pub use types::{
-    normalize_module_name, ConsoleEntry, ConsoleLevel, PlayerRunConfig, PlayerRunOutput,
-    PlayerScriptBundle,
+    normalize_module_name, ConsoleEntry, ConsoleEvalOutput, ConsoleLevel, JsLastTickFill,
+    LastTickFeedback, PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle,
 };
 
 pub fn sandbox_ready() -> &'static str {

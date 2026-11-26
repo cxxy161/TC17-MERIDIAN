@@ -133,14 +133,15 @@ const expected = new Map([
   ['log', 'console.log'],
   ['cpu_used', 'Game.cpu.getUsed'],
   ['get_module', 'require'],
+  ['get_catalog', 'Game.catalog'],
   ['quote', 'Game.market.quote'],
   ['depth', 'Game.market.depth'],
   ['get_all_orders', 'Game.market.getAllOrders'],
-  ['calc_route', 'Game.market.calcRoute'],
-  ['get_land_plots', 'Game.market.getLandPlots'],
-  ['list_companies', 'Game.market.listCompanies'],
-  ['get_company', 'Game.market.getCompany'],
-  ['get_recipe', 'Game.getRecipe'],
+  ['get_order_by_id', 'Game.market.getOrderById'],
+  ['calc_route', 'Game.map.calcRoute'],
+  ['get_land_plots', 'Game.map.getLandPlots'],
+  ['list_companies', 'Game.map.listCompanies'],
+  ['get_company', 'Game.map.getCompany'],
   ['set_recipe', 'Building.setRecipe'],
   ['set_active', 'Building.setActive'],
   ['dispatch_ship', 'Ship.dispatch'],
@@ -148,15 +149,17 @@ const expected = new Map([
   ['create_order', 'Game.market.createOrder'],
   ['cancel_order', 'Game.market.cancelOrder'],
   ['deal_order', 'Game.market.deal'],
-  ['buy_plot', 'Game.buyPlot'],
-  ['build_facility', 'Game.buildFacility'],
-  ['demolish_facility', 'Game.demolishFacility'],
+  ['buy_plot', 'Game.map.buyPlot'],
+  ['build_facility', 'Plot.build'],
+  ['demolish_facility', 'Building.demolish'],
   ['bank', 'Game.bank'],
 ]);
 
 const jsRunner = readFileSync(join(root, 'backend/crates/meridian-sandbox/src/js_runner.rs'), 'utf8');
 const hosts = new Set(
-  Array.from(jsRunner.matchAll(/__meridian_([a-z_]+)/g), (m) => m[1]).filter((h) => h !== 'run_tick'),
+  Array.from(jsRunner.matchAll(/__meridian_([a-z_]+)/g), (m) => m[1]).filter(
+    (h) => h !== 'run_tick' && h !== 'eval_console',
+  ),
 );
 for (const host of hosts) {
   if (!expected.has(host)) problems.push('新增宿主函数未登记到守卫: __meridian_' + host);
@@ -166,13 +169,13 @@ for (const [host, docId] of expected) {
   if (!entries.has(docId)) problems.push(`宿主函数 __meridian_${host} 的文档条目不存在: ${docId}`);
 }
 
-// 检查示例与正文中的显式 buildFacility / setRecipe / getRecipe / RESOURCE_* 常量合法性
+// 检查示例与正文中的显式 build / setRecipe / RESOURCE_* 常量合法性
 const allDocSrc = sources.map((s) => s.src).join('\n');
-for (const m of allDocSrc.matchAll(/Game\.buildFacility\([^,]+,\s*'([^']+)'/g)) {
-  if (!validBuildings.has(m[1])) problems.push(`buildFacility 示例使用了不存在的建筑 ID: ${m[1]}`);
+for (const m of allDocSrc.matchAll(/\.build\('([^']+)'/g)) {
+  if (!validBuildings.has(m[1])) problems.push(`Plot.build 示例使用了不存在的建筑 ID: ${m[1]}`);
 }
-for (const m of allDocSrc.matchAll(/(?:setRecipe|getRecipe)\('([^']+)'/g)) {
-  if (!validRecipes.has(m[1])) problems.push(`setRecipe/getRecipe 示例使用了不存在的配方 ID: ${m[1]}`);
+for (const m of allDocSrc.matchAll(/setRecipe\('([^']+)'/g)) {
+  if (!validRecipes.has(m[1])) problems.push(`setRecipe 示例使用了不存在的配方 ID: ${m[1]}`);
 }
 for (const m of allDocSrc.matchAll(/\bRESOURCE_([A-Z0-9_]+)\b/g)) {
   if (m[1] === '<ID>' || m[1] === 'ID') continue;

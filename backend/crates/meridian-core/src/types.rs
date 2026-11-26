@@ -124,6 +124,17 @@ pub enum BankOpKind {
     Repay,
 }
 
+/// 引擎落账阶段被拒绝的意图回执（同步曾返回 OK，但在确定性结算阶段因并发竞争或状态变更失败）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectedIntent {
+    pub intent_index: usize,
+    pub action: String,
+    pub target: String,
+    pub code: RetCode,
+    pub reason: String,
+}
+
 /// Unified action protocol shared identically by QuickJS players and free-play NPCs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Intent {

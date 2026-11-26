@@ -157,6 +157,32 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         assert_eq!(st, StatusCode::OK);
         assert_eq!(put_res["ok"], true);
 
+        // 2c. Real-sandbox console evaluation via POST /api/console/eval
+        let eval_body = serde_json::json!({
+            "company_id": "player1",
+            "code": "Memory.consoleSeen = 7; Game.catalog.recipesByBuilding['mine_smelter']"
+        });
+        let (st, eval_res) = read_json(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .header("cookie", &cookie)
+                        .method("POST")
+                        .uri("/api/console/eval")
+                        .header("content-type", "application/json")
+                        .body(Body::from(eval_body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(eval_res["error"].is_null(), "console eval error: {:?}", eval_res["error"]);
+        assert_eq!(eval_res["memory_changed"], true);
+        assert_eq!(eval_res["cpu_limit_ms"], 10);
+        assert!(eval_res["result"]["value"].is_array());
+
         // 3. Queue manual intent (deposit 50 credits into player1 home planet bank)
         let intent_body = serde_json::json!({
             "company_id": "player1",
@@ -1205,4 +1231,102 @@ async fn test_auth_config_endpoint_returns_no_store_json() {
     assert!(body["turnstile_site_key"].is_string());
     assert!(body["turnstile_required"].is_boolean());
     assert!(body["turnstile_bypassed"].is_boolean());
+}
+
+#[tokio::test]
+async fn test_player_deferred_onboarding_flow_and_conservation() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let engine = GameEngine::bootstrap(data_json_path(), store, 1000).expect("bootstrap");
+    let shared = Arc::new(Mutex::new(engine));
+    let app = build_router(Arc::clone(&shared), None);
+
+    // 1. Register with defer_onboarding: true (claims player1 slot as admin but needs onboarding)
+    let reg_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/register")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"email":"newpilot@meridian.test","nickname":"NewPilot","password":"password-123","defer_onboarding":true}"#,
+        ))
+        .unwrap();
+    let (st, body, cookie_opt) = send(&app, reg_req).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body["needs_onboarding"], true);
+    let cookie = cookie_opt.expect("must issue session cookie");
+
+    // 2. Fetch onboarding options -> 3 professions (zero specialization bonuses) & planets with unclaimed tiles
+    let (st, opts, _) = send(
+        &app,
+        Request::builder()
+            .method("GET")
+            .uri("/api/onboarding/options")
+            .header("cookie", &cookie)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(opts["professions"].as_array().unwrap().len(), 3);
+    let planet = opts["planets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["unclaimed_count"].as_u64().unwrap_or(0) > 0)
+        .expect("at least one planet with unclaimed tiles");
+    let planet_id = planet["id"].as_str().unwrap().to_string();
+    let slot_id = planet["tiles"][0]["slot_id"].as_u64().unwrap();
+
+    // 3. Submit onboarding setup
+    let setup_body = serde_json::json!({
+        "company_name": "Starborne Agro",
+        "profession": "agri_bio",
+        "planet_id": planet_id,
+        "slot_id": slot_id,
+    });
+    let (st, setup_res, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/onboarding/setup")
+            .header("content-type", "application/json")
+            .header("cookie", &cookie)
+            .body(Body::from(setup_body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "setup failed: {setup_res}");
+    assert_eq!(setup_res["needs_onboarding"], false);
+
+    // 4. Verify world company has 0 buildings, 1 ship, starter supplies, empty script, and zero conservation drift
+    {
+        let eng = shared.lock().await;
+        assert_eq!(eng.world.conservation_error(), 0);
+        let comp = &eng.world.companies["player1"];
+        assert_eq!(comp.name, "Starborne Agro");
+        assert_eq!(comp.profession, "agri_bio");
+        assert_eq!(comp.home_planet_id, planet_id);
+        assert_eq!(comp.ships.len(), 1);
+        assert_eq!(comp.plots.len(), 1);
+        let pl = &eng.world.plots[&comp.plots[0]];
+        assert_eq!(pl.slot_id, slot_id as u32);
+        assert!(pl.building_ids.is_empty(), "starter company must have zero factories");
+        assert!(comp.ground_qty(&planet_id, "rations") > 0);
+        assert!(comp.ground_qty(&planet_id, "building_mat") >= 14);
+        assert!(!eng.runner.players["player1"].bundle.modules["main"].contains("dispatch("));
+    }
+
+    // 5. Duplicate onboarding must be rejected with 409 Conflict
+    let (st, _, _) = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/api/onboarding/setup")
+            .header("content-type", "application/json")
+            .header("cookie", &cookie)
+            .body(Body::from(setup_body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
 }

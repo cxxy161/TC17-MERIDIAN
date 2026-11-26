@@ -27,16 +27,16 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
         kind: 'note',
         level: 'danger',
         title: '必须可 JSON 序列化',
-        text: '存入 `Memory` 的函数、`undefined`、`Symbol` 会在序列化时丢失；**循环引用**会导致脚本抛出序列化异常，进而丢弃本 tick 的全部写操作。',
+        text: '存入 `Memory` 的函数、`undefined`、`Symbol` 会在序列化时丢失；**循环引用**会导致序列化失败并丢弃本 tick 全部写操作。',
       },
       {
         kind: 'note',
         level: 'info',
-        text: '正常连续运行时沙盒实例会在多 tick 间复用（`globalThis` 与模块缓存保留）；一旦修改代码、服务重启，或脚本触发 CPU 超时 / 堆内存溢出 / 未捕获异常，沙盒会立即销毁重建。因此只有 `Memory` 能确保跨异常与重启持久留存，且超时或溢出时 `Memory` 也会自动回滚到上一 tick 的内容。',
+        text: '正常连续运行时沙盒实例会在多 tick 间复用（`globalThis` 与模块缓存保留）；一旦更新代码、服务重启，或触发 CPU 超时 / 堆内存溢出 / 未捕获异常，沙盒会立即销毁重建。在控制台 REPL 中修改 `Memory` 时，若修改了顶层内容同样会在请求返回时持久化保存。',
       },
       {
         kind: 'example',
-        caption: '在 Memory 中维护精简的状态与统计',
+        caption: '在 Memory 中维护精简的统计与任务状态',
         code: `module.exports.loop = function () {
   Memory.stats = Memory.stats || { ticks: 0 };
   Memory.stats.ticks += 1;
@@ -66,7 +66,7 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
     blocks: [
       {
         kind: 'prose',
-        text: '`console` 是脚本向游戏内控制台面板输出调试信息的唯一渠道，仅提供 `log`、`warn`、`error` 三个方法。',
+        text: '`console` 是脚本向游戏内控制台面板输出调试信息的唯一渠道，提供 `log`、`warn`、`error` 三个方法。',
       },
       {
         kind: 'syntax',
@@ -228,8 +228,7 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
         kind: 'example',
         caption: '捕获非预期返回码',
         code: `module.exports.loop = function () {
-  const pid = Game.company.homePlanetId;
-  const rc = Game.bank(pid, 'deposit', 100);
+  const rc = Game.bank.deposit(100);
   if (rc !== OK) {
     console.error('银行存款请求异常，返回码:', rc);
   }
@@ -275,13 +274,13 @@ export const RUNTIME_ENTRIES: DocEntry[] = [
       {
         kind: 'returns',
         type: 'any',
-        desc: '目标模块导出的 `module.exports` 对象或值；找不到模块或发生循环依赖时会抛出 `Error`',
+        desc: '目标模块导出的 `module.exports` 对象或值；找不到模块时会抛出 `Error`',
       },
       {
         kind: 'note',
         level: 'info',
-        title: '扁平模块命名空间',
-        text: '模块不支持目录层级，也不支持第三方 npm 包。请直接用扁平文件名（如 `market`、`logistics`），不要写成 `lib/market`。',
+        title: '扁平模块命名空间与确定性 Math.random',
+        text: '模块不支持目录层级与第三方 npm 包，请直接用扁平文件名（如 `market`、`logistics`）。此外，沙盒内的 `Math.random()` 在每个 tick 开始时按确定性种子初始化，保证世界重放完全一致。',
       },
       {
         kind: 'note',

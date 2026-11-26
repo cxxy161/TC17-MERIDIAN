@@ -20,62 +20,11 @@ use tokio::sync::{broadcast, Mutex};
 use crate::storage::SqliteStore;
 use crate::telemetry::{EconomySample, TelemetryTracker, TickPhases};
 
-pub const STARTER_PLAYER_JS: &str = r#"// 《Meridian》默认玩家策略脚本
-// 提示：支持 module.exports.loop、多模块 require()、Game、Memory、Store Proxy 与 console.log
+pub const STARTER_PLAYER_JS: &str = r#"// 《Meridian》策略脚本入口（API v2）
+// 保存并热重载后，每个 tick 自动调用一次 module.exports.loop()
 
 module.exports.loop = function () {
-  Memory.ticksSeen = (Memory.ticksSeen || 0) + 1;
-
-  const myPlanetId = Game.company.homePlanetId;
-  const stationId = "ST:" + myPlanetId;
-  const p = Game.planets[myPlanetId];
-  if (!p) return;
-
-  // 1. 查看地面仓矿石与钢材，满载即派空闲飞船运往轨道站挂单
-  const ships = Object.values(Game.ships);
-  for (const ship of ships) {
-    if (!ship.isBusy && ship.location === myPlanetId) {
-      const cargo = {};
-      let load = 0;
-      for (const item of [RESOURCE_ORE, RESOURCE_STEEL, RESOURCE_BUILDING_MAT, RESOURCE_DISPOSAL_CERT]) {
-        const avail = p.groundStore[item] || 0;
-        if (avail > 0 && load < ship.capacity) {
-          const take = Math.min(avail, ship.capacity - load);
-          cargo[item] = take;
-          load += take;
-        }
-      }
-      if (load >= 4) {
-        ship.dispatch(myPlanetId, stationId, cargo);
-      }
-    } else if (!ship.isBusy && ship.location === stationId) {
-      // 返回地面以便下趟运输
-      ship.dispatch(stationId, myPlanetId, { [RESOURCE_ORE]: 1 });
-    }
-  }
-
-  // 2. 在轨道站以略低于当前卖一或参考均价挂卖单
-  const st = Game.stations[stationId];
-  if (st) {
-    for (const item of [RESOURCE_ORE, RESOURCE_STEEL, RESOURCE_BUILDING_MAT]) {
-      const qty = st.store[item] || 0;
-      if (qty > 0 && Object.keys(Game.market.orders).length < 40) {
-        const q = Game.market.quote(stationId, item);
-        const refP = q ? (q.bestAsk ? q.bestAsk * 0.98 : q.lastPrice * 1.02) : 2.5;
-        Game.market.createOrder({
-          type: ORDER_SELL,
-          resourceType: item,
-          price: Math.max(0.1, Number(refP.toFixed(3))),
-          totalAmount: Math.min(qty, 20),
-          stationId,
-        });
-      }
-    }
-  }
-
-  if (Game.time % 10 === 0) {
-    console.log("Tick", Game.time, "| Cash:", Game.company.cash.toFixed(2), "| CPI:", Game.cpi.toFixed(3));
-  }
+  // 在这里编写你的生产、运输与交易策略
 };
 "#;
 
@@ -252,7 +201,8 @@ impl GameEngine {
         let max_npcs = env_npc_count("MERIDIAN_MAX_NPCS", 72);
         let init_npcs = env_npc_count("MERIDIAN_INIT_NPCS", 48).min(max_npcs.max(48));
 
-        if let Some(restored_world) = store.load_world()? {
+        if let Some(mut restored_world) = store.load_world()? {
+            restored_world.catalog = catalog;
             let bundles = store.load_all_player_bundles()?;
             let memories = store.load_all_player_memories()?;
             let genomes = store.load_all_npc_genomes()?;
@@ -561,6 +511,42 @@ impl GameEngine {
         self.saved_player_memories
             .insert(company_id.to_string(), ("{}".to_string(), true));
         self.runner.set_player_script(company_id, bundle);
+        Ok(())
+    }
+
+    /// 按玩家自选「公司名 + 职业 + 行星 + 空地 slot_id」完成一次性开局创企：
+    /// 不送工厂、不写死复杂脚本，只发放 1 艘小船、基础资金与对应职业的启动物资包。
+    pub fn onboard_player_company(
+        &mut self,
+        user_id: i64,
+        company_id: &str,
+        company_name: &str,
+        profession: &str,
+        planet_id: &str,
+        slot_id: u32,
+    ) -> Result<(), String> {
+        if self.world.companies.contains_key(company_id) {
+            self.world.reclaim_placeholder_company(company_id)?;
+        }
+        let supplies = World::starter_supplies_for_profession(profession);
+        self.world.spawn_player_custom(
+            company_id,
+            company_name,
+            profession,
+            planet_id,
+            slot_id,
+            World::PLAYER_STARTER_CASH,
+            &supplies,
+        )?;
+        self.world_dirty = true;
+        let bundle = PlayerScriptBundle::single_main(STARTER_PLAYER_JS);
+        self.store.save_player_bundle(company_id, &bundle)?;
+        self.store.save_player_memory(company_id, "{}", true)?;
+        self.saved_player_memories
+            .insert(company_id.to_string(), ("{}".to_string(), true));
+        self.runner.set_player_script(company_id, bundle);
+        self.store.set_user_onboarding(user_id, false)?;
+        self.flush_persistence()?;
         Ok(())
     }
 
@@ -1176,6 +1162,7 @@ impl GameEngine {
     pub fn reset_world(&mut self) -> Result<TickBroadcast, String> {
         let catalog = ProductionCatalog::load_from_file(&self.data_path)?;
         self.store.clear_world_and_history()?;
+        let _ = self.store.mark_all_users_needs_onboarding();
         self.runner.npc_genomes.clear();
         self.runner.extra_intents.clear();
         self.runner.last_player_outputs.clear();
@@ -1196,6 +1183,7 @@ impl GameEngine {
             fills: Vec::new(),
             bankruptcies: Vec::new(),
             rejected_intents: 0,
+            rejected_by_company: HashMap::new(),
             cpi: self.world.cpi,
         };
         let bcast = self.build_broadcast(&empty_rep);

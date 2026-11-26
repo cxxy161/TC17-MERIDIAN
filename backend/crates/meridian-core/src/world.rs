@@ -14,12 +14,14 @@ use crate::schema::{ItemRole, ProductionCatalog};
 use crate::snapshot::{
     BuildingView, LandListingView, PlanetView, PlotView, PublicCompanyDetail,
     PublicCompanyPlotView, PublicCompanySummary, PublicLandTileView, SelfView, SharedSnapshot,
-    ShipCountsView, ShipView, StarSystemView, WorldSnapshot,
+    ShipCountsView, ShipView, SiteView, StarSystemView, WorldSnapshot,
 };
 use crate::types::{
     bps_of, checked_notional, from_money, price_band_max, price_in_band, to_money, BankOpKind,
     BuildingId, CompanyId, Intent, ItemId, ListingId, Money, OrderId, OrderSide, PlanetId, PlotId,
-    ShipId, SlotId, StationId, BANK_MIN_RESERVE_BPS, LOAN_TERM_TICKS,
+    RejectedIntent, RetCode, ShipId, SlotId, StationId, BANK_MIN_RESERVE_BPS, ERR_BUSY, ERR_FULL,
+    ERR_INVALID_ARGS, ERR_INVALID_TARGET, ERR_NOT_ENOUGH_CREDITS, ERR_NOT_ENOUGH_RESOURCES,
+    ERR_NOT_FOUND, ERR_NOT_IN_RANGE, ERR_NOT_OWNER, ERR_NO_PATH, LOAN_TERM_TICKS,
     MAX_ACTIVE_ORDERS_PER_COMPANY, MAX_INTENTS_PER_TICK, MAX_ORDER_QTY, MONEY_SCALE,
     OVERDUE_GARNISH_BPS,
 };
@@ -83,6 +85,8 @@ pub struct TickReport {
     pub fills: Vec<TradeFill>,
     pub bankruptcies: Vec<CompanyId>,
     pub rejected_intents: usize,
+    #[serde(default)]
+    pub rejected_by_company: HashMap<CompanyId, Vec<RejectedIntent>>,
     pub cpi: f64,
 }
 
@@ -720,8 +724,7 @@ impl World {
                 let bid = self.next_building_id;
                 self.next_building_id += 1;
                 let base_mod = *plot.building_mods.get(btype).unwrap_or(&1.0);
-                let prof_bonus = *prof.efficiency_bonus.get(btype).unwrap_or(&1.0);
-                let eff = (base_mod * prof_bonus * 100.0).round() / 100.0;
+                let eff = (base_mod * 100.0).round() / 100.0;
 
                 self.buildings.insert(
                     bid,
@@ -746,6 +749,164 @@ impl World {
 
         self.plots.insert(plot_id, plot);
         self.companies.insert(cid, comp);
+        Ok(())
+    }
+
+    pub const PLAYER_STARTER_CASH: f64 = 2_000.0;
+
+    /// Returns starter ground inventory `(item_id, qty)` tailored to a chosen starting profession.
+    /// Zero factories are granted; supplies provide materials to build initial facilities and ship/sell first goods.
+    pub fn starter_supplies_for_profession(profession: &str) -> Vec<(&'static str, u32)> {
+        match profession {
+            "env_recycle" => vec![
+                ("building_mat", 14),
+                ("power", 40),
+                ("fuel", 36),
+                ("water", 45),
+                ("oxygen", 30),
+            ],
+            "agri_bio" => vec![
+                ("building_mat", 14),
+                ("power", 40),
+                ("fuel", 24),
+                ("water", 36),
+                ("bio_crop", 24),
+                ("rations", 30),
+                ("beverage", 10),
+            ],
+            "mining_ind" | _ => vec![
+                ("building_mat", 14),
+                ("power", 40),
+                ("fuel", 24),
+                ("ore", 36),
+                ("steel", 18),
+                ("daily_goods", 8),
+            ],
+        }
+    }
+
+    /// Spawn a player company from onboarding choices: exact chosen planet + unclaimed tile slot,
+    /// zero starter buildings, 1 small ship, starter cash, and profession-specific ground supplies.
+    pub fn spawn_player_custom(
+        &mut self,
+        id: impl Into<CompanyId>,
+        name: impl Into<String>,
+        profession: &str,
+        home_planet_id: &str,
+        slot_id: SlotId,
+        initial_cash_credits: f64,
+        supplies: &[(&str, u32)],
+    ) -> Result<PlotId, String> {
+        let cid: CompanyId = id.into();
+        if self.companies.contains_key(&cid) {
+            return Err(format!("Company '{cid}' already exists"));
+        }
+        if !self.catalog.professions.contains_key(profession) {
+            return Err(format!("Unknown profession '{profession}'"));
+        }
+        if !self.planets.contains_key(home_planet_id) {
+            return Err(format!("Unknown planet '{home_planet_id}'"));
+        }
+
+        let plot_id = self.next_plot_id;
+        let plot = self
+            .planets
+            .get_mut(home_planet_id)
+            .unwrap()
+            .claim_surface_tile(
+                Some(slot_id),
+                Some(profession),
+                plot_id,
+                Some(cid.clone()),
+                &self.catalog,
+            )
+            .ok_or_else(|| format!("格点 #{slot_id} 已被占用或不可开发，请重新选择"))?;
+        self.next_plot_id += 1;
+
+        let initial_cash = to_money(initial_cash_credits.max(0.0));
+        self.ledger.record_mint(initial_cash);
+
+        let mut comp = Company::new(
+            cid.clone(),
+            name,
+            true,
+            profession,
+            home_planet_id,
+            initial_cash,
+        );
+        comp.plots.push(plot_id);
+
+        let ship_id = self.next_ship_id;
+        self.next_ship_id += 1;
+        comp.ships.push(Ship {
+            id: ship_id,
+            owner_id: cid.clone(),
+            size: ShipSize::Small,
+            durability: 100.0,
+            location: home_planet_id.to_string(),
+            busy_until: 0,
+            cargo: HashMap::new(),
+        });
+
+        for (item_id, qty) in supplies {
+            if *qty > 0 && self.catalog.items.contains_key(*item_id) {
+                comp.add_ground_qty(home_planet_id, item_id, *qty as i64);
+            }
+        }
+
+        self.plots.insert(plot_id, plot);
+        self.companies.insert(cid, comp);
+        Ok(plot_id)
+    }
+
+    /// Cleanly removes an un-onboarded placeholder company (releasing its plot & burning its cash in ledger)
+    /// so a player onboarding onto `player1` preserves exact currency and tile conservation.
+    pub fn reclaim_placeholder_company(&mut self, company_id: &str) -> Result<(), String> {
+        let Some(comp) = self.companies.remove(company_id) else {
+            return Ok(());
+        };
+        let mut total_cash = comp.cash;
+        // Cancel open orders across all stations and include escrowed buy cash before burning
+        for st in self.stations.values_mut() {
+            let own_order_ids: Vec<OrderId> = st
+                .bids
+                .values()
+                .chain(st.asks.values())
+                .flat_map(|v| v.iter())
+                .filter(|o| o.owner_id == company_id)
+                .map(|o| o.order_id)
+                .collect();
+            for oid in own_order_ids {
+                if let Some(o) = st.remove_order(oid) {
+                    if matches!(o.side, OrderSide::Buy) {
+                        total_cash = total_cash.saturating_add(o.escrow_cash);
+                    }
+                }
+            }
+        }
+        if let Some(p) = self.planets.get_mut(&comp.home_planet_id) {
+            p.bank.total_deposits = p.bank.total_deposits.saturating_sub(comp.savings);
+            p.bank.total_loans = p.bank.total_loans.saturating_sub(comp.debt);
+            let deposit_burned = comp.savings.min(p.bank.reserves);
+            if deposit_burned > 0 {
+                p.bank.reserves -= deposit_burned;
+                total_cash = total_cash.saturating_add(deposit_burned);
+            }
+        }
+        self.ledger.record_burn(total_cash);
+        self.in_flight.retain(|f| f.owner_id != company_id);
+
+        for pid in comp.plots {
+            if let Some(pl) = self.plots.remove(&pid) {
+                for bid in pl.building_ids {
+                    self.buildings.remove(&bid);
+                }
+                if let Some(planet) = self.planets.get_mut(&pl.planet_id) {
+                    planet.set_tile_owner(pl.slot_id, None, None);
+                    planet.recompute_unclaimed_count();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -891,10 +1052,59 @@ impl World {
         self.total_currency_in_system() - self.ledger.expected_circulation()
     }
 
+    fn describe_intent(intent: &Intent) -> (&'static str, String) {
+        match intent {
+            Intent::CreateOrder { station_id, side, item_id, qty, .. } => (
+                "createOrder",
+                format!("{side:?}:{item_id}@{station_id} x{qty}"),
+            ),
+            Intent::CancelOrder { order_id } => ("cancelOrder", format!("order:{order_id}")),
+            Intent::DealOrder { order_id, amount } => ("deal", format!("order:{order_id} x{amount}")),
+            Intent::SetRecipe { building_id, recipe_id } => (
+                "setRecipe",
+                format!("building:{building_id}->{recipe_id}"),
+            ),
+            Intent::ToggleBuilding { building_id, active } => (
+                "setActive",
+                format!("building:{building_id}={active}"),
+            ),
+            Intent::BuildFacility { plot_id, building_type } => (
+                "build",
+                format!("plot:{plot_id}:{building_type}"),
+            ),
+            Intent::DemolishFacility { plot_id, building_id } => (
+                "demolish",
+                format!("plot:{plot_id}:building:{building_id}"),
+            ),
+            Intent::BuyPlot { planet_id, slot_id, listing_id } => match (listing_id, slot_id) {
+                (Some(lid), _) => ("buyLand", format!("listing:{lid}@{planet_id}")),
+                (None, Some(sid)) => ("buyPlot", format!("slot:{sid}@{planet_id}")),
+                (None, None) => ("buyPlot", planet_id.clone()),
+            },
+            Intent::DispatchShip { ship_id, to, .. } => (
+                "dispatch",
+                format!("ship:{ship_id}->{to}"),
+            ),
+            Intent::RepairShip { ship_id } => ("repair", format!("ship:{ship_id}")),
+            Intent::BankOp { planet_id, op, .. } => ("bank", format!("{op:?}@{planet_id}")),
+        }
+    }
+
     pub fn step_tick(&mut self, intents_by_company: Vec<(CompanyId, Vec<Intent>)>) -> TickReport {
+        self.step_tick_with_manual(intents_by_company, Vec::new())
+    }
+
+    /// Execute one deterministic tick with separate script (`MAX_INTENTS_PER_TICK` capped) and
+    /// manual UI/console intent batches so script loops cannot silently crowd out manual actions.
+    pub fn step_tick_with_manual(
+        &mut self,
+        intents_by_company: Vec<(CompanyId, Vec<Intent>)>,
+        manual_intents_by_company: Vec<(CompanyId, Vec<Intent>)>,
+    ) -> TickReport {
         self.tick += 1;
         let t = self.tick;
         let mut rejected_intents = 0usize;
+        let mut rejected_by_company: HashMap<CompanyId, Vec<RejectedIntent>> = HashMap::new();
 
         // 0a. Advance orbits & update CPI
         self.advance_orbits();
@@ -914,7 +1124,24 @@ impl World {
             planet_demands.insert(pid, demands);
         }
 
-        // 1. Shuffle & apply external decision Intents (player JS + free-play NPCs)
+        // 1a. Apply manual UI / console intents first (never crowded out by script quota)
+        for (cid, manual) in manual_intents_by_company {
+            for (idx, intent) in manual.into_iter().enumerate() {
+                let (action, target) = Self::describe_intent(&intent);
+                if let Err((code, reason)) = self.apply_intent_detailed(&cid, intent, t) {
+                    rejected_intents += 1;
+                    rejected_by_company.entry(cid.clone()).or_default().push(RejectedIntent {
+                        intent_index: idx,
+                        action: format!("manual:{action}"),
+                        target,
+                        code,
+                        reason: reason.to_string(),
+                    });
+                }
+            }
+        }
+
+        // 1b. Shuffle & apply external decision Intents (player JS + free-play NPCs)
         let mut batches = intents_by_company;
         if batches.len() > 1 {
             for i in (1..batches.len()).rev() {
@@ -923,9 +1150,17 @@ impl World {
             }
         }
         for (cid, intents) in batches {
-            for intent in intents.into_iter().take(MAX_INTENTS_PER_TICK) {
-                if !self.apply_intent(&cid, intent, t) {
+            for (idx, intent) in intents.into_iter().take(MAX_INTENTS_PER_TICK).enumerate() {
+                let (action, target) = Self::describe_intent(&intent);
+                if let Err((code, reason)) = self.apply_intent_detailed(&cid, intent, t) {
                     rejected_intents += 1;
+                    rejected_by_company.entry(cid.clone()).or_default().push(RejectedIntent {
+                        intent_index: idx,
+                        action: action.to_string(),
+                        target,
+                        code,
+                        reason: reason.to_string(),
+                    });
                 }
             }
         }
@@ -966,6 +1201,7 @@ impl World {
             fills: all_fills,
             bankruptcies,
             rejected_intents,
+            rejected_by_company,
             cpi: self.cpi,
         }
     }
@@ -1055,14 +1291,7 @@ impl World {
                             let plot = &self.plots[&pid];
                             let ow = plot.owner_id.clone().unwrap_or_default();
                             let bmod = *plot.building_mods.get(&job.building_type).unwrap_or(&1.0);
-                            let prof_b = self
-                                .companies
-                                .get(&ow)
-                                .and_then(|c| self.catalog.professions.get(&c.profession))
-                                .and_then(|p| p.efficiency_bonus.get(&job.building_type))
-                                .copied()
-                                .unwrap_or(1.0);
-                            (ow, plot.planet_id.clone(), (bmod * prof_b * 100.0).round() / 100.0)
+                            (ow, plot.planet_id.clone(), (bmod * 100.0).round() / 100.0)
                         };
                         if !owner_id.is_empty() {
                             if let Some(def_recipe) = self
@@ -1461,8 +1690,17 @@ impl World {
     }
 
     pub fn apply_intent(&mut self, company_id: &str, intent: Intent, tick: u64) -> bool {
+        self.apply_intent_detailed(company_id, intent, tick).is_ok()
+    }
+
+    pub fn apply_intent_detailed(
+        &mut self,
+        company_id: &str,
+        intent: Intent,
+        tick: u64,
+    ) -> Result<(), (RetCode, &'static str)> {
         if !self.companies.contains_key(company_id) {
-            return false;
+            return Err((ERR_NOT_OWNER, "company not found"));
         }
         match intent {
             Intent::CreateOrder {
@@ -1477,20 +1715,20 @@ impl World {
                     || price <= 0
                     || !self.catalog.items.contains_key(&item_id)
                 {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "invalid qty, price, or item_id"));
                 }
                 if !self.stations.contains_key(&station_id) {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "station not found"));
                 }
                 let ref_price = self.reference_price_for(&station_id, &item_id);
                 // Unit price band: [1, ref_price * 100 * MONEY_SCALE]. Sell orders lock no cash but
                 // a sky-high ask would still poison DealOrder/escrow settlement, so validate both.
                 if !price_in_band(price, ref_price) {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "price outside admissible 100x band"));
                 }
                 // Checked qty*price: reject instead of letting `(qty * price) as Money` truncate.
                 let Some(notional) = checked_notional(qty, price) else {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "order notional overflow"));
                 };
                 let active_orders: usize = self
                     .stations
@@ -1500,7 +1738,7 @@ impl World {
                     .filter(|o| o.owner_id == company_id)
                     .count();
                 if active_orders >= MAX_ACTIVE_ORDERS_PER_COMPANY {
-                    return false;
+                    return Err((ERR_FULL, "active order limit (64) reached"));
                 }
                 // Prevent self-crossing on the same book
                 let self_cross = match side {
@@ -1518,14 +1756,14 @@ impl World {
                         .unwrap_or(false),
                 };
                 if self_cross {
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "would self-cross own resting order"));
                 }
 
                 let escrow_cash = match side {
                     OrderSide::Buy => {
                         let comp = self.companies.get_mut(company_id).unwrap();
                         if !debit_cash(&mut comp.cash, notional) {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for buy escrow"));
                         }
                         notional
                     }
@@ -1539,15 +1777,15 @@ impl World {
                             if let Some(pid) = station_id.strip_prefix("ST:") {
                                 let g_have = comp.ground_qty(pid, &item_id);
                                 if st_have + g_have < qty {
-                                    return false;
+                                    return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient instant inventory"));
                                 }
                                 comp.add_station_qty(&station_id, &item_id, -(st_have as i64));
                                 comp.add_ground_qty(pid, &item_id, -((qty - st_have) as i64));
                             } else {
-                                return false;
+                                return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient station inventory"));
                             }
                         } else {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient station inventory"));
                         }
                         0
                     }
@@ -1567,7 +1805,7 @@ impl World {
                     escrow_cash,
                     created_tick: tick,
                 });
-                true
+                Ok(())
             }
 
             Intent::CancelOrder { order_id } => {
@@ -1579,13 +1817,13 @@ impl World {
                         } else {
                             // Put back untouched if caller doesn't own it
                             st.insert_order(o);
-                            return false;
+                            return Err((ERR_NOT_OWNER, "order belongs to another company"));
                         }
                         break;
                     }
                 }
                 let Some(order) = found else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "order no longer open"));
                 };
                 match order.side {
                     OrderSide::Buy => {
@@ -1600,12 +1838,12 @@ impl World {
                         );
                     }
                 }
-                true
+                Ok(())
             }
 
             Intent::DealOrder { order_id, amount } => {
                 if amount == 0 {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "amount must be positive"));
                 }
                 let mut target_sid = None;
                 let mut target_meta = None;
@@ -1624,10 +1862,10 @@ impl World {
                     }
                 }
                 let (Some(sid), Some((not_self, side, item_id, target_price))) = (target_sid, target_meta) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "order already filled or cancelled"));
                 };
                 if !not_self {
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "cannot deal own order"));
                 }
                 // Enforce CLOB price priority: DealOrder cannot skip better-priced resting counterparty
                 // orders (closes deep-book wash-trade / EMA-poisoning attacks).
@@ -1646,25 +1884,25 @@ impl World {
                             .unwrap_or(false),
                     };
                     if has_better_counterparty {
-                        return false;
+                        return Err((ERR_INVALID_TARGET, "better-priced order exists ahead in book"));
                     }
                 }
                 let order = self.stations.get_mut(&sid).unwrap().remove_order(order_id).unwrap();
                 let take = amount.min(order.qty).min(MAX_ORDER_QTY);
                 if take == 0 {
                     self.stations.get_mut(&sid).unwrap().insert_order(order);
-                    return false;
+                    return Err((ERR_NOT_FOUND, "order has zero remaining qty"));
                 }
                 // Checked notional + mandatory price band on the resting order. A negative or
                 // truncated `(take * price) as Money` must never reach the cash ledger.
                 let ref_price = self.reference_price_for(&sid, &order.item_id);
                 let Some(notional) = checked_notional(take, order.price) else {
                     self.stations.get_mut(&sid).unwrap().insert_order(order);
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "deal notional overflow"));
                 };
                 if notional <= 0 || !price_in_band(order.price, ref_price) {
                     self.stations.get_mut(&sid).unwrap().insert_order(order);
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "target order price outside admissible band"));
                 }
                 match order.side {
                     OrderSide::Sell => {
@@ -1672,7 +1910,7 @@ impl World {
                         let comp = self.companies.get_mut(company_id).unwrap();
                         if !debit_cash(&mut comp.cash, notional) {
                             self.stations.get_mut(&sid).unwrap().insert_order(order);
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for deal"));
                         }
                         let fee = bps_of(notional, self.stations[&sid].fee_bps);
                         let fill = TradeFill {
@@ -1698,7 +1936,7 @@ impl World {
                             rem.qty -= take;
                             self.stations.get_mut(&sid).unwrap().insert_order(rem);
                         }
-                        true
+                        Ok(())
                     }
                     OrderSide::Buy => {
                         // Caller sells into resting Buy order. The resting bid must have escrowed
@@ -1710,7 +1948,7 @@ impl World {
                                 order.order_id, order.escrow_cash, notional
                             );
                             self.stations.get_mut(&sid).unwrap().insert_order(order);
-                            return false;
+                            return Err((ERR_INVALID_TARGET, "target bid under-escrowed"));
                         }
                         let instant = self.is_instant_item(&order.item_id);
                         let comp = self.companies.get_mut(company_id).unwrap();
@@ -1722,17 +1960,17 @@ impl World {
                                 let g_have = comp.ground_qty(pid, &order.item_id);
                                 if st_have + g_have < take {
                                     self.stations.get_mut(&sid).unwrap().insert_order(order);
-                                    return false;
+                                    return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient instant inventory for deal"));
                                 }
                                 comp.add_station_qty(&sid, &order.item_id, -(st_have as i64));
                                 comp.add_ground_qty(pid, &order.item_id, -((take - st_have) as i64));
                             } else {
                                 self.stations.get_mut(&sid).unwrap().insert_order(order);
-                                return false;
+                                return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient station inventory for deal"));
                             }
                         } else {
                             self.stations.get_mut(&sid).unwrap().insert_order(order);
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient station inventory for deal"));
                         }
 
                         let fee = bps_of(notional, self.stations[&sid].fee_bps);
@@ -1768,7 +2006,7 @@ impl World {
                             rem.escrow_cash = residual_escrow;
                             self.stations.get_mut(&sid).unwrap().insert_order(rem);
                         }
-                        true
+                        Ok(())
                     }
                 }
             }
@@ -1778,19 +2016,19 @@ impl World {
                 recipe_id,
             } => {
                 let Some(b) = self.buildings.get(&building_id) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "building not found"));
                 };
                 if b.owner_id != company_id {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "building owned by another company"));
                 }
                 let Some(rec) = self.catalog.recipes.get(&recipe_id) else {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "recipe does not exist"));
                 };
                 if !rec.enabled || rec.building_id != b.building_type {
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "recipe disabled or incompatible with building"));
                 }
                 self.buildings.get_mut(&building_id).unwrap().recipe_id = recipe_id;
-                true
+                Ok(())
             }
 
             Intent::ToggleBuilding {
@@ -1798,13 +2036,13 @@ impl World {
                 active,
             } => {
                 let Some(b) = self.buildings.get_mut(&building_id) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "building not found"));
                 };
                 if b.owner_id != company_id {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "building owned by another company"));
                 }
                 b.active = active;
-                true
+                Ok(())
             }
 
             Intent::BuildFacility {
@@ -1812,26 +2050,26 @@ impl World {
                 building_type,
             } => {
                 let Some(bdef) = self.catalog.buildings.get(&building_type).cloned() else {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "unknown building type"));
                 };
                 let Some(plot) = self.plots.get(&plot_id) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "plot not found"));
                 };
                 if plot.owner_id.as_deref() != Some(company_id) {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "plot owned by another company"));
                 }
                 if plot.used_slots() + bdef.slots_used > plot.capacity {
-                    return false;
+                    return Err((ERR_FULL, "plot capacity exceeded"));
                 }
                 let pid = plot.planet_id.clone();
                 let cash_fee = to_money(80.0 * self.cpi);
                 let comp = self.companies.get(company_id).unwrap();
                 if comp.cash < cash_fee {
-                    return false;
+                    return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for construction fee"));
                 }
                 for req in &bdef.build_cost {
                     if comp.ground_qty(&pid, &req.item) < req.qty {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient ground materials for build"));
                     }
                 }
                 let comp = self.companies.get_mut(company_id).unwrap();
@@ -1840,12 +2078,15 @@ impl World {
                     comp.add_ground_qty(&pid, &req.item, -(req.qty as i64));
                 }
                 self.pay_wages(&pid, cash_fee);
+                let job_id = self.next_building_id;
+                self.next_building_id += 1;
                 self.plots.get_mut(&plot_id).unwrap().jobs.push(SiteJob {
+                    id: job_id,
                     action: "build".to_string(),
                     building_type,
                     finish_tick: tick + bdef.build_ticks as u64,
                 });
-                true
+                Ok(())
             }
 
             Intent::DemolishFacility {
@@ -1853,17 +2094,17 @@ impl World {
                 building_id,
             } => {
                 let Some(plot) = self.plots.get_mut(&plot_id) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "plot not found"));
                 };
                 if plot.owner_id.as_deref() != Some(company_id) {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "plot owned by another company"));
                 }
                 let Some(pos) = plot.building_ids.iter().position(|&id| id == building_id) else {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "building not on plot"));
                 };
                 plot.building_ids.remove(pos);
                 self.buildings.remove(&building_id);
-                true
+                Ok(())
             }
 
             Intent::BuyPlot {
@@ -1872,17 +2113,17 @@ impl World {
                 listing_id,
             } => {
                 if !self.planets.contains_key(&planet_id) {
-                    return false;
+                    return Err((ERR_NOT_FOUND, "planet not found"));
                 }
                 // Players CAN monopolize a planet using earned money, but cannot expand land while
                 // in overdue loan default.
                 if self.companies[company_id].is_debt_overdue(tick) {
-                    return false;
+                    return Err((ERR_NOT_ENOUGH_CREDITS, "loan overdue blocks land purchase"));
                 }
                 if !self.companies[company_id].is_player
                     && self.npc_plot_count_on(&planet_id) >= self.npc_plot_cap_on(&planet_id)
                 {
-                    return false;
+                    return Err((ERR_FULL, "NPC planet plot cap reached"));
                 }
                 if let Some(lid) = listing_id {
                     let pos = self.planets[&planet_id]
@@ -1890,11 +2131,14 @@ impl World {
                         .iter()
                         .position(|l| l.listing_id == lid);
                     let Some(idx) = pos else {
-                        return false;
+                        return Err((ERR_NOT_FOUND, "land listing already sold or cancelled"));
                     };
                     let lst = &self.planets[&planet_id].land_listings[idx];
-                    if lst.seller_id == company_id || self.companies[company_id].cash < lst.ask_price {
-                        return false;
+                    if lst.seller_id == company_id {
+                        return Err((ERR_INVALID_TARGET, "cannot buy own land listing"));
+                    }
+                    if self.companies[company_id].cash < lst.ask_price {
+                        return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for land listing"));
                     }
                     let lst = self
                         .planets
@@ -1903,7 +2147,7 @@ impl World {
                         .land_listings
                         .remove(idx);
                     if !debit_cash(&mut self.companies.get_mut(company_id).unwrap().cash, lst.ask_price) {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for land listing"));
                     }
                     if lst.seller_id == "BANK" {
                         let p = self.planets.get_mut(&planet_id).unwrap();
@@ -1936,11 +2180,11 @@ impl World {
                             .set_tile_owner(sid, Some(company_id.to_string()), Some(lst.plot_id));
                     }
                     self.companies.get_mut(company_id).unwrap().plots.push(lst.plot_id);
-                    true
+                    Ok(())
                 } else if let Some(sid) = slot_id {
                     let price = self.planets[&planet_id].primary_land_price(self.cpi);
                     if self.companies[company_id].cash < price {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for primary plot"));
                     }
                     let plot_id = self.next_plot_id;
                     let Some(plot) = self
@@ -1955,16 +2199,16 @@ impl World {
                             &self.catalog,
                         )
                     else {
-                        return false;
+                        return Err((ERR_NOT_FOUND, "land slot unavailable or already claimed"));
                     };
                     self.next_plot_id += 1;
                     self.companies.get_mut(company_id).unwrap().cash -= price;
                     self.planets.get_mut(&planet_id).unwrap().treasury += price;
                     self.plots.insert(plot_id, plot);
                     self.companies.get_mut(company_id).unwrap().plots.push(plot_id);
-                    true
+                    Ok(())
                 } else {
-                    false
+                    Err((ERR_INVALID_ARGS, "missing slot_id or listing_id"))
                 }
             }
 
@@ -1980,10 +2224,13 @@ impl World {
                     .find(|s| s.id == ship_id)
                     .cloned()
                 else {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "ship not found or not owned"));
                 };
-                if ship_snap.is_busy(tick) || ship_snap.location != from || cargo.is_empty() {
-                    return false;
+                if ship_snap.is_busy(tick) {
+                    return Err((ERR_BUSY, "ship is in flight"));
+                }
+                if ship_snap.location != from {
+                    return Err((ERR_NOT_IN_RANGE, "ship location changed before dispatch"));
                 }
                 let Some(route) = compute_route_in_systems(
                     &from,
@@ -1995,20 +2242,20 @@ impl World {
                     self.hub_orbit_radius,
                     self.hub_orbit_angle,
                 ) else {
-                    return false;
+                    return Err((ERR_NO_PATH, "no route between locations"));
                 };
                 // Aggregate total requested cargo & validate non-zero quantities + capacity
                 let mut clean_cargo: HashMap<ItemId, u32> = HashMap::new();
                 let mut total_units = 0u32;
                 for (it, qty) in cargo {
                     if qty == 0 || !self.catalog.items.contains_key(&it) {
-                        return false;
+                        return Err((ERR_INVALID_ARGS, "invalid cargo item or zero qty"));
                     }
                     *clean_cargo.entry(it).or_insert(0) += qty;
                     total_units = total_units.saturating_add(qty);
                 }
-                if total_units == 0 || total_units > ship_snap.capacity() {
-                    return false;
+                if total_units > ship_snap.capacity() {
+                    return Err((ERR_FULL, "cargo exceeds ship capacity"));
                 }
 
                 let fuel_item = self
@@ -2028,7 +2275,7 @@ impl World {
                     };
                     let cargo_fuel = *clean_cargo.get(&fuel_item).unwrap_or(&0);
                     if fuel_have < route.fuel + cargo_fuel {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient fuel at origin"));
                     }
                     for (it, &q) in &clean_cargo {
                         if it == &fuel_item {
@@ -2040,7 +2287,7 @@ impl World {
                             comp.ground_qty(&from, it)
                         };
                         if have < q {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient cargo at origin"));
                         }
                     }
                 }
@@ -2079,35 +2326,38 @@ impl World {
                     cargo: clean_cargo.into_iter().collect(),
                     arrival_tick: tick + route.ticks as u64,
                 });
-                true
+                Ok(())
             }
 
             Intent::RepairShip { ship_id } => {
                 let Some(repair_item) = self.catalog.repair_item.clone() else {
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "repair item not configured in catalog"));
                 };
                 let comp = self.companies.get_mut(company_id).unwrap();
                 let Some(idx) = comp.ships.iter().position(|s| s.id == ship_id) else {
-                    return false;
+                    return Err((ERR_NOT_OWNER, "ship not found"));
                 };
-                if comp.ships[idx].is_busy(tick) || comp.ships[idx].durability >= 99.9 {
-                    return false;
+                if comp.ships[idx].is_busy(tick) {
+                    return Err((ERR_BUSY, "ship is in flight"));
+                }
+                if comp.ships[idx].durability >= 99.9 {
+                    return Err((ERR_INVALID_TARGET, "ship already at full durability"));
                 }
                 let loc = comp.ships[idx].location.clone();
                 let need = comp.ships[idx].size.repair_cost();
                 if loc.starts_with("ST:") {
                     if comp.station_qty(&loc, &repair_item) < need {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient repair parts at station"));
                     }
                     comp.add_station_qty(&loc, &repair_item, -(need as i64));
                 } else {
                     if comp.ground_qty(&loc, &repair_item) < need {
-                        return false;
+                        return Err((ERR_NOT_ENOUGH_RESOURCES, "insufficient repair parts on ground"));
                     }
                     comp.add_ground_qty(&loc, &repair_item, -(need as i64));
                 }
                 comp.ships[idx].durability = 100.0;
-                true
+                Ok(())
             }
 
             Intent::BankOp {
@@ -2116,53 +2366,56 @@ impl World {
                 amount,
             } => {
                 if amount <= 0 || !self.planets.contains_key(&planet_id) {
-                    return false;
+                    return Err((ERR_INVALID_ARGS, "invalid bank amount or planet"));
                 }
                 if self.companies[company_id].home_planet_id != planet_id {
-                    return false;
+                    return Err((ERR_INVALID_TARGET, "banking only permitted on home planet"));
                 }
                 match op {
                     BankOpKind::Deposit => {
                         if self.companies[company_id].cash < amount {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient cash for deposit"));
                         }
                         self.companies.get_mut(company_id).unwrap().cash -= amount;
                         self.companies.get_mut(company_id).unwrap().savings += amount;
                         let p = self.planets.get_mut(&planet_id).unwrap();
                         p.bank.reserves += amount;
                         p.bank.total_deposits += amount;
-                        true
+                        Ok(())
                     }
                     BankOpKind::Withdraw => {
                         let comp = &self.companies[company_id];
                         let p = &self.planets[&planet_id];
-                        if comp.savings < amount || p.bank.reserves < amount {
-                            return false;
+                        if comp.savings < amount {
+                            return Err((ERR_NOT_ENOUGH_CREDITS, "insufficient savings balance"));
+                        }
+                        if p.bank.reserves < amount {
+                            return Err((ERR_NOT_ENOUGH_RESOURCES, "bank reserves too low"));
                         }
                         self.companies.get_mut(company_id).unwrap().savings -= amount;
                         self.companies.get_mut(company_id).unwrap().cash += amount;
                         let p = self.planets.get_mut(&planet_id).unwrap();
                         p.bank.reserves -= amount;
                         p.bank.total_deposits -= amount;
-                        true
+                        Ok(())
                     }
                     BankOpKind::Borrow => {
                         let credit_limit = self.company_credit_limit(company_id);
                         let comp = &self.companies[company_id];
                         if comp.is_debt_overdue(tick) {
-                            return false;
+                            return Err((ERR_INVALID_TARGET, "overdue debt blocks new borrowing"));
                         }
                         let Some(next_debt) = comp.debt.checked_add(amount) else {
-                            return false;
+                            return Err((ERR_INVALID_ARGS, "loan amount overflow"));
                         };
                         if next_debt > credit_limit {
-                            return false;
+                            return Err((ERR_FULL, "credit limit exceeded"));
                         }
                         let p = &self.planets[&planet_id];
                         let min_reserves = bps_of(p.bank.total_deposits, BANK_MIN_RESERVE_BPS);
                         let lendable = p.bank.reserves.saturating_sub(min_reserves);
                         if lendable < amount {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_RESOURCES, "bank lendable liquidity insufficient"));
                         }
                         let p_mut = self.planets.get_mut(&planet_id).unwrap();
                         p_mut.bank.reserves -= amount;
@@ -2173,13 +2426,13 @@ impl World {
                         if c_mut.debt_due_tick.is_none() {
                             c_mut.debt_due_tick = Some(tick + LOAN_TERM_TICKS);
                         }
-                        true
+                        Ok(())
                     }
                     BankOpKind::Repay => {
                         let comp = &self.companies[company_id];
                         let repay = amount.min(comp.debt);
                         if repay <= 0 || comp.cash < repay {
-                            return false;
+                            return Err((ERR_NOT_ENOUGH_CREDITS, "no debt or insufficient cash to repay"));
                         }
                         let c_mut = self.companies.get_mut(company_id).unwrap();
                         c_mut.cash -= repay;
@@ -2190,7 +2443,7 @@ impl World {
                         let p = self.planets.get_mut(&planet_id).unwrap();
                         p.bank.total_loans = p.bank.total_loans.saturating_sub(repay);
                         credit_cash(&mut p.bank.reserves, repay);
-                        true
+                        Ok(())
                     }
                 }
             }
@@ -2705,6 +2958,7 @@ impl World {
             let view = PlanetView {
                 id: p.id.clone(),
                 system_id: p.system_id.clone(),
+                station_id: p.station_id.clone(),
                 name: p.name.clone(),
                 wealth_tier: p.wealth_tier,
                 prosperity: p.prosperity,
@@ -2797,12 +3051,29 @@ impl World {
                 .then_with(|| a.id.cmp(&b.id))
         });
 
+        let mut station_systems: HashMap<StationId, (String, Option<PlanetId>)> =
+            HashMap::with_capacity(self.stations.len());
+        for p in self.planets.values() {
+            station_systems.insert(p.station_id.clone(), (p.system_id.clone(), Some(p.id.clone())));
+        }
+        for sys in &systems_view {
+            station_systems
+                .entry(sys.1.hub_station_id.clone())
+                .or_insert_with(|| (sys.0.clone(), None));
+        }
+        for sid in self.stations.keys() {
+            station_systems
+                .entry(sid.clone())
+                .or_insert_with(|| ("S1".to_string(), None));
+        }
+
         SharedSnapshot {
             quotes: Arc::new(quotes),
             depths: Arc::new(depths),
             all_orders: Arc::new(all_orders),
             open_orders_by_owner,
             systems: Arc::new(systems_view),
+            station_systems: Arc::new(station_systems),
             planet_templates,
             public_tiles_by_planet: Arc::new(public_tiles_by_planet),
             public_companies: Arc::new(public_companies),
@@ -3021,6 +3292,7 @@ impl World {
         let comp = self.companies.get(company_id)?;
         let mut plots = Vec::with_capacity(comp.plots.len());
         let mut buildings = Vec::new();
+        let mut sites = Vec::new();
         for pid in &comp.plots {
             let Some(pl) = self.plots.get(pid) else {
                 continue;
@@ -3036,6 +3308,23 @@ impl World {
                 used_slots: pl.used_slots(),
                 building_mods: pl.building_mods.clone(),
             });
+            for (idx, job) in pl.jobs.iter().enumerate() {
+                if job.action == "build" {
+                    let site_id = if job.id > 0 {
+                        job.id
+                    } else {
+                        pl.id * 1_000_000 + idx as u64 + 1
+                    };
+                    sites.push(SiteView {
+                        id: site_id,
+                        plot_id: pl.id,
+                        planet_id: pl.planet_id.clone(),
+                        building_type: job.building_type.clone(),
+                        finish_tick: job.finish_tick,
+                        ticks_remaining: job.finish_tick.saturating_sub(self.tick),
+                    });
+                }
+            }
             for bid in &pl.building_ids {
                 let Some(b) = self.buildings.get(bid) else {
                     continue;
@@ -3115,13 +3404,16 @@ impl World {
                 cash: comp.cash,
                 savings: comp.savings,
                 debt: comp.debt,
+                debt_due_tick: comp.debt_due_tick,
                 plots,
                 buildings,
+                sites,
                 ships,
                 station_stores: comp.station_inv.clone(),
                 open_orders,
             },
             systems: Arc::clone(&shared.systems),
+            station_systems: Arc::clone(&shared.station_systems),
             planets: planets_view,
             quotes: Arc::clone(&shared.quotes),
             depths,

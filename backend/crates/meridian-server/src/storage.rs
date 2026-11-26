@@ -53,6 +53,7 @@ pub struct UserRow {
     pub created_at: i64,
     pub nickname_changed_at: Option<i64>,
     pub last_login_at: Option<i64>,
+    pub needs_onboarding: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,10 +81,11 @@ fn map_user_at(row: &rusqlite::Row<'_>, base: usize) -> rusqlite::Result<UserRow
         created_at: row.get(base + 6)?,
         nickname_changed_at: row.get(base + 7)?,
         last_login_at: row.get(base + 8)?,
+        needs_onboarding: row.get::<_, i64>(base + 9)? != 0,
     })
 }
 
-const USER_COLUMNS: &str = "id, email, nickname, role, status, company_id, created_at, nickname_changed_at, last_login_at";
+const USER_COLUMNS: &str = "id, email, nickname, role, status, company_id, created_at, nickname_changed_at, last_login_at, needs_onboarding";
 
 pub struct SqliteStore {
     conn: Connection,
@@ -187,7 +189,8 @@ impl SqliteStore {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 last_login_at INTEGER,
-                nickname_changed_at INTEGER
+                nickname_changed_at INTEGER,
+                needs_onboarding INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -202,6 +205,10 @@ impl SqliteStore {
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
             "#,
         )?;
+        let _ = conn.execute(
+            "ALTER TABLE users ADD COLUMN needs_onboarding INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(Self { conn, db_path })
     }
 
@@ -870,8 +877,8 @@ impl SqliteStore {
                 params![email],
                 |row| {
                     let user = map_user(row)?;
-                    let salt: String = row.get(9)?;
-                    let hash: String = row.get(10)?;
+                    let salt: String = row.get(10)?;
+                    let hash: String = row.get(11)?;
                     Ok((user, salt, hash))
                 },
             )
@@ -888,8 +895,8 @@ impl SqliteStore {
                 params![nickname],
                 |row| {
                     let user = map_user(row)?;
-                    let salt: String = row.get(9)?;
-                    let hash: String = row.get(10)?;
+                    let salt: String = row.get(10)?;
+                    let hash: String = row.get(11)?;
                     Ok((user, salt, hash))
                 },
             )
@@ -937,6 +944,26 @@ impl SqliteStore {
             .execute(
                 "UPDATE users SET company_id = ?1, updated_at = ?2 WHERE id = ?3",
                 params![company_id, unix_secs(), user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_user_onboarding(&self, user_id: i64, needs: bool) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET needs_onboarding = ?1, updated_at = ?2 WHERE id = ?3",
+                params![if needs { 1i64 } else { 0i64 }, unix_secs(), user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn mark_all_users_needs_onboarding(&self) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE users SET needs_onboarding = 1, updated_at = ?1",
+                params![unix_secs()],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -995,7 +1022,7 @@ impl SqliteStore {
             .query_row(
                 "SELECT s.id, s.user_id, s.created_at, s.expires_at, s.last_seen_at, s.user_agent,
                         u.id, u.email, u.nickname, u.role, u.status, u.company_id,
-                        u.created_at, u.nickname_changed_at, u.last_login_at
+                        u.created_at, u.nickname_changed_at, u.last_login_at, u.needs_onboarding
                  FROM sessions s JOIN users u ON u.id = s.user_id
                  WHERE s.token_hash = ?1",
                 params![token_hash],

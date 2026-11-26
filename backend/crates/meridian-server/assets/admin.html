@@ -86,14 +86,17 @@
     .kv { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; border-bottom: 1px dashed rgba(148, 163, 184, 0.08); }
     .kv span { color: var(--muted); }
     .tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-    .table-scroll { max-height: 440px; overflow: auto; }
+    .table-scroll { max-height: 520px; overflow: auto; }
     table { width: 100%; border-collapse: collapse; font-size: 11px; }
     th {
-      position: sticky; top: 0; background: #232b38; color: var(--muted);
+      position: sticky; top: 0; z-index: 2; background: #232b38; color: var(--muted);
       font-weight: 500; text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
-    td { padding: 6px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.09); vertical-align: top; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { color: var(--text); }
+    th.sortable.active { color: var(--blue); }
+    td { padding: 6px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.09); vertical-align: middle; }
     tr.comp-row { cursor: pointer; }
     tr.comp-row:hover { background: rgba(56, 189, 248, 0.08); }
     tr.comp-row.selected { background: rgba(56, 189, 248, 0.14); }
@@ -105,13 +108,27 @@
     .tag.player { background: rgba(63, 185, 80, 0.18); border-color: rgba(63, 185, 80, 0.45); color: #86efac; }
     .tag.npc { background: rgba(56, 189, 248, 0.12); border-color: rgba(56, 189, 248, 0.3); color: #7dd3fc; }
     .tag.on { border-color: rgba(63, 185, 80, 0.4); color: #86efac; }
-    .tag.off { border-color: rgba(248, 81, 73, 0.35); color: #fca5a5; }
-    .split-2 { display: grid; grid-template-columns: 1.45fr 1fr; gap: 12px; }
+    .tag.warn { border-color: rgba(242, 204, 96, 0.45); color: #f2cc60; background: rgba(242, 204, 96, 0.08); }
+    .tag.off { border-color: rgba(248, 81, 73, 0.4); color: #fca5a5; background: rgba(248, 81, 73, 0.08); }
+    .split-2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; }
     @media (max-width: 1200px) { .split-2 { grid-template-columns: 1fr; } }
     .detail-box {
       background: #171d26; border: 1px solid var(--border); border-radius: 3px;
-      padding: 8px 10px; max-height: 440px; overflow: auto;
+      padding: 10px 12px; max-height: 520px; overflow: auto;
     }
+    .sub-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .kpi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+    .kpi-box { background: #1e2632; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 3px; padding: 6px 8px; }
+    .kpi-label { font-size: 10px; color: var(--muted); }
+    .kpi-val { font-size: 13px; font-weight: 600; margin-top: 2px; }
+    .bar-bg { height: 5px; background: #263142; border-radius: 2px; overflow: hidden; margin-top: 3px; }
+    .bar-fill { height: 100%; background: var(--blue); }
+    .inv-group { background: #1c2430; border: 1px solid rgba(148, 163, 184, 0.14); border-radius: 3px; padding: 6px 8px; margin-bottom: 6px; }
+    .inv-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+    .inv-chip { background: #141920; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 2px; padding: 2px 6px; font-size: 10.5px; }
+    details.raw-json { margin-top: 10px; border: 1px solid rgba(148, 163, 184, 0.16); border-radius: 3px; background: #141920; padding: 6px 8px; }
+    details.raw-json summary { cursor: pointer; color: var(--muted); font-size: 11px; user-select: none; }
+    details.raw-json pre { margin-top: 8px; max-height: 280px; overflow: auto; }
     pre { font-size: 10.5px; color: #cbd5e1; white-space: pre-wrap; word-break: break-all; }
     .green { color: var(--green); }
     .red { color: var(--red); }
@@ -186,7 +203,7 @@
         <button data-ms="2000">2.0s</button>
         <button data-ms="5000">5.0s</button>
       </div>
-      <input id="customMs" class="ms-in mono" type="number" min="0" max="60000" value="2000" title="自定义 tick_ms (0 为最快)" />
+      <input id="customMs" class="ms-in mono" type="number" min="0" max="60000" value="1000" title="自定义 tick_ms (0 为最快)" />
       <button id="btnSetMs">设毫秒</button>
       <span id="resetBox">
         <button id="btnAskReset" class="danger">重置星系</button>
@@ -244,27 +261,26 @@
     <div class="split-2">
       <div class="card">
         <div class="card-hd">
-          <span>全星系企业实时监控（玩家 + 演化 NPC 全明细）</span>
+          <span>全星系企业实时监控 <span id="compFilteredBadge" class="muted mono" style="font-weight:400;"></span></span>
           <div class="tabs" id="compFilters">
             <button data-f="ALL" class="active">全部</button>
             <button data-f="PLAYER">仅玩家</button>
             <button data-f="NPC">仅 NPC</button>
+            <button data-f="ALERT" title="存在欠款、预警、停工闲置、负流动或脚本报错的企业">异常聚焦</button>
             <span id="planetFilterBtns" style="display:inline-flex;gap:4px;"></span>
-            <input id="compSearch" class="ms-in" style="width:120px;" placeholder="搜索名称/ID..." />
+            <input id="compSearch" class="ms-in" style="width:128px;" placeholder="搜名称/ID/职业..." />
           </div>
         </div>
         <div class="table-scroll">
           <table>
-            <thead>
+            <thead id="compHead">
               <tr>
                 <th>公司 / 身份</th>
                 <th>母星 / 职业</th>
-                <th class="num">净流动</th>
-                <th class="num">现金 / 储蓄 / 负债</th>
-                <th class="num">预警</th>
-                <th>地/船/单</th>
-                <th>设施状态 (配方/停滞)</th>
-                <th>库存概览</th>
+                <th class="num sortable" data-sort="net_liquid">净流动 / 现金负债</th>
+                <th class="num sortable" data-sort="scale">资产 (地/厂/船/单)</th>
+                <th>产线运行汇总</th>
+                <th class="num sortable" data-sort="health">运行状态</th>
               </tr>
             </thead>
             <tbody id="compBody"></tbody>
@@ -274,12 +290,12 @@
 
       <div class="card">
         <div class="card-hd">
-          <span id="detailTitle">选中企业完整 JSON / 基因 / 飞船详情（点击左侧任意行）</span>
+          <span id="detailTitle">企业结构化体检面板（点击左侧任意行）</span>
           <span id="detailSub" class="mono muted"></span>
         </div>
         <div class="card-bd">
-          <div class="detail-box mono" id="detailBox">
-            <span class="muted">点击左侧企业行即可查看其完整设施、飞船货舱、地面与站点库存、沙盒脚本状态或 NPC 基因组权重。</span>
+          <div class="detail-box" id="detailBox">
+            <span class="muted">点击左侧任意企业，可分页查看其资产财务、中文设施产线、飞船载货、分站库存、玩家沙盒日志/代码或 NPC 基因与原始 JSON。</span>
           </div>
         </div>
       </div>

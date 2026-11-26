@@ -272,7 +272,7 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
             planet={pSum}
             tick={state?.tick ?? 0}
             paused={state?.paused ?? false}
-            tickMs={state?.tick_ms ?? 2000}
+            tickMs={state?.tick_ms ?? 1000}
             ticksPerDay={ticksPerDay}
             onOpenLand={() => openTemp('land', { planetId: pSum.id })}
           />

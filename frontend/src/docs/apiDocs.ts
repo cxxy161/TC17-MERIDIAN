@@ -8,7 +8,7 @@ import { ENTITY_ENTRIES } from './data/entities';
 import { CONSTANT_ENTRIES } from './data/constants';
 import { EXAMPLE_ENTRIES } from './data/examples';
 
-/** 将 Game.market 子条目紧跟在 Game.market 后面，确保目录缩进层级正确。 */
+/** 将 Game.market 子条目紧跟在 Game 接口分组内，确保目录缩进层级正确。 */
 function withMarketInGame(): DocEntry[] {
   return [...GAME_ENTRIES, ...MARKET_ENTRIES];
 }
@@ -30,7 +30,7 @@ export const DOC_BY_ID: Record<string, DocEntry> = DOC_ENTRIES.reduce(
   {} as Record<string, DocEntry>,
 );
 
-/** 兼容旧版保存布局与 URL 锚点的别名映射。 */
+/** 兼容 v1 路径、旧版保存布局与 URL 锚点的别名映射。 */
 const LEGACY_DOC_ALIASES: Record<string, string> = {
   'overview/quickstart': 'guides/quickstart',
   'overview/execution': 'guides/execution',
@@ -38,6 +38,14 @@ const LEGACY_DOC_ALIASES: Record<string, string> = {
   'overview/limits': 'guides/limits',
   quotas: 'guides/limits',
   'overview/ids': 'guides/ids',
+  'Game.buyPlot': 'Game.map.buyPlot',
+  'Game.buildFacility': 'Plot.build',
+  'Game.demolishFacility': 'Building.demolish',
+  'Game.getRecipe': 'Game.catalog',
+  'Game.market.calcRoute': 'Game.map.calcRoute',
+  'Game.market.getLandPlots': 'Game.map.getLandPlots',
+  'Game.market.listCompanies': 'Game.map.listCompanies',
+  'Game.market.getCompany': 'Game.map.getCompany',
   'error-matrix': 'constants/return-codes',
   OK: 'constants/return-codes',
   ERR_NOT_OWNER: 'constants/return-codes',
@@ -52,13 +60,14 @@ const LEGACY_DOC_ALIASES: Record<string, string> = {
   ERR_NOT_ENOUGH_CREDITS: 'constants/return-codes',
   ORDER_BUY: 'constants/order-sides',
   ORDER_SELL: 'constants/order-sides',
+  MONEY_SCALE: 'constants/money-scale',
   'example-open': 'examples/open',
   'example-quote': 'examples/quote',
   'example-restock': 'examples/restock',
   'example-logistics': 'examples/logistics',
 };
 
-export const DEFAULT_DOC_ID = 'guides/quickstart';
+export const DEFAULT_DOC_ID = 'guides/overview';
 
 export function findEntry(id: string | undefined | null): DocEntry | null {
   if (!id) return null;
@@ -69,7 +78,7 @@ export function findEntry(id: string | undefined | null): DocEntry | null {
 /** 纯函数：供窗口标题、目录与独立页标题复用。 */
 export function docTitle(id: string | undefined | null): string {
   const entry = findEntry(id);
-  return entry ? entry.title : 'API 参考';
+  return entry ? entry.title : 'API v2 参考';
 }
 
 export interface DocNavGroup {
@@ -151,4 +160,4 @@ export function searchDocs(query: string, limit = 40): DocEntry[] {
     .map((h) => h.entry);
 }
 
-export const DOC_VERSION = 'API v1 · 2026-11-25';
+export const DOC_VERSION = 'API v2 · 2026-11-26';

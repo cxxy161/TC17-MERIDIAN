@@ -34,6 +34,16 @@ use crate::types::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SiteView {
+    pub id: u64,
+    pub plot_id: PlotId,
+    pub planet_id: PlanetId,
+    pub building_type: BuildingTypeId,
+    pub finish_tick: u64,
+    pub ticks_remaining: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildingView {
     pub id: BuildingId,
     pub building_type: BuildingTypeId,
@@ -132,6 +142,8 @@ pub struct PlanetView {
     pub id: PlanetId,
     #[serde(default = "default_snapshot_system_id")]
     pub system_id: String,
+    #[serde(default)]
+    pub station_id: StationId,
     pub name: String,
     pub wealth_tier: u8,
     pub prosperity: f64,
@@ -158,8 +170,12 @@ pub struct SelfView {
     pub cash: Money,
     pub savings: Money,
     pub debt: Money,
+    #[serde(default)]
+    pub debt_due_tick: Option<u64>,
     pub plots: Vec<PlotView>,
     pub buildings: Vec<BuildingView>,
+    #[serde(default)]
+    pub sites: Vec<SiteView>,
     pub ships: Vec<ShipView>,
     pub station_stores: HashMap<StationId, HashMap<ItemId, u32>>,
     pub open_orders: Vec<Order>,
@@ -226,6 +242,7 @@ pub struct SharedSnapshot {
     pub all_orders: Arc<Vec<Order>>,
     pub open_orders_by_owner: HashMap<CompanyId, Vec<Order>>,
     pub systems: Arc<HashMap<String, StarSystemView>>,
+    pub station_systems: Arc<HashMap<StationId, (String, Option<PlanetId>)>>,
     pub planet_templates: Vec<(PlanetId, StationId, PlanetView)>,
     pub public_tiles_by_planet: Arc<HashMap<PlanetId, Vec<PublicLandTileView>>>,
     pub public_companies: Arc<Vec<PublicCompanySummary>>,
@@ -242,6 +259,8 @@ pub struct WorldSnapshot {
     pub company: SelfView,
     #[serde(default, with = "arc_serde")]
     pub systems: Arc<HashMap<String, StarSystemView>>,
+    #[serde(default, with = "arc_serde")]
+    pub station_systems: Arc<HashMap<StationId, (String, Option<PlanetId>)>>,
     pub planets: HashMap<PlanetId, PlanetView>,
     #[serde(with = "arc_serde")]
     pub quotes: Arc<HashMap<StationId, HashMap<ItemId, MarketQuote>>>,

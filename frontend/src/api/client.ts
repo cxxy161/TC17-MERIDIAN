@@ -1,4 +1,5 @@
 import type {
+  ConsoleEvalResp,
   IntentPayload,
   MarketBookResp,
   MarketCandlesResp,
@@ -57,6 +58,52 @@ export interface SessionUser {
   nickname: string;
   email: string;
   role: string;
+  needs_onboarding?: boolean;
+}
+
+export interface OnboardingSupply {
+  item_id: string;
+  item_name: string;
+  qty: number;
+}
+
+export interface OnboardingProfession {
+  id: string;
+  name: string;
+  demand_category: string;
+  color: string;
+  description: string;
+  starter_cash: number;
+  starter_supplies: OnboardingSupply[];
+}
+
+export interface OnboardingTile {
+  slot_id: number;
+  lat: number;
+  lon: number;
+  terrain_name: string;
+  capacity: number;
+  building_mods: Record<string, number>;
+}
+
+export interface OnboardingPlanet {
+  id: string;
+  system_id: string;
+  name: string;
+  archetype: string;
+  wealth_tier: number;
+  prosperity: number;
+  population: number;
+  gravity: number;
+  habitability: number;
+  unclaimed_count: number;
+  tiles: OnboardingTile[];
+}
+
+export interface OnboardingOptions {
+  starter_cash: number;
+  professions: OnboardingProfession[];
+  planets: OnboardingPlanet[];
 }
 
 export interface AccountSession {
@@ -141,8 +188,26 @@ export const authApi = {
     nickname: string;
     password: string;
     turnstile_token?: string;
+    defer_onboarding?: boolean;
   }): Promise<SessionUser> {
     return jsonRequest<SessionUser>('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  },
+
+  onboardingOptions(): Promise<OnboardingOptions> {
+    return accountRequest<OnboardingOptions>('/api/onboarding/options');
+  },
+
+  submitOnboarding(body: {
+    company_name: string;
+    profession: string;
+    planet_id: string;
+    slot_id: number;
+  }): Promise<SessionUser> {
+    return accountRequest<SessionUser>('/api/onboarding/setup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -254,6 +319,14 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ memory_json: memoryJson }),
+    });
+  },
+
+  evalConsole(companyId: string, code: string): Promise<ConsoleEvalResp> {
+    return jsonFetch('/api/console/eval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_id: companyId, code }),
     });
   },
 

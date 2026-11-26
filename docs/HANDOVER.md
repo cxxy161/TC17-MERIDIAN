@@ -139,7 +139,7 @@ cd frontend && npm run build   # tsc -b && vite build -> frontend/dist
 | 环境变量 | 默认回退逻辑 | 说明 |
 |---|---|---|
 | `MERIDIAN_ADDR` | `0.0.0.0:18420` | HTTP / WebSocket 监听地址（历史 commit `8961e4c` 从 `3080` 改为了 `18420`） |
-| `MERIDIAN_TICK_MS` | `2000` | 启动默认 Tick 间隔（毫秒）；`0` 表示无人工延迟全速运行 |
+| `MERIDIAN_TICK_MS` | `1000` | 启动默认 Tick 间隔（毫秒）；`0` 表示无人工延迟全速运行 |
 | `MERIDIAN_DATA_PATH` | `data/production.json` 或 `../data/production.json` | 静态产线与世界配置 JSON |
 | `MERIDIAN_DB_PATH` | `data/meridian.db` 或 `../data/meridian.db` | SQLite WAL 持久化数据库路径（注意：`cargo.sh` 会切进 `backend/`，故默认落在 `backend/data/meridian.db`） |
 | `MERIDIAN_DIST_DIR` | `frontend/dist` 或 `../frontend/dist` | 前端静态构建目录 |

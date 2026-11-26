@@ -264,6 +264,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
             nickname: nickname.trim(),
             password,
             turnstile_token: ttToken,
+            defer_onboarding: true,
           })
         : await authApi.login({ email: email.trim(), password, remember });
       setCurrentCompany(user.company_id);

@@ -1,158 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { api } from '../api/client';
 import { useGameStore, type LogHistoryLine } from '../store/useGameStore';
-import type { ProductionPack } from '../types/meridian';
-
-/**
- * The `RESOURCE_*` preamble used to be rebuilt and re-compiled on every single console evaluation,
- * so a big pack (thousands of items) made every line feel slow. It only depends on the pack, so it
- * is cached per pack. Ids that are not valid JS identifiers are skipped (they used to produce a
- * SyntaxError that broke the whole evaluation), and a name lookup is provided for discoverability.
- */
-const preambleCache = new WeakMap<ProductionPack, string>();
-
-function isValidIdent(id: string): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(id);
-}
-
-function buildResourcePreamble(catalog: ProductionPack | null): string {
-  if (!catalog) return 'const RESOURCES_ALL = []; const RESOURCES = {}; const itemIdByName = () => null;';
-  const cached = preambleCache.get(catalog);
-  if (cached) return cached;
-
-  const ids = catalog.items.map((i) => i.id);
-  const constLines = catalog.items
-    .filter((it) => isValidIdent(`RESOURCE_${it.id.toUpperCase()}`))
-    .map((it) => `const RESOURCE_${it.id.toUpperCase()} = ${JSON.stringify(it.id)};`)
-    .join('\n');
-  const byName = Object.fromEntries(catalog.items.map((i) => [i.name, i.id]));
-  const byId = Object.fromEntries(catalog.items.map((i) => [i.id, i.name]));
-  const preamble = [
-    constLines,
-    `const RESOURCES_ALL = ${JSON.stringify(ids)};`,
-    `const RESOURCES = ${JSON.stringify(byId)};`,
-    `const itemIdByName = (n) => (${JSON.stringify(byName)})[n] ?? (${JSON.stringify(byId)})[n] ?? null;`,
-    'const OK = 0, ORDER_BUY = "buy", ORDER_SELL = "sell";',
-  ].join('\n');
-  preambleCache.set(catalog, preamble);
-  return preamble;
-}
 import type { PaneProps } from '../layout/paneRegistry';
-import { moneyToCredits } from '../types/meridian';
 import {
   parseMessageToSegments,
   toConsoleValue,
   type ConsoleValue,
 } from '../utils/consoleFormat';
 
-function buildEvalContext(
-  state: ReturnType<typeof useGameStore.getState>['state'],
-  catalog: ReturnType<typeof useGameStore.getState>['catalog'],
-  scripts: ReturnType<typeof useGameStore.getState>['scripts'],
-) {
-  const snap = state?.player_snapshot;
-  const mem = (() => {
-    try {
-      return JSON.parse(scripts?.memory_json ?? '{}');
-    } catch {
-      return {};
-    }
-  })();
-
-  const makeStoreProxy = (raw: Record<string, number>) =>
-    new Proxy(
-      {
-        ...raw,
-        getUsedCapacity(res?: string) {
-          if (res === undefined) {
-            return Object.values(raw).reduce((a, b) => a + b, 0);
-          }
-          return raw[res] ?? 0;
-        },
-      },
-      {
-        get(target, prop: string) {
-          if (prop in target) return (target as Record<string, unknown>)[prop];
-          if ((catalog?.items ?? []).some((i) => i.id === prop)) return 0;
-          return undefined;
-        },
-      },
-    );
-
-  const planets: Record<string, unknown> = {};
-  if (snap) {
-    for (const [pid, pv] of Object.entries(snap.planets)) {
-      planets[pid] = {
-        ...pv,
-        groundStore: makeStoreProxy(pv.ground_store),
-        stationStore: makeStoreProxy(pv.station_store),
-      };
-    }
-  }
-
-  const stations: Record<string, unknown> = {};
-  if (snap) {
-    for (const [sid, st] of Object.entries(snap.company.station_stores)) {
-      stations[sid] = { id: sid, store: makeStoreProxy(st) };
-    }
-  }
-
-  const tickers = state?.market_tickers ?? [];
-  const Game = snap
-    ? {
-        time: state?.tick ?? 0,
-        cpi: state?.cpi ?? 1,
-        company: {
-          id: snap.company.id,
-          name: snap.company.name,
-          profession: snap.company.profession,
-          homePlanetId: snap.company.home_planet_id,
-          cash: moneyToCredits(snap.company.cash),
-          savings: moneyToCredits(snap.company.savings),
-          debt: moneyToCredits(snap.company.debt),
-        },
-        planets,
-        stations,
-        buildings: Object.fromEntries(snap.company.buildings.map((b) => [String(b.id), b])),
-        ships: Object.fromEntries(
-          snap.company.ships.map((s) => [
-            String(s.id),
-            { ...s, store: makeStoreProxy(s.cargo) },
-          ]),
-        ),
-        market: {
-          credits: moneyToCredits(snap.company.cash),
-          orders: Object.fromEntries(snap.company.open_orders.map((o) => [String(o.order_id), o])),
-          quote(stationId: string, itemId: string) {
-            return tickers.find((t) => t.station_id === stationId && t.item_id === itemId) ?? null;
-          },
-          calcRoute(from: string, to: string) {
-            const pair = snap.routes[from]?.[to];
-            return pair ? { ticks: pair[0], fuel: pair[1] } : null;
-          },
-        },
-      }
-    : { time: state?.tick ?? 0, cpi: state?.cpi ?? 1 };
-
-  return { Game, Memory: mem };
-}
-
-function primitiveClass(valType: string): string {
-  switch (valType) {
+const primitiveClass = (t: string): string => {
+  switch (t) {
+    case 'number':
+      return 'text-amber-300';
     case 'string':
       return 'text-emerald-300';
-    case 'number':
-    case 'bigint':
-      return 'text-sky-300';
     case 'boolean':
-      return 'text-amber-300';
+      return 'text-sky-300';
     case 'undefined':
     case 'null':
       return 'text-slate-500';
     default:
-      return 'text-violet-300';
+      return 'text-slate-300';
   }
-}
+};
 
 /** DevTools-style collapsible console value renderer: objects/arrays/JSON always default to collapsed. */
 const ConsoleValueNode: React.FC<{ value: ConsoleValue; propKey?: string }> = ({
@@ -281,17 +152,27 @@ const ConsoleLineContent: React.FC<{ line: LogHistoryLine }> = ({ line }) => {
   );
 };
 
+function sandboxResultToConsoleValue(res: { kind: string; value?: unknown }): ConsoleValue {
+  if (res.kind === 'undefined') return toConsoleValue(undefined);
+  if (res.kind === 'null') return toConsoleValue(null);
+  if (res.kind === 'function') {
+    return { kind: 'function', name: 'anonymous' };
+  }
+  return toConsoleValue(res.value);
+}
+
 export const ConsolePanel: React.FC<PaneProps> = () => {
   const history = useGameStore((s) => s.consoleHistory);
   const state = useGameStore((s) => s.state);
-  const catalog = useGameStore((s) => s.catalog);
   const scripts = useGameStore((s) => s.scripts);
+  const companyId = useGameStore((s) => s.companyId);
   const lastOut = state?.last_player_output;
   const clearConsole = useGameStore((s) => s.clearConsole);
   const appendConsoleLines = useGameStore((s) => s.appendConsoleLines);
-  const saveMemory = useGameStore((s) => s.saveMemory);
+  const refreshScripts = useGameStore((s) => s.refreshScripts);
 
   const [cmd, setCmd] = useState('');
+  const [busy, setBusy] = useState(false);
   const [cmdHistory, setCmdHistory] = useState<string[]>([]);
   const [histIdx, setHistIdx] = useState<number>(-1);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -336,7 +217,7 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
 
   const executeCommand = async () => {
     const raw = cmd.trim();
-    if (!raw) return;
+    if (!raw || busy) return;
     const tick = state?.tick ?? 0;
     setCmd('');
     setCmdHistory((prev) => [raw, ...prev.filter((x) => x !== raw)].slice(0, 60));
@@ -354,74 +235,64 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
           tick,
           level: 'system',
           message:
-            '控制台支持 F12 式 JS 表达式实时求值：例如 Game.company / Game.planets[Game.company.homePlanetId].demands / Game.market.quote("ST:HUB","steel") / Memory / clear()。完整接口见 API 参考窗口或 /docs/。',
+            '控制台直连后端 QuickJS 真沙盒（与脚本共享同一 Game 与 Memory）：可试 Game.company / Game.sites / Game.catalog.recipesByBuilding / Game.market.quote("ST:HUB","steel") / Game.lastTick / clear()。完整接口见 API 参考窗口或 /docs/。',
         },
       ]);
       return;
     }
 
-    const logsOut: Array<{ level: 'log' | 'warn' | 'error'; msg: string; values: ConsoleValue[] }> = [];
-    const fakeConsole = {
-      log: (...args: unknown[]) =>
-        logsOut.push({
-          level: 'log',
-          msg: '',
-          values: args.map((a) => toConsoleValue(a)),
-        }),
-      warn: (...args: unknown[]) =>
-        logsOut.push({
-          level: 'warn',
-          msg: '',
-          values: args.map((a) => toConsoleValue(a)),
-        }),
-      error: (...args: unknown[]) =>
-        logsOut.push({
-          level: 'error',
-          msg: '',
-          values: args.map((a) => toConsoleValue(a)),
-        }),
-    };
-
-    const { Game, Memory } = buildEvalContext(state, catalog, scripts);
-    const beforeMem = JSON.stringify(Memory);
-
+    setBusy(true);
     try {
-      const preamble = buildResourcePreamble(catalog);
-      let result: unknown;
-      try {
-        const fn = new Function('Game', 'Memory', 'console', `${preamble}\nreturn (${raw});`);
-        result = fn(Game, Memory, fakeConsole);
-      } catch {
-        const stmtFn = new Function('Game', 'Memory', 'console', `${preamble}\n${raw}`);
-        result = stmtFn(Game, Memory, fakeConsole);
-      }
-
-      const afterMem = JSON.stringify(Memory);
-      if (afterMem !== beforeMem) {
-        await saveMemory(afterMem);
-      }
-
-      const newLines: LogHistoryLine[] = [
-        { tick, level: 'input', message: raw },
-        ...logsOut.map((l) => ({ tick, level: l.level, message: l.msg, values: l.values })),
-        { tick, level: 'result', message: '', values: [toConsoleValue(result)] },
+      const resp = await api.evalConsole(companyId, raw);
+      const t = resp.tick ?? tick;
+      const lines: LogHistoryLine[] = [
+        { tick: t, level: 'input', message: raw },
+        ...resp.logs.map((l) => ({
+          tick: t,
+          level: l.level,
+          message: l.message,
+        })),
       ];
-      appendConsoleLines(newLines);
+      if (resp.error) {
+        lines.push({ tick: t, level: 'error', message: resp.error });
+      } else {
+        lines.push({
+          tick: t,
+          level: 'result',
+          message: '',
+          values: [sandboxResultToConsoleValue(resp.result)],
+        });
+        if (resp.intents_queued > 0) {
+          lines.push({
+            tick: t,
+            level: 'system',
+            message: `已入队 ${resp.intents_queued} 条动作等待下回合结算`,
+          });
+        }
+        if (resp.memory_changed) {
+          void refreshScripts();
+        }
+      }
+      appendConsoleLines(lines);
     } catch (e) {
       appendConsoleLines([
         { tick, level: 'input', message: raw },
         { tick, level: 'error', message: e instanceof Error ? e.message : String(e) },
       ]);
+    } finally {
+      setBusy(false);
     }
   };
+
+  const cpuLimit = scripts?.cpu_limit_ms ?? 10;
 
   return (
     <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between text-[11px] shrink-0">
-        <span className="font-medium">F12 交互控制台</span>
+        <span className="font-medium">F12 真沙盒控制台</span>
         <div className="flex items-center gap-3">
           <span className="mono text-[10px] text-emerald-400">
-            沙盒耗时 {(lastOut?.cpu_used_ms ?? 0).toFixed(2)} / 5.00 ms
+            沙盒耗时 {(lastOut?.cpu_used_ms ?? 0).toFixed(2)} / {cpuLimit.toFixed(2)} ms
           </span>
           <button onClick={clearConsole} className="pill-btn py-0 text-[10px]">
             清空
@@ -432,8 +303,8 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
       <div className="flex-1 overflow-y-auto p-2.5 mono text-[11px] space-y-1">
         {history.length === 0 ? (
           <div className="text-slate-500">
-            输入 JS 表达式回车即时调试（例如 <span className="text-sky-300">Game.company</span>、
-            <span className="text-sky-300">Memory</span> 或 <span className="text-sky-300">help</span>）
+            直连 QuickJS 真沙盒实时求值（例如 <span className="text-sky-300">Game.company</span>、
+            <span className="text-sky-300">Game.catalog</span> 或 <span className="text-sky-300">help</span>）
           </div>
         ) : (
           history.map((line, i) => (
@@ -457,6 +328,7 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
         <input
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
+          disabled={busy}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -480,8 +352,8 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
               }
             }
           }}
-          placeholder="输入 JS 命令回车执行，↑↓ 翻历史，help 看示例..."
-          className="flex-1 bg-transparent outline-none mono text-[11px] text-slate-100 placeholder:text-slate-500"
+          placeholder="输入 JS 命令回车进沙盒执行，↑↓ 翻历史，help 看示例..."
+          className="flex-1 bg-transparent outline-none mono text-[11px] text-slate-100 placeholder:text-slate-500 disabled:opacity-60"
         />
       </div>
     </div>

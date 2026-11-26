@@ -197,6 +197,13 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       if (!started && dx * dx + dy * dy < 25) return;
+      if (kind === 'file' && path === 'main') {
+        started = true;
+        suppressClickRef.current = true;
+        setMoveNotice('入口模块 main.js 固定在根目录，不可移动到文件夹');
+        cleanup();
+        return;
+      }
       started = true;
       suppressClickRef.current = true;
       setDragItem({ kind, path, x: ev.clientX, y: ev.clientY });
@@ -432,7 +439,7 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
           <div
             data-drop-folder={parentDir}
             onPointerDown={(e) => {
-              if (canDragFile) startPointerDrag(e, 'file', item.path);
+              if (!isRenamingThis) startPointerDrag(e, 'file', item.path);
             }}
             title={canDragFile ? '拖动到文件夹或空白根目录可移动分类' : '入口模块 main.js 固定在根目录'}
             onClick={() => {

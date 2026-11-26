@@ -6,12 +6,12 @@ export const CONSTANT_ENTRIES: DocEntry[] = [
     title: '返回码一览',
     group: '常量与返回码',
     kind: '常量',
-    summary: '所有写操作方法的同步返回码常量（OK 与 ERR_*）及触发矩阵',
-    keywords: 'OK ERR_NOT_OWNER ERR_NO_PATH ERR_BUSY ERR_NOT_FOUND ERR_NOT_ENOUGH_RESOURCES ERR_INVALID_TARGET ERR_FULL ERR_NOT_IN_RANGE ERR_INVALID_ARGS ERR_NOT_ENOUGH_CREDITS RetCode 错误码 返回码',
+    summary: 'API v2 同步影账错误码、异步落账回执机制与全方法返回码速查矩阵',
+    keywords: 'OK ERR_NOT_OWNER ERR_NO_PATH ERR_BUSY ERR_NOT_FOUND ERR_NOT_ENOUGH_RESOURCES ERR_INVALID_TARGET ERR_FULL ERR_NOT_IN_RANGE ERR_INVALID_ARGS ERR_NOT_ENOUGH_CREDITS RetCode 错误码 返回码 影账 lastTick rejected',
     blocks: [
       {
         kind: 'prose',
-        text: '所有写方法同步返回 `RetCode`（底层为整数：`0` 表示 `OK`，负数表示错误码）。返回 `OK` 仅表示请求成功进入本 tick 队列，实际物理执行仍需经过落账阶段复核。',
+        text: '所有写方法均同步返回 `RetCode` 整数状态码：`OK`（`0`）表示写请求已通过本 tick **同步预校验与影账预扣**并成功入队；负数 `ERR_*` 表示请求当场被拒绝，不会占用本 tick 的 `32` 条写操作配额，也不会产生任何副作用。',
       },
       {
         kind: 'syntax',
@@ -30,45 +30,179 @@ const ERR_INVALID_ARGS = -10;
 const ERR_NOT_ENOUGH_CREDITS = -14;`,
       },
       {
+        kind: 'note',
+        level: 'info',
+        title: '影账与异步落账回执分工',
+        text: '写方法会在本 tick 内部实时维护一份**影子账本**：连续下多笔买单、连续派船或同地块连建时，余额、库存、地块槽位与活跃挂单数都会即时扣减，并在超出时当场返回 `ERR_NOT_ENOUGH_CREDITS` / `ERR_NOT_ENOUGH_RESOURCES` / `ERR_FULL`。只有多公司并发争抢同一挂单/土地或本 tick 银行借贷利息变化等跨公司竞态，才会在落账阶段被拒，并自动写入下一 tick 的 `Game.lastTick.rejected` 与控制台警告。',
+      },
+      {
         kind: 'table',
-        title: '返回码常量定义',
-        headers: ['常量', '数值', '含义与典型触发原因'],
+        title: '返回码常量定义与触发边界',
+        headers: ['常量', '数值', '同步阶段拦截条件（即时返回）', '落账阶段触发场景（Game.lastTick.rejected）'],
         rows: [
-          ['`OK`', '`0`', '写操作请求已被沙盒受理并写入本 tick 队列（不代表落账一定成功）'],
-          ['`ERR_NOT_OWNER`', '`-1`', '目标建筑、飞船或地块不属于本公司'],
-          ['`ERR_NO_PATH`', '`-2`', '出发地到目的地之间没有可行航线（包含起点与终点相同的情况）'],
-          ['`ERR_BUSY`', '`-4`', '飞船正在航行中（`isBusy === true`），到达前无法再次派船或维修'],
-          ['`ERR_NOT_FOUND`', '`-5`', '目标行星、地块格点、挂牌、配方或订单不存在（或不在自己的挂单列表中）'],
-          ['`ERR_NOT_ENOUGH_RESOURCES`', '`-6`', '派船时出发地仓库的燃料数量不足'],
-          ['`ERR_INVALID_TARGET`', '`-7`', '目标类型不匹配或不可操作：如配方不属于该建筑、建筑类型不存在、站点/物品无效、地块非未开发空地'],
-          ['`ERR_FULL`', '`-8`', '本 tick 已用满 32 条写操作配额、活跃挂单已达 64 条上限，或飞船装货总量超过货舱容量'],
-          ['`ERR_NOT_IN_RANGE`', '`-9`', '`ship.dispatch` 的 `from` 参数与飞船当前 `location` 不一致'],
-          ['`ERR_INVALID_ARGS`', '`-10`', '参数缺失、类型错误、数值非正数或 ID 格式无法解析'],
-          ['`ERR_NOT_ENOUGH_CREDITS`', '`-14`', '挂买单时开盘现金不足 `price * totalAmount`'],
+          [
+            '`OK`',
+            '`0`',
+            '参数合法、资源/额度预扣成功并入队',
+            '仅在全部复核通过后真实落地；否则记录到 `Game.lastTick.rejected`',
+          ],
+          [
+            '`ERR_NOT_OWNER`',
+            '`-1`',
+            '目标地块、建筑或飞船不在本公司资产列表中',
+            '跨系统状态竞争导致所有权变更（如地块在同 tick 被抵押清算）',
+          ],
+          [
+            '`ERR_NO_PATH`',
+            '`-2`',
+            '`ship.dispatch(to, cargo)` 的当前位置 `ship.location` 与 `to` 之间无可达航线（含起终点相同）',
+            '星际航线拓扑校验失败',
+          ],
+          [
+            '`ERR_BUSY`',
+            '`-4`',
+            '飞船已处于航行中（`ship.isBusy === true`）或本 tick 已被同一脚本派船',
+            '同 tick 并发控制冲突导致飞船进入占用状态',
+          ],
+          [
+            '`ERR_NOT_FOUND`',
+            '`-5`',
+            '行星、空地 `slotId`、挂牌 `listingId`、订单 `orderId` 或配方不存在；同 tick 已撤单/已买走/已拆除',
+            '并发对手单已被其他玩家吃光、挂牌地已被抢购或建筑/订单已不存在',
+          ],
+          [
+            '`ERR_NOT_ENOUGH_RESOURCES`',
+            '`-6`',
+            '卖单库存不足、建厂所需地面建材不足、派船装货或燃料不足、修船维修件不足（均计入本 tick 影账已预扣部分）',
+            '跨操作消耗叠加导致结算时真实地面或站点可用库存不足',
+          ],
+          [
+            '`ERR_INVALID_TARGET`',
+            '`-7`',
+            '目标对象不合法：购买自有二手地/非空地、对自有单 `deal`、出价劣于对手最优价（违背价格优先）、买单托管余额不足、禁止自成交（同站同品正反挂单交叉）、非母星调用央行、配方禁用或建筑类型不匹配、飞船已满耐久维修',
+            '价格保护/托管额度在落账前变动、对手挂牌中途撤回、逾期借贷锁定等',
+          ],
+          [
+            '`ERR_FULL`',
+            '`-8`',
+            '本 tick 脚本写操作已达 `32` 条上限；全星系活跃挂单已达 `64` 条上限；地块空闲槽位不足；飞船混装总件数超过 `ship.capacity`',
+            '并发挂单或槽位在落账顺序中被前序结算占满',
+          ],
+          [
+            '`ERR_NOT_IN_RANGE`',
+            '`-9`',
+            '保留兼容错误码：当前所有核心实体操作均通过实体位置与星图航线自动校验',
+            '超出作用范围限制',
+          ],
+          [
+            '`ERR_INVALID_ARGS`',
+            '`-10`',
+            '参数类型错误、缺失必填字段、数值 `<= 0` 或非有限数、`totalAmount > 10000`、挂单价格超出 `min(refPrice * 100, 1_000_000)` 价格带或精确值舍入后非正数',
+            '订单名义金额溢出 `i64` 安全上限或结算价格带动态收窄',
+          ],
+          [
+            '`ERR_NOT_ENOUGH_CREDITS`',
+            '`-14`',
+            '下买单、吃卖单、买地、建厂现金施工费（`80 × Game.cpi`）、银行存款/取款（可用储蓄不足）或还款可用现金不足，或贷款逾期期间买地',
+            '多公司并发或扣费顺序导致落账时现金/储蓄/央行可贷额度不足',
+          ],
         ],
       },
       {
         kind: 'table',
-        title: '方法 × 返回码速查矩阵',
-        headers: ['方法', '可能返回的错误码', '同步校验要点'],
+        title: 'API v2 全写方法 × 返回码速查矩阵',
+        headers: ['方法', '可能同步返回的错误码', '同步校验与影账规则要点'],
         rows: [
-          ['`Game.buyPlot`', '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_FULL`', '校验行星、`slotId` / `listingId` 存在且空地处于 `unclaimed` 状态'],
-          ['`Game.buildFacility`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_INVALID_TARGET` / `ERR_FULL`', '校验地块归属与建筑类型存在（建材与施工费在落账校验）'],
-          ['`Game.demolishFacility`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_FULL`', '同步仅校验地块归属；建筑是否在该地块上于落账阶段校验'],
-          ['`Game.bank`', '`ERR_INVALID_ARGS` / `ERR_FULL`', '校验行星存在、`op` 合法且金额 `> 0`（是否母星及额度在落账校验）'],
-          ['`Game.market.createOrder`', '`ERR_INVALID_ARGS` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_FULL`', '校验方向/价格/数量、站点与物品存在、挂单数及买单现金'],
-          ['`Game.market.cancelOrder`', '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_FULL`', '校验订单 ID 为合法数字且属于本公司活跃挂单'],
-          ['`Game.market.deal`', '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_FULL`', '校验数量为正整数且目标订单在全站订单簿中存在'],
-          ['`Building.setRecipe`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_FULL`', '校验建筑归属、配方存在且 `recipe.buildingId === building.type`'],
-          ['`Building.setActive`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_FULL`', '校验 `active` 为布尔值且建筑属于本公司'],
-          ['`Ship.dispatch`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_BUSY` / `ERR_NOT_IN_RANGE` / `ERR_NO_PATH` / `ERR_FULL` / `ERR_NOT_ENOUGH_RESOURCES`', '校验船况、位置、航线、货物、载重与出发地燃料（待运货物库存于落账校验）'],
-          ['`Ship.repair`', '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_BUSY` / `ERR_FULL`', '校验飞船归属与空闲状态（耐久上限与维修品库存于落账校验）'],
+          [
+            '`Game.map.buyPlot`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_FULL`',
+            '校验行星与未认领 `slotId`，检查未逾期与一手地价并从影账预扣现金',
+          ],
+          [
+            '`Plot.build`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_INVALID_TARGET` / `ERR_FULL` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_NOT_ENOUGH_RESOURCES`',
+            '按建筑 `slots_used`、地面 `buildCost` 与 `80 × cpi` 现金同步预扣',
+          ],
+          [
+            '`Building.setRecipe`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_FULL`',
+            '校验未在本 tick 被拆除、配方存在启用且属于该建筑类型',
+          ],
+          [
+            '`Building.setActive`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_NOT_FOUND` / `ERR_FULL`',
+            '校验布尔值及建筑在本 tick 未被拆除',
+          ],
+          [
+            '`Building.demolish`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_NOT_FOUND` / `ERR_FULL`',
+            '校验建筑与地块归属，并在影账标记已拆以防同 tick 重复指令',
+          ],
+          [
+            '`Ship.dispatch`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_BUSY` / `ERR_NO_PATH` / `ERR_FULL` / `ERR_NOT_ENOUGH_RESOURCES`',
+            '自动以 `ship.location` 为起点校验航线、货舱余量及出发地货物 + 燃料影账',
+          ],
+          [
+            '`Ship.repair`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_OWNER` / `ERR_BUSY` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_RESOURCES` / `ERR_FULL`',
+            '校验空闲且有损伤、当前所在地具备维修件并预扣 `daily_goods`',
+          ],
+          [
+            '`Game.market.createOrder`',
+            '`ERR_INVALID_ARGS` / `ERR_INVALID_TARGET` / `ERR_FULL` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_NOT_ENOUGH_RESOURCES`',
+            '校验 10000 上限与价格带、禁止同站交叉自成交、预扣买单现金或卖单库存',
+          ],
+          [
+            '`Game.market.cancelOrder`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_FULL`',
+            '校验 `orderId` 为本公司活跃单且本 tick 未重复撤单',
+          ],
+          [
+            '`Game.market.deal`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_NOT_ENOUGH_RESOURCES` / `ERR_FULL`',
+            '校验价格优先、非自有单、价格带与对手剩余量，同步预扣买家现金或卖家货品',
+          ],
+          [
+            '`Game.market.buyLand`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_FULL`',
+            '校验挂牌存在、非本公司挂牌、未逾期并预扣挂牌要价',
+          ],
+          [
+            '`Game.bank.*`',
+            '`ERR_INVALID_ARGS` / `ERR_NOT_FOUND` / `ERR_INVALID_TARGET` / `ERR_NOT_ENOUGH_CREDITS` / `ERR_FULL`',
+            '校验在母星操作、金额为正及本 tick 存取借还影账额度',
+          ],
         ],
+      },
+      {
+        kind: 'example',
+        caption: '标准错误处理与上回合拒绝回执排查',
+        code: `module.exports.loop = function () {
+  // 1. 优先排查上一 tick 落账阶段被竞态拒绝的请求
+  for (const rej of Game.lastTick.rejected) {
+    console.warn('[上回合落账拒绝]', rej.action, rej.target, 'code=', rej.code, rej.reason);
+  }
+
+  // 2. 同步调用写方法时根据返回码分支决策
+  const ship = Object.values(Game.ships).find((s) => !s.isBusy);
+  if (!ship) return;
+
+  const rc = ship.dispatch('ST:HUB', { [RESOURCE_STEEL]: 10 });
+  if (rc === ERR_NOT_ENOUGH_RESOURCES) {
+    console.warn('飞船出发地钢材或燃料不足:', ship.id, ship.location);
+  } else if (rc === ERR_FULL) {
+    console.warn('货舱空间不足或本 tick 写配额已满');
+  } else if (rc !== OK) {
+    console.error('派船异常:', ship.id, 'rc=', rc);
+  }
+};`,
       },
       {
         kind: 'links',
         items: [
           { label: '执行与落账机制', id: 'guides/execution' },
+          { label: 'Game.lastTick', id: 'Game.lastTick' },
           { label: '配额与限制', id: 'guides/limits' },
           { label: '核心经济规则', id: 'guides/economy' },
         ],
@@ -85,7 +219,7 @@ const ERR_NOT_ENOUGH_CREDITS = -14;`,
     blocks: [
       {
         kind: 'prose',
-        text: '表示市场买卖方向的两个冻结字符串常量，用于 `Game.market.createOrder` 的 `params.type` 以及 `Game.market.getAllOrders` 的 `filter.type`。',
+        text: '表示市场买卖方向的两个全局冻结字符串常量，用于 `Game.market.createOrder` 的 `params.type` 以及 `Game.market.getAllOrders` 的 `filter.type`。',
       },
       {
         kind: 'syntax',
@@ -100,6 +234,7 @@ const ORDER_SELL: 'sell' = 'sell';`,
     stationId: 'ST:HUB',
     resourceType: RESOURCE_STEEL,
     type: ORDER_SELL,
+    limit: 50,
   });
   console.log('Hub 钢材卖单数:', asks.length);
 
@@ -122,6 +257,41 @@ const ORDER_SELL: 'sell' = 'sell';`,
     ],
   },
   {
+    id: 'constants/money-scale',
+    title: 'MONEY_SCALE',
+    group: '常量与返回码',
+    kind: '常量',
+    summary: '账本固定点精度缩放因子（10000，对应最小计价单位 0.0001 信用点）',
+    keywords: 'MONEY_SCALE 精度 固定点 金额 四位小数 0.0001',
+    blocks: [
+      {
+        kind: 'prose',
+        text: '底层经济账本以 `1 / MONEY_SCALE`（即 `0.0001` 信用点）为最小会计精度单位。脚本传入的价格与金额在落账前会按此精度四舍五入；使用 `Math.round(price * MONEY_SCALE) / MONEY_SCALE` 可对齐最小跳价单位，避免极小正数被舍入为 `0` 后触发 `ERR_INVALID_ARGS`。',
+      },
+      {
+        kind: 'syntax',
+        code: 'const MONEY_SCALE: 10000 = 10000;',
+      },
+      {
+        kind: 'example',
+        caption: '按固定点精度对齐挂单报价',
+        code: `module.exports.loop = function () {
+  const rawPrice = 12.34567;
+  const tickAligned = Math.round(rawPrice * MONEY_SCALE) / MONEY_SCALE;
+  console.log('最小单位:', 1 / MONEY_SCALE, '对齐价格:', tickAligned);
+};`,
+      },
+      {
+        kind: 'links',
+        items: [
+          { label: '返回码一览', id: 'constants/return-codes' },
+          { label: 'Game.market.createOrder', id: 'Game.market.createOrder' },
+          { label: '核心经济规则', id: 'guides/economy' },
+        ],
+      },
+    ],
+  },
+  {
     id: 'RESOURCES_ALL',
     title: 'RESOURCES_ALL',
     group: '常量与返回码',
@@ -131,7 +301,7 @@ const ORDER_SELL: 'sell' = 'sell';`,
     blocks: [
       {
         kind: 'prose',
-        text: '包含当前世界所有物品 ID 的已排序、已冻结字符串数组。适合用于遍历全物品行情或检查某个字符串是否为合法物品 ID。',
+        text: '包含当前世界所有物品 ID 的已排序、已冻结字符串数组。适合用于遍历全物品行情或配合 `Game.catalog.items` 构建动态产线与采购策略。',
       },
       {
         kind: 'syntax',
@@ -140,7 +310,7 @@ const ORDER_SELL: 'sell' = 'sell';`,
       {
         kind: 'note',
         level: 'info',
-        text: '该数组已被 `Object.freeze` 冻结，调用 `push` 等修改操作不会生效。不同世界配置下物品集合可能不同，脚本中建议动态遍历 `RESOURCES_ALL`。',
+        text: '该数组已被 `Object.freeze` 冻结，调用 `push` 等修改操作不会生效。建议脚本优先遍历 `RESOURCES_ALL` 而非硬编码完整物品表。',
       },
       {
         kind: 'example',
@@ -149,7 +319,7 @@ const ORDER_SELL: 'sell' = 'sell';`,
   for (const item of RESOURCES_ALL) {
     const q = Game.market.quote('ST:HUB', item);
     if (q && q.bestAsk !== null) {
-      console.log(item, '卖一:', q.bestAsk);
+      console.log(item, Game.catalog.items[item].name, '卖一:', q.bestAsk);
     }
   }
 };`,
@@ -158,6 +328,7 @@ const ORDER_SELL: 'sell' = 'sell';`,
         kind: 'links',
         items: [
           { label: 'RESOURCE_<ID>', id: 'RESOURCE_<ID>' },
+          { label: 'Game.catalog', id: 'Game.catalog' },
           { label: 'Game.market.quote', id: 'Game.market.quote' },
         ],
       },
@@ -210,17 +381,17 @@ const RESOURCE_BUILDING_MAT: 'building_mat' = 'building_mat';
     title: '默认世界建筑与配方',
     group: '常量与返回码',
     kind: '常量',
-    summary: '默认起步世界中的建筑类型 ID、建造消耗与全部配方 ID 速查表',
-    keywords: '建筑类型 配方 ID mine_smelter power_water_station steel_carbon 建造 周期 耗材',
+    summary: '默认世界建筑类型、建造成本与配方速查表（页面底部附实时加载的当前世界配置）',
+    keywords: '建筑类型 配方 ID mine_smelter power_water_station steel_carbon 建造 周期 耗材 catalog',
     blocks: [
       {
         kind: 'prose',
-        text: '供脚本直接引用的默认世界建筑类型 ID 与配方 ID 速查表。自定义生产包世界请以游戏内「工厂产线」或「物品详情」面板显示的 ID 为准。',
+        text: '下表为默认起步世界的建筑与配方速查；脚本运行时建议直接读取 `Game.catalog` 获取当前世界权威定义。页面打开网络目录数据时，下方还会同步展示实时加载的建筑与配方点击复制卡片。',
       },
       {
         kind: 'table',
-        title: '建筑类型一览（用于 Game.buildFacility）',
-        headers: ['建筑 ID', '名称 / 耗时', '建造成本（另加 80 × cpi 现金）'],
+        title: '建筑类型一览（用于 plot.build）',
+        headers: ['建筑 ID', '名称 / 耗时', '建造成本（另加 80 × Game.cpi 信用点）'],
         rows: [
           ['`power_water_station`', '能源水站（6 tick）', '6 × `building_mat`；待机耗电 `0`'],
           ['`recycling_plant`', '生态回收中心（8 tick）', '8 × `building_mat`；待机耗电 `1`'],
@@ -233,7 +404,7 @@ const RESOURCE_BUILDING_MAT: 'building_mat' = 'building_mat';
       },
       {
         kind: 'table',
-        title: '配方一览（用于 building.setRecipe 与 Game.getRecipe）',
+        title: '配方一览（用于 building.setRecipe 与 Game.catalog.recipes）',
         headers: ['配方 ID', '所属建筑（周期 / 电 / 工资）', '输入 → 输出'],
         rows: [
           ['`solar_power`', '`power_water_station`（2t / 0电 / 4.0）', '无原料 → 12 `power`'],
@@ -259,10 +430,9 @@ const RESOURCE_BUILDING_MAT: 'building_mat' = 'building_mat';
       {
         kind: 'links',
         items: [
-          { label: 'Game.buildFacility', id: 'Game.buildFacility' },
-          { label: 'Game.getRecipe', id: 'Game.getRecipe' },
+          { label: 'Plot.build', id: 'Plot.build' },
+          { label: 'Game.catalog', id: 'Game.catalog' },
           { label: 'Building.setRecipe', id: 'Building.setRecipe' },
-          { label: 'RecipeInfo', id: 'RecipeInfo' },
         ],
       },
     ],

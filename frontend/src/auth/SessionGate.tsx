@@ -3,16 +3,18 @@ import { Loader2 } from 'lucide-react';
 import { setCurrentCompany } from '../api/client';
 import { useSessionStore } from '../store/useSessionStore';
 import { AuthScreen } from './AuthScreen';
+import { OnboardingScreen } from './OnboardingScreen';
 
 /**
- * 会话闸门：启动时探测登录态，未登录渲染 AuthScreen，已登录才挂载游戏桌面。
- * 会话状态（user/status）只存在 useSessionStore 里 —— 这里不再自己持有，
- * 登出或任意接口 401 让 store 切到 anon 时，桌面会自动卸载回到登录页。
+ * 会话闸门：启动时探测登录态，未登录渲染 AuthScreen，已登录但未开局渲染 OnboardingScreen，
+ * 完成开局后挂载游戏桌面。
  */
 export const SessionGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useSessionStore((s) => s.status);
+  const user = useSessionStore((s) => s.user);
   const bootstrap = useSessionStore((s) => s.bootstrap);
   const setUser = useSessionStore((s) => s.setUser);
+  const logout = useSessionStore((s) => s.logout);
 
   // 默认按「未实现」处理：后端下线或路由缺失时给出明确提示，而不是静默失败
   const [authImplemented, setAuthImplemented] = useState(false);
@@ -35,6 +37,10 @@ export const SessionGate: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentCompany('player1');
     setDevEntered(true);
   }, []);
+
+  if (status === 'authed' && user?.needs_onboarding) {
+    return <OnboardingScreen user={user} onComplete={setUser} onLogout={logout} />;
+  }
 
   if (status === 'authed' || devEntered) return <>{children}</>;
 

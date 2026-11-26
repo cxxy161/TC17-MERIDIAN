@@ -109,8 +109,8 @@ const ORDER_BUY: 'buy' = 'buy'
 ### 4.4 写方法必须区分“两阶段校验”
 
 Meridian 采用“本 tick 同步入队 + 下一 tick 统一落账”机制，所有写方法必须写清两张清单：
-1. **同步错误码（`errors`）**：调用方法时**立刻**返回的负数错误码及触发条件。
-2. **落账阶段失败条件（`settlement`）**：调用返回 `OK` 后，在下一 tick 落账校验时仍可能导致该操作被静默丢弃的条件（如现金/库存不足、单笔超上限、价格越界、自成交、非母星央行、地块被抢、贷款逾期等）。
+1. **同步错误码（`errors`）**：调用方法时**立刻**返回的负数错误码（含影子账本预扣校验）及触发条件。
+2. **落账阶段失败条件（`settlement`）**：调用返回 `OK` 后，在下一 tick 落账校验时因跨公司竞态等原因仍可能导致操作被拒的条件（会写入下一 tick `Game.lastTick.rejected` 与控制台警告）。
 
 ---
 
@@ -120,7 +120,7 @@ Meridian 采用“本 tick 同步入队 + 下一 tick 统一落账”机制，�
 
 | 类别 | 禁止出现的内容 | 正确替代写法 |
 | :--- | :--- | :--- |
-| 内部源码路径 | `prelude.js`、`js_runner.rs`、`world.rs`、`docs/PROTOCOL.md` | 直接删除；版本栏只显示 `API v1` |
+| 内部源码路径 | `prelude.js`、`js_runner.rs`、`world.rs`、`docs/PROTOCOL.md` | 直接删除；版本栏只显示 `API v2` |
 | 内部变量/字段名 | `run_error`、`build_ticks`、`fuel_item`、`active_batch` | 译为玩家能懂的概念：如“脚本执行错误”“建造周期”“燃料物品” |
 | 底层实现术语 | `FFI`、`QuickJS Runtime`、`SQLite WAL`、`Lazy Proxy`、`prelude`、`production pack`、`catalog` | 改为“沙盒环境”“持久化存储”“按需查询”“当前世界配置” |
 | 开发者碎碎念/变更日志 | “旧文档写错了”“已移除盲盒买地”“这是当前 API 的已知缺口”“照抄会读到 undefined” | 直接陈述**当前真实规则**，不提历史坑或内部吐槽 |
@@ -331,7 +331,7 @@ Meridian 采用“本 tick 同步入队 + 下一 tick 统一落账”机制，�
       kind: 'methods',
       rows: [
         {
-          signature: 'ship.dispatch(from: string, to: string, cargo: Record<string, number>)',
+          signature: 'ship.dispatch(to: string, cargo: Record<string, number>)',
           returns: 'RetCode',
           desc: '从当前位置装货并派往目的地',
           id: 'Ship.dispatch',

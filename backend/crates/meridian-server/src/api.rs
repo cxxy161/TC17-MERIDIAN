@@ -90,6 +90,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/scripts/{company_id}", get(get_scripts_handler))
         .route("/api/scripts/{company_id}", put(put_scripts_handler))
         .route("/api/memory/{company_id}", put(put_memory_handler))
+        .route("/api/console/eval", post(post_console_eval_handler))
         .route("/api/intent", post(post_intent_handler))
         .route("/api/sim/control", post(sim_control_handler))
         .route("/api/companies", post(create_company_handler))
@@ -98,6 +99,8 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
         .route("/api/auth/me", get(me_handler))
+        .route("/api/onboarding/options", get(onboarding_options_handler))
+        .route("/api/onboarding/setup", post(onboarding_setup_handler))
         .route("/api/account", get(account_handler).patch(update_account_handler))
         .route("/api/account/password", post(change_password_handler))
         .route("/api/account/sessions/revoke", post(revoke_sessions_handler))
@@ -799,6 +802,7 @@ async fn market_candles_handler(
 struct ScriptsResp {
     company_id: String,
     enabled: bool,
+    cpu_limit_ms: u64,
     modules: BTreeMap<String, String>,
     memory_json: String,
     last_output: Option<meridian_sandbox::PlayerRunOutput>,
@@ -820,6 +824,7 @@ async fn get_scripts_handler(
     Ok(Json(ScriptsResp {
         company_id: company_id.clone(),
         enabled: pvm.enabled,
+        cpu_limit_ms: eng.runner.config.cpu_limit_ms,
         modules: pvm.bundle.modules.clone(),
         memory_json: pvm.memory_json.clone(),
         last_output: eng.runner.last_player_outputs.get(&company_id).cloned(),
@@ -923,6 +928,98 @@ async fn put_memory_handler(
 }
 
 #[derive(Deserialize)]
+struct ConsoleEvalReq {
+    company_id: String,
+    code: String,
+}
+
+async fn post_console_eval_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<ConsoleEvalReq>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    ensure_owner(&user, &req.company_id)?;
+    if req.code.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "控制台输入不能为空".to_string()));
+    }
+    if req.code.len() > 8192 {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "控制台输入长度超过 8192 字符限制".to_string()));
+    }
+
+    let company_id = req.company_id;
+    let mut eng = engine.lock().await;
+    if !eng.world.companies.contains_key(&company_id) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("Company '{company_id}' not found"),
+        ));
+    }
+
+    let tick = eng.world.tick;
+    let cpu_limit_ms = eng.runner.config.cpu_limit_ms;
+    let out = {
+        let mut runner = std::mem::take(&mut eng.runner);
+        let res = runner.eval_console(&eng.world, &company_id, &req.code);
+        eng.runner = runner;
+        res
+    }
+    .map_err(internal_error)?;
+
+    if out.error.is_none() && out.memory_changed {
+        let enabled = eng
+            .runner
+            .players
+            .get(&company_id)
+            .map(|p| p.enabled)
+            .unwrap_or(true);
+        eng.store
+            .save_player_memory(&company_id, &out.memory_json, enabled)
+            .map_err(internal_error)?;
+        eng.mark_player_memory_saved(&company_id, &out.memory_json, enabled);
+    }
+
+    let mut intents_queued = 0usize;
+    let mut queue_warning: Option<String> = None;
+    for intent in out.intents {
+        match eng.queue_manual_intent(company_id.clone(), intent) {
+            Ok(()) => intents_queued += 1,
+            Err(IntentQueueError::QueueFull { limit, .. }) => {
+                queue_warning = Some(format!("手动指令队列已达上限（{limit} 条），部分指令未入队"));
+                break;
+            }
+            Err(IntentQueueError::UnknownCompany(id)) => {
+                queue_warning = Some(format!("公司 '{id}' 不存在"));
+                break;
+            }
+        }
+    }
+
+    let result_val: serde_json::Value =
+        serde_json::from_str(&out.result_json).unwrap_or(serde_json::json!({ "kind": "undefined" }));
+    let mut logs = out.logs;
+    if let Some(w) = queue_warning {
+        logs.push(meridian_sandbox::ConsoleEntry {
+            level: meridian_sandbox::ConsoleLevel::Warn,
+            message: w,
+        });
+    }
+
+    Ok(Json(serde_json::json!({
+        "tick": tick,
+        "result": result_val,
+        "logs": logs,
+        "memory_json": out.memory_json,
+        "memory_changed": out.memory_changed,
+        "intents_queued": intents_queued,
+        "cpu_used_ms": out.cpu_used_ms,
+        "cpu_limit_ms": cpu_limit_ms,
+        "error": out.error,
+        "timed_out": out.timed_out,
+        "oom": out.oom,
+    })))
+}
+
+#[derive(Deserialize)]
 struct PostIntentReq {
     company_id: String,
     intent: Intent,
@@ -971,7 +1068,7 @@ async fn sim_control_handler(
             Ok(Json(serde_json::json!({ "ok": true, "paused": false })))
         }
         "speed" => {
-            let ms = req.tick_ms.unwrap_or(2000).clamp(0, 60_000);
+            let ms = req.tick_ms.unwrap_or(1000).clamp(0, 60_000);
             eng.tick_ms = ms;
             Ok(Json(serde_json::json!({ "ok": true, "tick_ms": ms })))
         }
@@ -1202,12 +1299,17 @@ fn user_agent(headers: &HeaderMap) -> String {
         .collect()
 }
 
-fn user_json(user: &crate::storage::UserRow) -> serde_json::Value {
+fn compute_needs_onboarding(eng: &crate::engine::GameEngine, user: &crate::storage::UserRow) -> bool {
+    user.needs_onboarding || !eng.world.companies.contains_key(&user.company_id)
+}
+
+fn user_json(user: &crate::storage::UserRow, needs_onboarding: bool) -> serde_json::Value {
     serde_json::json!({
         "company_id": user.company_id,
         "nickname": user.nickname,
         "email": user.email,
         "role": user.role,
+        "needs_onboarding": needs_onboarding,
     })
 }
 
@@ -1290,6 +1392,8 @@ struct RegisterReq {
     password: String,
     #[serde(default)]
     turnstile_token: String,
+    #[serde(default)]
+    defer_onboarding: bool,
 }
 
 async fn register_handler(
@@ -1366,8 +1470,14 @@ async fn register_handler(
     eng.store
         .set_user_company(user_id, &company_id)
         .map_err(ApiError::internal)?;
-    eng.provision_player_company(&company_id, &nickname)
-        .map_err(ApiError::internal)?;
+    if req.defer_onboarding {
+        eng.store
+            .set_user_onboarding(user_id, true)
+            .map_err(ApiError::internal)?;
+    } else {
+        eng.provision_player_company(&company_id, &nickname)
+            .map_err(ApiError::internal)?;
+    }
 
     let ttl = SESSION_TTL_DEFAULT;
     let token = new_token();
@@ -1379,7 +1489,8 @@ async fn register_handler(
         .store
         .user_by_id(user_id)
         .ok_or_else(|| ApiError::internal("用户创建失败"))?;
-    let body = user_json(&user);
+    let needs_onboarding = compute_needs_onboarding(&eng, &user);
+    let body = user_json(&user, needs_onboarding);
     drop(eng);
 
     Ok((
@@ -1469,7 +1580,7 @@ async fn login_handler(
         SESSION_TTL_DEFAULT
     };
     let token = new_token();
-    {
+    let body = {
         let eng = engine.lock().await;
         // 登录成功：清零该账号的失败计数。
         eng.auth.clear_login_failures(&lock_key);
@@ -1484,8 +1595,9 @@ async fn login_handler(
             .map_err(ApiError::internal)?;
         let _ = eng.store.set_last_login(user.id, now);
         let _ = eng.store.purge_expired_sessions(now);
-    }
-    let body = user_json(&user);
+        let needs_onboarding = compute_needs_onboarding(&eng, &user);
+        user_json(&user, needs_onboarding)
+    };
 
     Ok((
         [(
@@ -1512,8 +1624,169 @@ async fn logout_handler(
     ))
 }
 
-async fn me_handler(user: AuthUser) -> Json<serde_json::Value> {
-    Json(user_json(&user.user))
+async fn me_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+) -> Json<serde_json::Value> {
+    let eng = engine.lock().await;
+    let needs = compute_needs_onboarding(&eng, &user.user);
+    Json(user_json(&user.user, needs))
+}
+
+async fn onboarding_options_handler(
+    State(engine): State<SharedEngine>,
+    _user: AuthUser,
+) -> Json<serde_json::Value> {
+    let eng = engine.lock().await;
+    let mut prof_ids = ["env_recycle", "agri_bio", "mining_ind"]
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+    for k in eng.world.catalog.professions.keys() {
+        if !prof_ids.contains(k) {
+            prof_ids.push(k.clone());
+        }
+    }
+    let professions: Vec<serde_json::Value> = prof_ids
+        .into_iter()
+        .filter_map(|pid| eng.world.catalog.professions.get(&pid))
+        .map(|pr| {
+            let supplies: Vec<serde_json::Value> =
+                meridian_core::World::starter_supplies_for_profession(&pr.id)
+                    .into_iter()
+                    .filter_map(|(item_id, qty)| {
+                        let it = eng.world.catalog.items.get(item_id)?;
+                        Some(serde_json::json!({
+                            "item_id": item_id,
+                            "item_name": it.name,
+                            "qty": qty,
+                        }))
+                    })
+                    .collect();
+            serde_json::json!({
+                "id": pr.id,
+                "name": pr.name,
+                "demand_category": pr.demand_category,
+                "color": pr.color,
+                "description": pr.description,
+                "starter_cash": meridian_core::World::PLAYER_STARTER_CASH,
+                "starter_supplies": supplies,
+            })
+        })
+        .collect();
+
+    let mut planet_ids: Vec<String> = eng.world.planets.keys().cloned().collect();
+    planet_ids.sort();
+    let planets: Vec<serde_json::Value> = planet_ids
+        .into_iter()
+        .filter_map(|pid| {
+            let p = eng.world.planets.get(&pid)?;
+            let tiles: Vec<serde_json::Value> = eng
+                .world
+                .planet_public_tiles(&pid)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|t| t.status == "unclaimed")
+                .map(|t| {
+                    serde_json::json!({
+                        "slot_id": t.slot_id,
+                        "lat": t.lat,
+                        "lon": t.lon,
+                        "terrain_name": t.terrain_name,
+                        "capacity": t.capacity,
+                        "building_mods": t.building_mods,
+                    })
+                })
+                .collect();
+            Some(serde_json::json!({
+                "id": p.id,
+                "system_id": p.system_id,
+                "name": p.name,
+                "archetype": p.archetype,
+                "wealth_tier": p.wealth_tier,
+                "prosperity": p.prosperity,
+                "population": p.population,
+                "gravity": p.gravity,
+                "habitability": p.habitability,
+                "unclaimed_count": tiles.len(),
+                "tiles": tiles,
+            }))
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "starter_cash": meridian_core::World::PLAYER_STARTER_CASH,
+        "professions": professions,
+        "planets": planets,
+    }))
+}
+
+#[derive(Deserialize)]
+struct OnboardingSetupReq {
+    company_name: String,
+    profession: String,
+    planet_id: String,
+    slot_id: u32,
+}
+
+async fn onboarding_setup_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<OnboardingSetupReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let clean_name = req.company_name.trim().to_string();
+    let char_len = clean_name.chars().count();
+    if !(2..=24).contains(&char_len) || clean_name.chars().any(|c| c.is_control()) {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "公司名称长度须为 2–24 个有效字符",
+            "company_name",
+        ));
+    }
+    let mut eng = engine.lock().await;
+    if !compute_needs_onboarding(&eng, &user.user) {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "当前账号已完成开局创建，不能重复领取启动资产",
+        ));
+    }
+    if !eng.world.catalog.professions.contains_key(&req.profession) {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "所选职业无效",
+            "profession",
+        ));
+    }
+    if !eng.world.planets.contains_key(&req.planet_id) {
+        return Err(ApiError::field(
+            StatusCode::BAD_REQUEST,
+            "所选行星无效",
+            "planet_id",
+        ));
+    }
+
+    if let Err(err) = eng.onboard_player_company(
+        user.user.id,
+        &user.user.company_id,
+        &clean_name,
+        &req.profession,
+        &req.planet_id,
+        req.slot_id,
+    ) {
+        let status = if err.contains("已被占用") || err.contains("不可开发") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return Err(ApiError::new(status, err));
+    }
+
+    let updated = eng
+        .store
+        .user_by_id(user.user.id)
+        .unwrap_or_else(|| user.user.clone());
+    let needs = compute_needs_onboarding(&eng, &updated);
+    Ok(Json(user_json(&updated, needs)))
 }
 
 async fn account_handler(

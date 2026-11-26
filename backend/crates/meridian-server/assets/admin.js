@@ -2,11 +2,18 @@ let overview = null;
 let catalog = null;
 let compFilter = 'ALL';
 let compSearch = '';
+let compSortKey = 'net_liquid';
+let compSortDir = 'desc';
 let selectedCompId = null;
+let detailTab = 'overview';
+let rawJsonOpen = false;
 let confirmingReset = false;
 
 const ITEM_NAMES = {};
 const PROF_NAMES = {};
+const BUILDING_NAMES = {};
+const RECIPE_NAMES = {};
+const RECIPE_CYCLES = {};
 
 const fmt = (n, d = 1) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -129,6 +136,11 @@ async function loadCatalog() {
     catalog = await res.json();
     for (const it of catalog.items || []) ITEM_NAMES[it.id] = it.name;
     for (const pr of catalog.professions || []) PROF_NAMES[pr.id] = pr.name;
+    for (const b of catalog.buildings || []) BUILDING_NAMES[b.id] = b.name;
+    for (const r of catalog.recipes || []) {
+      RECIPE_NAMES[r.id] = r.name;
+      RECIPE_CYCLES[r.id] = Number(r.cycle_ticks || 1);
+    }
   } catch (_) {}
 }
 
@@ -640,7 +652,7 @@ async function resetUserPassword(uid, email) {
 function renderPlanetFilters() {
   const wrap = document.getElementById('planetFilterBtns');
   const pids = (overview.planets || []).map((p) => p.id);
-  if (!['ALL', 'PLAYER', 'NPC'].includes(compFilter) && !pids.includes(compFilter)) {
+  if (!['ALL', 'PLAYER', 'NPC', 'ALERT'].includes(compFilter) && !pids.includes(compFilter)) {
     compFilter = 'ALL';
   }
   wrap.innerHTML = pids
@@ -697,63 +709,158 @@ function renderPlanets() {
   grid.innerHTML = cards.join('');
 }
 
+function analyzeCompany(c) {
+  const blds = c.buildings || [];
+  let running = 0;
+  let idle = 0;
+  let stopped = 0;
+  for (const b of blds) {
+    if (!b.active) stopped += 1;
+    else if (b.idle_ticks > 0) idle += 1;
+    else running += 1;
+  }
+
+  let invTotal = 0;
+  for (const m of Object.values(c.ground_inv || {})) {
+    for (const q of Object.values(m || {})) invTotal += Number(q || 0);
+  }
+  for (const m of Object.values(c.station_inv || {})) {
+    for (const q of Object.values(m || {})) invTotal += Number(q || 0);
+  }
+
+  const ships = c.ships || [];
+  const inFlight = ships.filter((s) => s.is_busy).length;
+  const lowDur = ships.filter((s) => Number(s.durability || 0) < 35).length;
+
+  const alerts = [];
+  let severity = 0;
+  if (c.player_script && (c.player_script.error || c.player_script.timed_out || c.player_script.oom)) {
+    alerts.push({ cls: 'off', text: c.player_script.timed_out ? '脚本超时' : c.player_script.oom ? '脚本OOM' : '脚本异常' });
+    severity += 100;
+  }
+  if (c.distress_ticks > 0) {
+    alerts.push({ cls: 'off', text: `预警 ${c.distress_ticks}t` });
+    severity += 50 + Number(c.distress_ticks || 0);
+  }
+  if (c.net_liquid < 0) {
+    alerts.push({ cls: 'off', text: '负净资产' });
+    severity += 30;
+  }
+  if (c.debt > 0) {
+    alerts.push({ cls: 'warn', text: `负债 ${fmt(c.debt, 0)}` });
+    severity += 10;
+  }
+  if (idle > 0) {
+    alerts.push({ cls: 'warn', text: `缺料闲置 ${idle}` });
+    severity += idle * 3;
+  }
+  if (lowDur > 0) {
+    alerts.push({ cls: 'warn', text: `低耐久船 ${lowDur}` });
+    severity += lowDur * 2;
+  }
+
+  const hasIssue = alerts.length > 0 || (blds.length > 0 && running === 0);
+  return { blds, running, idle, stopped, invTotal, ships, inFlight, lowDur, alerts, severity, hasIssue };
+}
+
 function renderCompanies() {
   const planetIds = new Set((overview.planets || []).map((p) => p.id));
-  const comps = (overview.companies || []).filter((c) => {
-    if (compFilter === 'PLAYER' && !c.is_player) return false;
-    if (compFilter === 'NPC' && c.is_player) return false;
-    if (planetIds.has(compFilter) && c.home_planet_id !== compFilter) return false;
-    if (compSearch) {
-      const q = compSearch.toLowerCase();
-      if (!c.id.toLowerCase().includes(q) && !c.name.toLowerCase().includes(q)) return false;
+  const allComps = overview.companies || [];
+  const filtered = allComps
+    .map((c) => ({ c, info: analyzeCompany(c) }))
+    .filter(({ c, info }) => {
+      if (compFilter === 'PLAYER' && !c.is_player) return false;
+      if (compFilter === 'NPC' && c.is_player) return false;
+      if (compFilter === 'ALERT' && !info.hasIssue) return false;
+      if (planetIds.has(compFilter) && c.home_planet_id !== compFilter) return false;
+      if (compSearch) {
+        const q = compSearch.toLowerCase();
+        const profZh = (PROF_NAMES[c.profession] || '').toLowerCase();
+        if (
+          !c.id.toLowerCase().includes(q) &&
+          !c.name.toLowerCase().includes(q) &&
+          !c.profession.toLowerCase().includes(q) &&
+          !profZh.includes(q) &&
+          !c.home_planet_id.toLowerCase().includes(q)
+        ) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+  const mult = compSortDir === 'asc' ? 1 : -1;
+  filtered.sort((a, b) => {
+    let diff = 0;
+    if (compSortKey === 'net_liquid') {
+      diff = Number(a.c.net_liquid || 0) - Number(b.c.net_liquid || 0);
+    } else if (compSortKey === 'scale') {
+      const sa = Number(a.c.plots_count || 0) + a.info.blds.length * 2 + a.info.ships.length * 3;
+      const sb = Number(b.c.plots_count || 0) + b.info.blds.length * 2 + b.info.ships.length * 3;
+      diff = sa - sb;
+    } else if (compSortKey === 'health') {
+      diff = a.info.severity - b.info.severity;
     }
-    return true;
+    if (diff !== 0) return diff * mult;
+    return Number(b.c.net_liquid || 0) - Number(a.c.net_liquid || 0);
+  });
+
+  const badgeEl = document.getElementById('compFilteredBadge');
+  if (badgeEl) {
+    badgeEl.textContent = `(${filtered.length}/${allComps.length})`;
+  }
+  document.querySelectorAll('#compHead th.sortable').forEach((th) => {
+    const key = th.dataset.sort;
+    const baseLabel = th.textContent.replace(/[▲▼]\s*$/, '').trim();
+    const isAct = key === compSortKey;
+    th.classList.toggle('active', isAct);
+    th.textContent = isAct ? `${baseLabel} ${compSortDir === 'asc' ? '▲' : '▼'}` : baseLabel;
   });
 
   const body = document.getElementById('compBody');
-  body.innerHTML = comps.map((c) => {
-    const bTags = (c.buildings || []).map((b) => {
-      const cls = b.active ? 'on' : 'off';
-      const idleTxt = b.idle_ticks > 0 ? ` 闲${b.idle_ticks}` : '';
-      return `<span class="tag ${cls} mono">${esc(b.recipe_id)}${idleTxt}</span>`;
-    }).join('') || '<span class="muted">无设施</span>';
+  if (filtered.length === 0) {
+    body.innerHTML = '<tr><td colspan="6" class="muted" style="text-align:center;padding:18px;">当前筛选条件下暂无匹配企业</td></tr>';
+  } else {
+    body.innerHTML = filtered.map(({ c, info }) => {
+      const prodSummary = info.blds.length === 0
+        ? '<span class="muted">无设施</span>'
+        : `<span class="tag on">运转 ${info.running}/${info.blds.length}</span>` +
+          (info.idle > 0 ? `<span class="tag warn">闲 ${info.idle}</span>` : '') +
+          (info.stopped > 0 ? `<span class="tag off">停 ${info.stopped}</span>` : '');
+      const prodTip = esc(
+        info.blds
+          .map((b) => `${BUILDING_NAMES[b.building_type] || b.building_type}: ${RECIPE_NAMES[b.recipe_id] || b.recipe_id}`)
+          .join('\n'),
+      );
 
-    const gItems = Object.entries(c.ground_inv || {}).map(([pid, m]) =>
-      Object.entries(m).map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}:${q}`).join(' ')
-    ).join(' | ');
-    const sItems = Object.entries(c.station_inv || {}).map(([sid, m]) =>
-      `${esc(sid)}[` + Object.entries(m).map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}:${q}`).join(' ') + `]`
-    ).join(' ');
+      const healthHtml = info.alerts.length === 0
+        ? '<span class="tag on">健康</span>'
+        : info.alerts.slice(0, 2).map((a) => `<span class="tag ${a.cls}">${esc(a.text)}</span>`).join('') +
+          (info.alerts.length > 2 ? `<span class="tag">+${info.alerts.length - 2}</span>` : '');
 
-    const shipsTxt = (c.ships || []).map((s) => `${s.location}(${Math.round(s.durability)}%)`).join(', ');
-    const selCls = selectedCompId === c.id ? 'selected' : '';
-    return `<tr class="comp-row ${selCls}" data-cid="${esc(c.id)}">
-      <td>
-        <span class="tag ${c.is_player ? 'player' : 'npc'}">${c.is_player ? '玩家' : 'NPC'}</span>
-        <b>${esc(c.name)}</b>
-        <div class="mono muted" style="font-size:10px;">${esc(c.id)}</div>
-      </td>
-      <td>
-        <div>${esc(c.home_planet_id)}</div>
-        <div class="muted" style="font-size:10px;">${esc(PROF_NAMES[c.profession] || c.profession)}</div>
-      </td>
-      <td class="num mono ${c.net_liquid >= 0 ? 'blue' : 'red'}"><b>${fmt(c.net_liquid, 1)}</b></td>
-      <td class="num mono" style="font-size:10.5px;">
-        <div>${fmt(c.cash, 0)} / <span class="green">${fmt(c.savings, 0)}</span> / <span class="${c.debt > 0 ? 'red' : 'muted'}">${fmt(c.debt, 0)}</span></div>
-      </td>
-      <td class="num mono ${c.distress_ticks > 0 ? 'red' : 'muted'}">${c.distress_ticks}</td>
-      <td class="mono" style="font-size:10.5px;">
-        <div>地${c.plots_count} · 船${(c.ships || []).length} · 单${c.open_orders_count}</div>
-        <div class="muted" style="font-size:10px;">${esc(shipsTxt)}</div>
-      </td>
-      <td>${bTags}</td>
-      <td style="font-size:10.5px; max-width:220px; word-break:break-word;">
-        ${gItems ? `<div><span class="muted">地:</span> ${gItems}</div>` : ''}
-        ${sItems ? `<div><span class="blue">站:</span> ${sItems}</div>` : ''}
-        ${!gItems && !sItems ? '<span class="muted">空仓</span>' : ''}
-      </td>
-    </tr>`;
-  }).join('');
+      const selCls = selectedCompId === c.id ? 'selected' : '';
+      return `<tr class="comp-row ${selCls}" data-cid="${esc(c.id)}">
+        <td>
+          <div><span class="tag ${c.is_player ? 'player' : 'npc'}">${c.is_player ? '玩家' : 'NPC'}</span><b>${esc(c.name)}</b></div>
+          <div class="mono muted" style="font-size:10px;">${esc(c.id)}</div>
+        </td>
+        <td>
+          <div>${esc(c.home_planet_id)}</div>
+          <div class="muted" style="font-size:10px;">${esc(PROF_NAMES[c.profession] || c.profession)}</div>
+        </td>
+        <td class="num mono">
+          <div class="${c.net_liquid >= 0 ? 'blue' : 'red'}"><b>${fmt(c.net_liquid, 1)}</b></div>
+          <div class="muted" style="font-size:10px;">现${fmt(c.cash, 0)} / 储${fmt(c.savings, 0)}${c.debt > 0 ? ` / <span class="red">债${fmt(c.debt, 0)}</span>` : ''}</div>
+        </td>
+        <td class="num mono" style="font-size:10.5px;">
+          <div>地${c.plots_count} · 厂${info.blds.length} · 船${info.ships.length}</div>
+          <div class="muted" style="font-size:10px;">单${c.open_orders_count} · 货${info.invTotal.toLocaleString()}</div>
+        </td>
+        <td title="${prodTip}">${prodSummary}</td>
+        <td class="num">${healthHtml}</td>
+      </tr>`;
+    }).join('');
+  }
 
   body.querySelectorAll('tr.comp-row').forEach((tr) => {
     tr.onclick = () => {
@@ -763,44 +870,195 @@ function renderCompanies() {
       renderDetail();
     };
   });
+
+  if (selectedCompId) {
+    renderDetail();
+  }
+}
+
+function renderInvSection(title, mapObj) {
+  const entries = Object.entries(mapObj || {});
+  if (entries.length === 0) return '';
+  return entries.map(([loc, itemsMap]) => {
+    const chips = Object.entries(itemsMap || {})
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .map(([k, q]) => `<span class="inv-chip">${esc(ITEM_NAMES[k] || k)} <b class="mono blue">${q}</b></span>`)
+      .join('');
+    return `<div class="inv-group">
+      <div class="mono" style="font-size:10.5px;color:#cbd5e1;">${esc(title)} · <b>${esc(loc)}</b></div>
+      <div class="inv-chips">${chips || '<span class="muted">空</span>'}</div>
+    </div>`;
+  }).join('');
 }
 
 function renderDetail() {
   const titleEl = document.getElementById('detailTitle');
   const subEl = document.getElementById('detailSub');
   const box = document.getElementById('detailBox');
+
   if (selectedSandbox && selectedSandbox.company_id === selectedCompId) {
     const sb = selectedSandbox;
     const out = sb.last_output || {};
-    const logsHtml = (out.logs || []).slice(-40).map((l) =>
-      `<div class="mono" style="font-size:10.5px;">[${esc(l.level)}] ${esc(l.message)}</div>`
+    const logsHtml = (out.logs || []).slice(-60).map((l) =>
+      `<div class="mono" style="font-size:10.5px;padding:1px 0;border-bottom:1px dashed rgba(148,163,184,0.08);">[${esc(l.level)}] ${esc(l.message)}</div>`
     ).join('') || '<span class="muted">最近一次运行无控制台日志</span>';
-    titleEl.textContent = `沙盒详情 · ${sb.company_id}`;
-    subEl.innerHTML = `<button class="xs" data-action="clear-sandbox">切回企业 JSON</button>`;
+    titleEl.textContent = `沙盒实时快照 · ${sb.company_id}`;
+    subEl.innerHTML = `<button class="xs" data-action="clear-sandbox">返回企业体检</button>`;
     box.innerHTML = `
-      <div class="kv"><span>脚本状态</span><b>${sb.enabled ? '<span class="green">启用</span>' : '<span class="red">已停用</span>'} · 本回合 CPU ${Number(out.cpu_used_ms || 0).toFixed(2)} ms</b></div>
-      <div class="kv"><span>Memory 占用</span><b>${fmtBytes(sb.memory_bytes)} / ${fmtBytes(sb.memory_limit_bytes)}</b></div>
-      ${out.error ? `<div class="red mono" style="margin:6px 0;">最近异常: ${esc(out.error)}</div>` : ''}
-      <div class="muted" style="margin:6px 0 3px;">最近控制台日志：</div>
-      <div style="background:#12171f; padding:6px; border-radius:2px; margin-bottom:8px;">${logsHtml}</div>
+      <div class="kpi-grid">
+        <div class="kpi-box"><div class="kpi-label">脚本状态 / CPU</div><div class="kpi-val">${sb.enabled ? '<span class="green">运行中</span>' : '<span class="red">已停用</span>'} · ${Number(out.cpu_used_ms || 0).toFixed(2)} ms</div></div>
+        <div class="kpi-box"><div class="kpi-label">Memory 占用</div><div class="kpi-val">${fmtBytes(sb.memory_bytes)} / ${fmtBytes(sb.memory_limit_bytes)}</div></div>
+      </div>
+      ${out.error ? `<div class="tag off mono" style="display:block;padding:4px 6px;margin-bottom:8px;">最近异常: ${esc(out.error)}</div>` : ''}
+      <div class="muted" style="margin:6px 0 3px;">最近控制台日志（最多 60 条）：</div>
+      <div style="background:#12171f; padding:6px; border-radius:2px; margin-bottom:8px; max-height:170px; overflow:auto;">${logsHtml}</div>
       <div class="muted" style="margin:6px 0 3px;">Memory JSON：</div>
-      <pre style="margin-bottom:8px;">${esc(sb.memory_json)}</pre>
-      <div class="muted" style="margin:6px 0 3px;">脚本模块（${Object.keys(sb.modules || {}).length} 个）：</div>
-      <pre>${esc(JSON.stringify(sb.modules, null, 2))}</pre>
+      <pre style="margin-bottom:8px;background:#12171f;padding:6px;border-radius:2px;">${esc(sb.memory_json)}</pre>
+      <details class="raw-json"${rawJsonOpen ? ' open' : ''}>
+        <summary>展开脚本模块源码（${Object.keys(sb.modules || {}).length} 个文件）</summary>
+        <pre>${esc(JSON.stringify(sb.modules, null, 2))}</pre>
+      </details>
     `;
+    const detEl = box.querySelector('details.raw-json');
+    if (detEl) detEl.addEventListener('toggle', () => { rawJsonOpen = detEl.open; });
     return;
   }
+
   if (!selectedCompId || !overview) return;
   const comp = (overview.companies || []).find((c) => c.id === selectedCompId);
   if (!comp) {
     box.innerHTML = '<span class="muted">该企业已被清算或重置</span>';
     return;
   }
+
+  const info = analyzeCompany(comp);
   titleEl.textContent = `${comp.name} (${comp.id})`;
   subEl.innerHTML = comp.is_player
-    ? `PLAYER · ${esc(comp.home_planet_id)} <button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">查看沙盒/日志</button>`
-    : `NPC · ${esc(comp.home_planet_id)}`;
-  box.innerHTML = `<pre>${esc(JSON.stringify(comp, null, 2))}</pre>`;
+    ? `<span class="tag player">玩家</span> ${esc(comp.home_planet_id)} <button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">查看完整沙盒/日志</button>`
+    : `<span class="tag npc">NPC</span> ${esc(comp.home_planet_id)} · ${esc(PROF_NAMES[comp.profession] || comp.profession)}`;
+
+  const tabsHtml = `<div class="sub-tabs">
+    <button class="xs ${detailTab === 'overview' ? 'active' : ''}" data-action="detail-tab" data-tab="overview">总览与诊断</button>
+    <button class="xs ${detailTab === 'buildings' ? 'active' : ''}" data-action="detail-tab" data-tab="buildings">设施产线 (${info.blds.length})</button>
+    <button class="xs ${detailTab === 'assets' ? 'active' : ''}" data-action="detail-tab" data-tab="assets">舰队 (${info.ships.length}) 与库存 (${info.invTotal})</button>
+    <button class="xs ${detailTab === 'tech' ? 'active' : ''}" data-action="detail-tab" data-tab="tech">${comp.is_player ? '沙盒' : '基因'} & JSON</button>
+  </div>`;
+
+  let bodyHtml = '';
+  if (detailTab === 'overview') {
+    const alertTags = info.alerts.length > 0
+      ? info.alerts.map((a) => `<span class="tag ${a.cls}">${esc(a.text)}</span>`).join(' ')
+      : '<span class="tag on">财务与产线运转正常</span>';
+    const ps = comp.player_script;
+    const psHtml = ps
+      ? `<div class="kv"><span>玩家脚本</span><b>${ps.enabled ? '<span class="green">启用</span>' : '<span class="red">停用</span>'} · 模块 ${ps.modules_count} · Memory ${fmtBytes(ps.memory_bytes)} · CPU ${Number(ps.cpu_used_ms || 0).toFixed(2)}ms</b></div>` +
+        (ps.error ? `<div class="kv"><span>脚本异常</span><b class="red">${esc(ps.error)}</b></div>` : '')
+      : '';
+    bodyHtml = `
+      <div class="kpi-grid mono">
+        <div class="kpi-box"><div class="kpi-label">净流动资产</div><div class="kpi-val ${comp.net_liquid >= 0 ? 'blue' : 'red'}">${fmt(comp.net_liquid, 1)}</div></div>
+        <div class="kpi-box"><div class="kpi-label">现金 / 储蓄 / 负债</div><div class="kpi-val" style="font-size:11.5px;">${fmt(comp.cash, 0)} / <span class="green">${fmt(comp.savings, 0)}</span> / <span class="${comp.debt > 0 ? 'red' : 'muted'}">${fmt(comp.debt, 0)}</span></div></div>
+        <div class="kpi-box"><div class="kpi-label">产线运行状态</div><div class="kpi-val" style="font-size:12px;"><span class="green">运转 ${info.running}</span> · <span class="amber">闲置 ${info.idle}</span> · <span class="red">停机 ${info.stopped}</span></div></div>
+        <div class="kpi-box"><div class="kpi-label">资产规模</div><div class="kpi-val" style="font-size:11.5px;">地块 ${comp.plots_count} · 飞船 ${info.ships.length}(在途 ${info.inFlight}) · 挂单 ${comp.open_orders_count}</div></div>
+      </div>
+      <div style="margin-bottom:8px;"><span class="muted" style="margin-right:6px;">诊断标签:</span>${alertTags}</div>
+      <div class="kv"><span>公司职业</span><b>${esc(PROF_NAMES[comp.profession] || comp.profession)} (${esc(comp.profession)})</b></div>
+      <div class="kv"><span>母星 & 预警持续</span><b>${esc(comp.home_planet_id)} · 连续预警 ${comp.distress_ticks} tick</b></div>
+      <div class="kv"><span>全星系总在库件数</span><b class="mono">${info.invTotal.toLocaleString()} 件</b></div>
+      ${psHtml}
+    `;
+  } else if (detailTab === 'buildings') {
+    if (info.blds.length === 0) {
+      bodyHtml = '<div class="muted" style="padding:12px 0;">该公司尚未建成任何生产设施</div>';
+    } else {
+      bodyHtml = `<table>
+        <thead><tr><th>设施</th><th>行星</th><th>配方</th><th>状态 / 周期进度</th><th class="num">效率</th></tr></thead>
+        <tbody>
+          ${info.blds.map((b) => {
+            const bName = BUILDING_NAMES[b.building_type] || b.building_type;
+            const rName = RECIPE_NAMES[b.recipe_id] || b.recipe_id;
+            const cyc = RECIPE_CYCLES[b.recipe_id] || 1;
+            const pct = Math.min(100, Math.round((Number(b.progress || 0) / Math.max(1, cyc)) * 100));
+            const stTag = !b.active
+              ? '<span class="tag off">手动停机</span>'
+              : b.idle_ticks > 0
+                ? `<span class="tag warn">缺料/电闲置 ${b.idle_ticks}t</span>`
+                : '<span class="tag on">运转中</span>';
+            return `<tr>
+              <td><b>${esc(bName)}</b><div class="mono muted" style="font-size:10px;">#${b.id}</div></td>
+              <td class="mono">${esc(b.planet_id)}</td>
+              <td><div>${esc(rName)}</div><div class="mono muted" style="font-size:10px;">${esc(b.recipe_id)}</div></td>
+              <td>
+                <div>${stTag} <span class="mono muted">${b.progress}/${cyc}t</span></div>
+                <div class="bar-bg"><div class="bar-fill" style="width:${pct}%;"></div></div>
+              </td>
+              <td class="num mono">${Number(b.efficiency || 1).toFixed(2)}x</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+    }
+  } else if (detailTab === 'assets') {
+    const shipsHtml = info.ships.length === 0
+      ? '<div class="muted" style="margin-bottom:10px;">名下暂无飞船</div>'
+      : `<table style="margin-bottom:10px;">
+          <thead><tr><th>飞船</th><th>位置 / 航态</th><th>耐久</th><th>货舱载货</th></tr></thead>
+          <tbody>
+            ${info.ships.map((s) => {
+              const sz = s.size === 'large' ? '大型' : s.size === 'medium' ? '中型' : '小型';
+              const dur = Math.round(Number(s.durability || 0));
+              const durCol = dur < 35 ? '#f85149' : dur < 70 ? '#f2cc60' : '#3fb950';
+              const cargoEntries = Object.entries(s.cargo || {}).filter(([, q]) => q > 0);
+              const cargoTxt = cargoEntries.length > 0
+                ? cargoEntries.map(([k, q]) => `${esc(ITEM_NAMES[k] || k)}×${q}`).join(', ')
+                : '<span class="muted">空舱</span>';
+              return `<tr>
+                <td class="mono"><b>#${s.id}</b> (${sz}/${s.capacity})</td>
+                <td class="mono">${esc(s.location)} ${s.is_busy ? `<span class="tag warn">在途→T${s.busy_until}</span>` : '<span class="tag on">空闲</span>'}</td>
+                <td style="min-width:68px;">
+                  <div class="mono" style="font-size:10px;">${dur}%</div>
+                  <div class="bar-bg"><div class="bar-fill" style="width:${Math.min(100, dur)}%;background:${durCol};"></div></div>
+                </td>
+                <td style="font-size:10.5px;">${cargoTxt}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    const gHtml = renderInvSection('地面仓', comp.ground_inv);
+    const sHtml = renderInvSection('空间站', comp.station_inv);
+    bodyHtml = `
+      <div class="muted" style="margin-bottom:4px;font-weight:600;">舰队明细</div>
+      ${shipsHtml}
+      <div class="muted" style="margin:6px 0 4px;font-weight:600;">分站库存明细</div>
+      ${gHtml || sHtml ? gHtml + sHtml : '<div class="muted">所有地面与空间站仓库均为 0</div>'}
+    `;
+  } else {
+    const ps = comp.player_script;
+    const psBox = ps
+      ? `<div class="kv"><span>脚本状态</span><b>${ps.enabled ? '<span class="green">启用</span>' : '<span class="red">停用</span>'}</b></div>
+         <div class="kv"><span>模块数 / 日志数</span><b class="mono">${ps.modules_count} 个 / ${ps.logs_count} 条</b></div>
+         <div class="kv"><span>CPU / Memory</span><b class="mono">${Number(ps.cpu_used_ms || 0).toFixed(2)} ms · ${fmtBytes(ps.memory_bytes)}</b></div>
+         ${ps.error ? `<div class="tag off mono" style="display:block;margin-top:6px;">${esc(ps.error)}</div>` : ''}
+         <div style="margin-top:8px;"><button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">加载代码与实时控制台日志</button></div>`
+      : comp.npc_genome
+        ? `<div class="muted" style="margin-bottom:4px;">演化 NPC 参数概览</div>
+           <div class="kv"><span>风险偏好 / 挂单跨度 / 演化代际</span><b class="mono">${Object.keys(comp.npc_genome).length} 个基因字段</b></div>
+           <div class="muted" style="font-size:10.5px;margin-top:4px;">完整权重向量已收入下方原始 JSON 折叠面板，避免刷屏。</div>`
+        : '<div class="muted">无额外沙盒或基因数据</div>';
+    bodyHtml = `
+      ${psBox}
+      <details class="raw-json"${rawJsonOpen ? ' open' : ''}>
+        <summary>展开完整原始 JSON 快照</summary>
+        <pre>${esc(JSON.stringify(comp, null, 2))}</pre>
+      </details>
+    `;
+  }
+
+  box.innerHTML = tabsHtml + bodyHtml;
+  const detEl = box.querySelector('details.raw-json');
+  if (detEl) {
+    detEl.addEventListener('toggle', () => { rawJsonOpen = detEl.open; });
+  }
 }
 
 function renderMatrix() {
@@ -885,6 +1143,18 @@ document.getElementById('compFilters').addEventListener('click', (e) => {
   if (!b) return;
   compFilter = b.dataset.f;
   document.querySelectorAll('#compFilters button').forEach((x) => x.classList.toggle('active', x === b));
+  renderCompanies();
+});
+document.getElementById('compHead').addEventListener('click', (e) => {
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  const key = th.dataset.sort;
+  if (compSortKey === key) {
+    compSortDir = compSortDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    compSortKey = key;
+    compSortDir = 'desc';
+  }
   renderCompanies();
 });
 document.getElementById('compSearch').oninput = (e) => {
@@ -1006,6 +1276,9 @@ document.addEventListener('click', (e) => {
     setUserStatus(Number(btn.dataset.userId), btn.dataset.status || 'disabled', btn.dataset.nickname || '');
   } else if (action === 'clear-sandbox') {
     selectedSandbox = null;
+    renderDetail();
+  } else if (action === 'detail-tab') {
+    detailTab = btn.dataset.tab || 'overview';
     renderDetail();
   }
 });

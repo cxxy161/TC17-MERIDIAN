@@ -72,6 +72,8 @@ pub struct BuildingInstance {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteJob {
+    #[serde(default)]
+    pub id: u64,
     pub action: String, // "build" or "demolish"
     pub building_type: BuildingTypeId,
     pub finish_tick: u64,

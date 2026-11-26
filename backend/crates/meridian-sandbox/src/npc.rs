@@ -1018,10 +1018,6 @@ pub fn decide_npc_intents(
                     *type_counts.entry(b.building_type.as_str()).or_insert(0) += 1;
                 }
                 let p_sid = format!("ST:{}", target_plot.planet_id);
-                let prof_bonuses = catalog
-                    .professions
-                    .get(&snap.company.profession)
-                    .map(|pr| &pr.efficiency_bonus);
                 let mut build_ids: Vec<&String> = catalog.buildings.keys().collect();
                 build_ids.sort();
                 let best_btype = build_ids
@@ -1043,9 +1039,7 @@ pub fn decide_npc_intents(
                             && (same_cnt == 0 || cash_f > 1200.0 * snap.cpi)
                     })
                     .filter_map(|bt| {
-                        let mod_val = target_plot.building_mods.get(bt).copied().unwrap_or(1.0);
-                        let prof_b = prof_bonuses.and_then(|m| m.get(bt)).copied().unwrap_or(1.0);
-                        let eff = mod_val * prof_b;
+                        let eff = target_plot.building_mods.get(bt).copied().unwrap_or(1.0);
                         let best_rec_score = catalog
                             .recipes_by_building
                             .get(bt)
@@ -1079,7 +1073,7 @@ pub fn decide_npc_intents(
                             })
                             .fold(f64::NEG_INFINITY, f64::max);
                         if best_rec_score > -0.5 {
-                            Some((bt, best_rec_score + (prof_b - 1.0) * 2.0))
+                            Some((bt, best_rec_score))
                         } else {
                             None
                         }

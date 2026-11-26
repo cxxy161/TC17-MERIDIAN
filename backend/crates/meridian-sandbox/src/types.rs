@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use meridian_core::Intent;
+use meridian_core::{Intent, RejectedIntent};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -102,6 +102,42 @@ pub struct PlayerRunOutput {
     pub intents: Vec<Intent>,
     pub memory_json: String,
     pub logs: Vec<ConsoleEntry>,
+    pub cpu_used_ms: f64,
+    pub error: Option<String>,
+    pub timed_out: bool,
+    pub oom: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JsLastTickFill {
+    pub tick: u64,
+    pub station_id: String,
+    pub item_id: String,
+    pub side: String,
+    pub qty: u32,
+    pub price: f64,
+    pub notional: f64,
+    pub fee: f64,
+    pub buyer_refund: f64,
+    pub counterparty_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastTickFeedback {
+    pub fills: Vec<JsLastTickFill>,
+    pub rejected: Vec<RejectedIntent>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleEvalOutput {
+    pub result_json: String,
+    pub logs: Vec<ConsoleEntry>,
+    pub intents: Vec<Intent>,
+    pub memory_json: String,
+    pub memory_changed: bool,
     pub cpu_used_ms: f64,
     pub error: Option<String>,
     pub timed_out: bool,

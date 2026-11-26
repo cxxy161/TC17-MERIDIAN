@@ -15,11 +15,12 @@ export const ApiDocsPanel: React.FC<PaneProps> = ({ params, setParams }) => {
   );
 
   return (
-    <div className="h-full overflow-hidden bg-[#0b1017] text-slate-200">
+    <div className="h-full overflow-hidden bg-[#1e242d] text-slate-200">
       <DocView
         variant="pane"
         docId={params.docId}
         items={items}
+        catalog={catalog}
         onNavigate={(id) => setParams({ docId: id })}
       />
     </div>

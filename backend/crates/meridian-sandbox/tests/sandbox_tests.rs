@@ -32,7 +32,7 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
             Memory.runs = (Memory.runs || 0) + 1;
 
             // Validate script constants & dynamic RESOURCES_ALL
-            if (OK !== 0 || RESOURCE_POWER !== 'power' || !Array.isArray(RESOURCES_ALL)) {
+            if (OK !== 0 || MONEY_SCALE !== 10000 || RESOURCE_POWER !== 'power' || !Array.isArray(RESOURCES_ALL)) {
                 throw new Error('Missing script constants');
             }
 
@@ -44,23 +44,26 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
             if (p1.groundStore.power <= 0) {
                 throw new Error('Expected starter power on P1 groundStore');
             }
+            if (!p1.stationId || !Game.stations[p1.stationId] || !Game.systems[p1.systemId]) {
+                throw new Error('Expected planet.stationId, Game.stations, and Game.systems');
+            }
 
-            // Validate lazy Market & Recipe FFI + positional Land Plots API
-            const q = Game.market.quote('ST:HUB', RESOURCE_STEEL);
-            const r = Game.getRecipe('steel_electric');
-            const route = Game.market.calcRoute('P1', 'ST:P1');
-            const tiles = Game.market.getLandPlots('P1');
+            // Validate lazy Market/Map & Catalog API
+            const q = Game.market.quote(p1.stationId, RESOURCE_STEEL);
+            const r = Game.catalog.recipes['steel_electric'];
+            const route = Game.map.calcRoute('P1', p1.stationId);
+            const tiles = Game.map.getLandPlots('P1');
             if (!Array.isArray(tiles) || tiles.length < 10) {
-                throw new Error('Expected Game.market.getLandPlots(P1) to return planet surface grid');
+                throw new Error('Expected Game.map.getLandPlots(P1) to return planet surface grid');
             }
             const freeTile = tiles.find((t) => t.status === 'unclaimed');
             if (!freeTile || typeof freeTile.slotId !== 'number' || typeof freeTile.lat !== 'number') {
                 throw new Error('Expected unclaimed tile with slotId and lat/lon');
             }
-            console.log('tick', Game.time, 'steel_last', q && q.lastPrice, 'route', route && route.ticks, 'freeSlot', freeTile.slotId);
+            console.log('tick', Game.time, 'steel_last', q && q.lastPrice, 'route', route && route.ticks, 'kind', route && route.kind, 'freeSlot', freeTile.slotId);
 
-            if (!r || r.id !== 'steel_electric') {
-                throw new Error('Expected Game.getRecipe to return steel_electric');
+            if (!r || r.id !== 'steel_electric' || !Array.isArray(Game.catalog.recipesByBuilding[r.buildingId])) {
+                throw new Error('Expected Game.catalog.recipes and recipesByBuilding');
             }
 
             // Emit valid Intents cleanly using helper module
@@ -76,9 +79,9 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
             const codes = [];
             const ships = Object.values(Game.ships);
             if (ships.length > 0 && !ships[0].isBusy && ships[0].location === 'P1') {
-                codes.push(ships[0].dispatch('P1', 'ST:P1', { power: 5 }));
-                // Wrong origin should return ERR_NOT_IN_RANGE (-9) without queuing intent
-                codes.push(ships[0].dispatch('P2', 'ST:P2', { power: 1 }));
+                codes.push(ships[0].dispatch('ST:P1', { power: 5 }));
+                // Second dispatch in the same tick must be caught by shadow state -> ERR_BUSY (-4)
+                codes.push(ships[0].dispatch('ST:P2', { power: 1 }));
             }
             // Invalid recipe returns ERR_NOT_FOUND (-5)
             const blds = Object.values(Game.buildings);
@@ -92,13 +95,13 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
                 totalAmount: 4,
                 stationId: 'ST:HUB',
             }));
-            codes.push(Game.bank('P1', 'deposit', 100));
-            const targetTile = (Game.market.getLandPlots('P1') || []).find((t) => t.status === 'unclaimed');
+            codes.push(Game.bank.deposit(100));
+            const targetTile = (Game.map.getLandPlots('P1') || []).find((t) => t.status === 'unclaimed');
             if (targetTile) {
-                codes.push(Game.buyPlot('P1', { slotId: targetTile.slotId }));
+                codes.push(Game.map.buyPlot('P1', targetTile.slotId));
             }
-            // Missing position object should return ERR_INVALID_ARGS (-10)
-            codes.push(Game.buyPlot('P1'));
+            // Missing slotId should return ERR_INVALID_ARGS (-10)
+            codes.push(Game.map.buyPlot('P1'));
             return codes;
         };
     "#,
@@ -121,7 +124,7 @@ fn test_player_script_api_multimodule_memory_store_and_intents() {
 
     let mem1: serde_json::Value = serde_json::from_str(&out1.memory_json).unwrap();
     assert_eq!(mem1["runs"], 1);
-    assert_eq!(mem1["lastCodes"], serde_json::json!([0, -9, -5, 0, 0, 0, -10]));
+    assert_eq!(mem1["lastCodes"], serde_json::json!([0, -4, -5, 0, 0, 0, -10]));
 
     // Tick 2 confirms Memory persistence
     runner.step_world(&mut world);
@@ -144,7 +147,7 @@ fn test_infinite_loop_timeout_rolls_back_intents_and_memory() {
         r#"
         module.exports.loop = function () {
             Memory.corrupted = true;
-            Game.bank('P2', 'deposit', 50);
+            Game.bank.deposit(50);
             while (true) {}
         };
     "#,
@@ -249,7 +252,7 @@ fn test_parallel_runner_with_npcs_preserves_conservation() {
             module.exports.loop = function () {
                 const ship = Object.values(Game.ships)[0];
                 if (ship && !ship.isBusy && ship.location === 'P1' && Game.planets['P1'].groundStore.ore > 0) {
-                    ship.dispatch('P1', 'ST:P1', { ore: Math.min(10, Game.planets['P1'].groundStore.ore) });
+                    ship.dispatch('ST:P1', { ore: Math.min(10, Game.planets['P1'].groundStore.ore) });
                 }
                 const st = Game.stations['ST:P1'];
                 if (st && st.store.ore > 0) {
@@ -378,7 +381,7 @@ fn test_public_company_queries_omit_secrets() {
         PlayerScriptBundle::single_main(
             r#"
             module.exports.loop = function() {
-              const list = Game.market.listCompanies({ query: 'Vexor' });
+              const list = Game.map.listCompanies({ query: 'Vexor' });
               if (list.length !== 1) throw new Error('expected 1 search result, got ' + list.length);
               const row = list[0];
               if (row.id !== 'npc_riv') throw new Error('wrong company id: ' + row.id);
@@ -389,13 +392,13 @@ fn test_public_company_queries_omit_secrets() {
                 if (forbidden in row) throw new Error('summary leaked forbidden field: ' + forbidden);
               }
 
-              const detail = Game.market.getCompany('npc_riv');
+              const detail = Game.map.getCompany('npc_riv');
               if (!detail || detail.id !== 'npc_riv') throw new Error('missing detail');
               if (detail.plots.length < 1) throw new Error('expected rival plots');
               for (const forbidden of ['profession', 'cash', 'savings', 'debt', 'groundInv', 'stationInv', 'ships']) {
                 if (forbidden in detail) throw new Error('detail leaked forbidden field: ' + forbidden);
               }
-              if (Game.market.getCompany('nonexistent') !== null) {
+              if (Game.map.getCompany('nonexistent') !== null) {
                 throw new Error('unknown company should return null');
               }
               Memory.verified = true;
@@ -451,7 +454,8 @@ fn test_vm_reuse_lazy_listings_split_timing_and_dirty_reset() {
               Memory.warmHits = warmHits;
               Memory.tickSeen = Game.time;
               Memory.listingsCount = Game.planets['P1'].landListings.length;
-              Memory.marketCredits = Game.market.credits;
+              Memory.listingPrice = Game.planets['P1'].landListings[0].price;
+              Memory.cash = Game.company.cash;
               if (Game.cpu.limit !== 10) {
                 throw new Error('unexpected cpu limit: ' + Game.cpu.limit);
               }
@@ -500,4 +504,108 @@ fn test_vm_reuse_lazy_listings_split_timing_and_dirty_reset() {
     assert!(runner.players["p_vm"].vm.is_none(), "timed-out VM must be dropped");
     let m3: serde_json::Value = serde_json::from_str(&out3.memory_json).unwrap();
     assert_eq!(m3["warmHits"], 2, "Memory must roll back to last healthy tick");
+}
+
+#[test]
+fn test_v2_sites_shadow_checks_last_tick_and_console_eval() {
+    let catalog = load_catalog();
+    let mut world = World::new_standard(catalog);
+    world
+        .spawn_company("p_v2", "V2 Tester", true, "mining_ind", "P1", 15_000.0)
+        .unwrap();
+    world
+        .spawn_company("npc_fast", "Fast Buyer", false, "mining_ind", "P1", 15_000.0)
+        .unwrap();
+
+    // Give p_v2 enough materials on P1 to fill the plot cleanly
+    let build_cost = world.catalog.buildings["mine_smelter"].build_cost.clone();
+    let comp = world.companies.get_mut("p_v2").unwrap();
+    for req in &build_cost {
+        comp.add_ground_qty("P1", &req.item, (req.qty * 10) as i64);
+    }
+
+    let mut runner = SimulationRunner::new(PlayerRunConfig::default());
+    runner.set_player_script(
+        "p_v2",
+        PlayerScriptBundle::single_main(
+            r#"
+            module.exports.loop = function () {
+                if (Game.time === 0) {
+                    // Non-home bank must reject synchronously -> ERR_INVALID_TARGET (-7)
+                    Memory.bankNonHome = Game.bank.deposit(10, 'P2');
+                    // Home bank succeeds
+                    Memory.bankHome = Game.bank.deposit(20, 'P1');
+                    const plot = Object.values(Game.plots)[0];
+                    let built = 0;
+                    while (plot.build('mine_smelter') === OK) {
+                        built += 1;
+                    }
+                    Memory.builtCount = built;
+                    Memory.buildOver = plot.build('mine_smelter'); // should hit ERR_FULL (-8)
+                } else {
+                    const sites = Object.values(Game.sites);
+                    Memory.sitesCount = sites.length;
+                    const plot = Object.values(Game.plots)[0];
+                    Memory.plotSitesCount = plot.sites.length;
+                    Memory.firstSiteTicks = sites[0] ? sites[0].ticksRemaining : -1;
+                    Memory.objLookupOk = !!(sites[0] && Game.getObjectById(sites[0].id));
+                }
+            };
+        "#,
+        ),
+    );
+
+    let rep1 = runner.step_world(&mut world);
+    assert_eq!(rep1.rejected_intents, 0);
+    let out1 = &runner.last_player_outputs["p_v2"];
+    assert!(out1.error.is_none(), "tick1 err: {:?}", out1.error);
+    let m1: serde_json::Value = serde_json::from_str(&out1.memory_json).unwrap();
+    assert_eq!(m1["bankNonHome"], -7);
+    assert_eq!(m1["bankHome"], 0);
+    assert!(m1["builtCount"].as_u64().unwrap() >= 1);
+    assert_eq!(m1["buildOver"], -8, "shadow plot slots must prevent false OK");
+
+    runner.step_world(&mut world);
+    let out2 = &runner.last_player_outputs["p_v2"];
+    assert!(out2.error.is_none(), "tick2 err: {:?}", out2.error);
+    let m2: serde_json::Value = serde_json::from_str(&out2.memory_json).unwrap();
+    assert_eq!(m2["sitesCount"], m1["builtCount"]);
+    assert_eq!(m2["sitesCount"], m2["plotSitesCount"]);
+    assert_eq!(m2["objLookupOk"], true);
+
+    // Console eval uses the exact same QuickJS Game & Memory
+    let eval_out = runner
+        .eval_console(
+            &world,
+            "p_v2",
+            "Memory.consoleCheck = Object.keys(Game.sites).length; Game.catalog.recipesByBuilding['mine_smelter']",
+        )
+        .expect("console eval");
+    assert!(eval_out.error.is_none(), "console err: {:?}", eval_out.error);
+    assert!(eval_out.memory_changed);
+    assert!(eval_out.result_json.contains("mine_ore"));
+
+    // Verify lastTick.rejected delivers rejection feedback if settlement rejects an extra manual intent
+    runner.extra_intents.entry("p_v2".to_string()).or_default().push(
+        meridian_core::Intent::BankOp {
+            planet_id: "P2".to_string(),
+            op: meridian_core::BankOpKind::Deposit,
+            amount: 100,
+        },
+    );
+    let rep3 = runner.step_world(&mut world);
+    assert_eq!(rep3.rejected_intents, 1);
+    let eval_last = runner
+        .eval_console(&world, "p_v2", "Game.lastTick.rejected")
+        .expect("read rejected");
+    assert!(eval_last.error.is_none(), "{:?}", eval_last.error);
+    assert!(eval_last.result_json.contains("home planet"));
+
+    // Empty-cargo dispatch (return trip) returns OK and sets ship in flight
+    let eval_empty_ship = runner
+        .eval_console(&world, "p_v2", "Object.values(Game.ships)[0].dispatch('ST:P1')")
+        .expect("empty ship dispatch");
+    assert!(eval_empty_ship.error.is_none(), "{:?}", eval_empty_ship.error);
+    assert!(eval_empty_ship.result_json.contains("\"value\":0"), "got {}", eval_empty_ship.result_json);
+    assert_eq!(eval_empty_ship.intents.len(), 1);
 }

@@ -428,9 +428,24 @@ export interface MarketCandlesResp {
 export interface ScriptsResp {
   company_id: string;
   enabled: boolean;
+  cpu_limit_ms?: number;
   modules: Record<string, string>;
   memory_json: string;
   last_output: PlayerRunOutput | null;
+}
+
+export interface ConsoleEvalResp {
+  tick: number;
+  result: { kind: string; value?: unknown };
+  logs: Array<{ level: 'log' | 'warn' | 'error'; message: string }>;
+  memory_json: string;
+  memory_changed: boolean;
+  intents_queued: number;
+  cpu_used_ms: number;
+  cpu_limit_ms: number;
+  error: string | null;
+  timed_out: boolean;
+  oom: boolean;
 }
 
 export type IntentPayload =

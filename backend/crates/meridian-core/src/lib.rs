@@ -27,7 +27,7 @@ pub use schema::{
 };
 pub use snapshot::{
     PublicCompanyDetail, PublicCompanyPlotView, PublicCompanySummary, PublicLandTileView,
-    SharedSnapshot, ShipCountsView, WorldSnapshot,
+    SharedSnapshot, ShipCountsView, SiteView, WorldSnapshot,
 };
 pub use types::*;
 pub use world::{TickReport, World};

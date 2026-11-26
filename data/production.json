@@ -33,33 +33,27 @@
       "name": "环境能源与回收",
       "demand_category": "env_support",
       "color": "#38bdf8",
-      "description": "提供水/电/氧/推进燃料，并回收城市废料赚处理凭证与再生原料。",
+      "description": "统筹电力、净水、氧气、推进燃料与城市垃圾回收链条，用稳健的民生刚需开启星际基业。",
       "starter_buildings": ["power_water_station", "recycling_plant"],
-      "efficiency_bonus": {
-        "recycling_plant": 1.15
-      }
+      "efficiency_bonus": {}
     },
     {
       "id": "agri_bio",
       "name": "生态农食与轻纺",
       "demand_category": "daily_life",
       "color": "#3fb950",
-      "description": "培育作物、裂解生物纤维(碳)喂给重工与服装线，加工口粮和饮料。",
+      "description": "依托生物作物培育口粮、饮料与日用衣物，并向上下游供应冶炼碳源与轻工原料。",
       "starter_buildings": ["bio_greenhouse", "consumer_workshop"],
-      "efficiency_bonus": {
-        "bio_greenhouse": 1.15
-      }
+      "efficiency_bonus": {}
     },
     {
       "id": "mining_ind",
       "name": "矿业与重工基建",
       "demand_category": "infra_tools",
       "color": "#f0883e",
-      "description": "开采矿石、双工艺炼钢、生产建材、日用维修件并建造货船。",
+      "description": "起步深耕矿石、钢材、结构建材与日用维修品供应链，掌握工业扩张与星际造船根基。",
       "starter_buildings": ["mine_smelter", "infra_factory"],
-      "efficiency_bonus": {
-        "mine_smelter": 1.15
-      }
+      "efficiency_bonus": {}
     }
   ],
   "items": [

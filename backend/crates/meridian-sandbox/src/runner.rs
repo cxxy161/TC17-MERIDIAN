@@ -7,12 +7,15 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use meridian_core::{CompanyId, Intent, ProductionCatalog, TickReport, World};
+use meridian_core::{from_money, CompanyId, Intent, ProductionCatalog, TickReport, World};
 use rayon::prelude::*;
 
 use crate::js_runner::PlayerVmHandle;
 use crate::npc::{decide_npc_intents, NpcGenome};
-use crate::types::{PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle};
+use crate::types::{
+    ConsoleEntry, ConsoleEvalOutput, ConsoleLevel, JsLastTickFill, LastTickFeedback,
+    PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle,
+};
 
 pub struct PlayerVmState {
     pub bundle: PlayerScriptBundle,
@@ -58,6 +61,7 @@ pub struct SimulationRunner {
     pub extra_intents: HashMap<CompanyId, Vec<Intent>>,
     pub config: PlayerRunConfig,
     pub last_player_outputs: HashMap<CompanyId, PlayerRunOutput>,
+    pub last_tick_feedback: HashMap<CompanyId, LastTickFeedback>,
     pub last_timing: StepTiming,
 }
 
@@ -69,6 +73,7 @@ impl Default for SimulationRunner {
             extra_intents: HashMap::new(),
             config: PlayerRunConfig::default(),
             last_player_outputs: HashMap::new(),
+            last_tick_feedback: HashMap::new(),
             last_timing: StepTiming::default(),
         }
     }
@@ -114,17 +119,67 @@ impl SimulationRunner {
         self.npc_genomes.insert(company_id.into(), genome);
     }
 
+    pub fn eval_console(
+        &mut self,
+        world: &World,
+        company_id: &str,
+        code: &str,
+    ) -> Result<ConsoleEvalOutput, String> {
+        let Some(snap) = world.snapshot_for(company_id) else {
+            return Err(format!("company '{company_id}' not found"));
+        };
+        let snap = Arc::new(snap);
+        let cat = Arc::new(world.catalog.clone());
+        let feedback = self.last_tick_feedback.get(company_id).cloned();
+        let entry = self
+            .players
+            .entry(company_id.to_string())
+            .or_default();
+        let bundle = Arc::new(entry.bundle.clone());
+        let prev_mem = entry.memory_json.clone();
+        let mut vm_opt = entry.vm.take();
+        let mut vm = match vm_opt.take() {
+            Some(v) => v,
+            None => PlayerVmHandle::new(
+                Arc::clone(&snap),
+                Arc::clone(&cat),
+                Arc::clone(&bundle),
+                &prev_mem,
+                &self.config,
+            )?,
+        };
+        let (out, keep) = vm.eval_console(
+            snap,
+            cat,
+            bundle,
+            &prev_mem,
+            &self.config,
+            feedback.as_ref(),
+            code,
+        );
+        if keep {
+            if out.memory_changed {
+                entry.memory_json = out.memory_json.clone();
+            }
+            if entry.enabled {
+                entry.vm = Some(vm);
+            }
+        }
+        Ok(out)
+    }
+
     /// Execute one complete tick:
     /// 1. Precompute immutable shared snapshot data once per tick.
     /// 2. Run NPC policy brains in parallel (`npc_ms`), then run persistent Player QuickJS VMs
     ///    in a separate parallel pass (`players_ms`) so NPC work never contends with player budgets.
-    /// 3. Update player VMs, Memory & console outputs, then step `World::step_tick`.
+    /// 3. Update player VMs, Memory & console outputs, then step `World::step_tick_with_manual`.
     pub fn step_world(&mut self, world: &mut World) -> TickReport {
         struct PlayerJob {
             cid: CompanyId,
             bundle: Arc<PlayerScriptBundle>,
             memory_json: String,
             vm: Option<PlayerVmHandle>,
+            last_tick: Option<LastTickFeedback>,
         }
         struct NpcJob<'a> {
             cid: CompanyId,
@@ -141,6 +196,7 @@ impl SimulationRunner {
                 continue;
             };
             if comp.is_player {
+                let last_tick = self.last_tick_feedback.get(&cid).cloned();
                 if let Some(pvm) = self.players.get_mut(&cid) {
                     if pvm.enabled {
                         player_jobs.push(PlayerJob {
@@ -148,6 +204,7 @@ impl SimulationRunner {
                             bundle: Arc::new(pvm.bundle.clone()),
                             memory_json: pvm.memory_json.clone(),
                             vm: pvm.vm.take(),
+                            last_tick,
                         });
                     } else {
                         pvm.vm = None;
@@ -199,12 +256,13 @@ impl SimulationRunner {
                         let mut vm_opt = job.vm;
                         let (out, next_vm) = match vm_opt.take() {
                             Some(mut vm) => {
-                                let (out, keep) = vm.run_tick(
+                                let (out, keep) = vm.run_tick_with_feedback(
                                     snap,
                                     cat,
                                     job.bundle,
                                     &job.memory_json,
                                     config,
+                                    job.last_tick.as_ref(),
                                 );
                                 (out, if keep { Some(vm) } else { None })
                             }
@@ -217,12 +275,13 @@ impl SimulationRunner {
                                     config,
                                 ) {
                                     Ok(mut vm) => {
-                                        let (out, keep) = vm.run_tick(
+                                        let (out, keep) = vm.run_tick_with_feedback(
                                             snap,
                                             cat,
                                             job.bundle,
                                             &job.memory_json,
                                             config,
+                                            job.last_tick.as_ref(),
                                         );
                                         (out, if keep { Some(vm) } else { None })
                                     }
@@ -250,32 +309,26 @@ impl SimulationRunner {
         let actors_ms = npc_ms + players_ms;
 
         let mut intents_by_company =
-            Vec::with_capacity(npc_outcomes.len() + player_outcomes.len() + self.extra_intents.len());
-        let mut extra = std::mem::take(&mut self.extra_intents);
+            Vec::with_capacity(npc_outcomes.len() + player_outcomes.len());
+        let extra = std::mem::take(&mut self.extra_intents);
+        let mut manual_intents_by_company: Vec<(CompanyId, Vec<Intent>)> = extra
+            .into_iter()
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+        manual_intents_by_company.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (cid, mut intents) in npc_outcomes {
-            if let Some(mut manual) = extra.remove(&cid) {
-                intents.append(&mut manual);
-            }
+        for (cid, intents) in npc_outcomes {
             if !intents.is_empty() {
                 intents_by_company.push((cid, intents));
             }
         }
         for (cid, pout, next_vm) in player_outcomes {
-            let mut intents = pout.intents.clone();
+            let intents = pout.intents.clone();
             if let Some(pvm) = self.players.get_mut(&cid) {
                 pvm.memory_json = pout.memory_json.clone();
                 pvm.vm = if pvm.enabled { next_vm } else { None };
             }
             self.last_player_outputs.insert(cid.clone(), pout);
-            if let Some(mut manual) = extra.remove(&cid) {
-                intents.append(&mut manual);
-            }
-            if !intents.is_empty() {
-                intents_by_company.push((cid, intents));
-            }
-        }
-        for (cid, intents) in extra {
             if !intents.is_empty() {
                 intents_by_company.push((cid, intents));
             }
@@ -283,7 +336,7 @@ impl SimulationRunner {
         intents_by_company.sort_by(|a, b| a.0.cmp(&b.0));
 
         let t2 = Instant::now();
-        let report = world.step_tick(intents_by_company);
+        let report = world.step_tick_with_manual(intents_by_company, manual_intents_by_company);
         let world_tick_ms = t2.elapsed().as_secs_f64() * 1000.0;
         self.last_timing = StepTiming {
             snapshot_ms,
@@ -292,6 +345,62 @@ impl SimulationRunner {
             actors_ms,
             world_tick_ms,
         };
+
+        // Record per-company last-tick fills and rejected intents for next tick's `Game.lastTick`
+        self.last_tick_feedback.clear();
+        for fill in &report.fills {
+            let price = from_money(fill.price);
+            let notional = from_money(fill.notional);
+            let fee = from_money(fill.fee);
+            let refund = from_money(fill.buyer_refund);
+            self.last_tick_feedback
+                .entry(fill.buyer_id.clone())
+                .or_default()
+                .fills
+                .push(JsLastTickFill {
+                    tick: fill.tick,
+                    station_id: fill.station_id.clone(),
+                    item_id: fill.item_id.clone(),
+                    side: "buy".to_string(),
+                    qty: fill.qty,
+                    price,
+                    notional,
+                    fee,
+                    buyer_refund: refund,
+                    counterparty_id: fill.seller_id.clone(),
+                });
+            self.last_tick_feedback
+                .entry(fill.seller_id.clone())
+                .or_default()
+                .fills
+                .push(JsLastTickFill {
+                    tick: fill.tick,
+                    station_id: fill.station_id.clone(),
+                    item_id: fill.item_id.clone(),
+                    side: "sell".to_string(),
+                    qty: fill.qty,
+                    price,
+                    notional,
+                    fee,
+                    buyer_refund: 0.0,
+                    counterparty_id: fill.buyer_id.clone(),
+                });
+        }
+        for (cid, rejs) in &report.rejected_by_company {
+            let entry = self.last_tick_feedback.entry(cid.clone()).or_default();
+            entry.rejected = rejs.clone();
+            if let Some(pout) = self.last_player_outputs.get_mut(cid) {
+                for r in rejs {
+                    pout.logs.push(ConsoleEntry {
+                        level: ConsoleLevel::Warn,
+                        message: format!(
+                            "[engine] tick {} 动作 {}({}) 结算失败 [{}]: {}",
+                            report.tick, r.action, r.target, r.code, r.reason
+                        ),
+                    });
+                }
+            }
+        }
 
         // Respawn bankrupt NPC slots cleanly or prune dead NPC genomes
         for dead_cid in &report.bankruptcies {
