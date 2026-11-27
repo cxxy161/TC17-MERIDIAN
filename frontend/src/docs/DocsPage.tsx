@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BookOpen, Home, Printer } from 'lucide-react';
+import { ArrowLeft, Home, Printer } from 'lucide-react';
 import { DocView } from './DocView';
 import { DEFAULT_DOC_ID, DOC_VERSION, docTitle } from './apiDocs';
 import type { ProductionPack } from '../types/meridian';
+import { MeridianLogo } from '../components/MeridianLogo';
 
 function readHash(): string | undefined {
   const raw = window.location.hash.replace(/^#/, '');
@@ -69,7 +70,7 @@ export const DocsPage: React.FC = () => {
           返回游戏
         </a>
         <div className="flex items-center gap-2">
-          <BookOpen size={14} className="text-sky-400" />
+          <MeridianLogo className="w-4 h-4 shrink-0" />
           <span className="text-[13px] font-medium tracking-wide text-slate-100">
             Meridian 脚本 API 参考
           </span>

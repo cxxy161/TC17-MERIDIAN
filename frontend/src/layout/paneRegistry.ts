@@ -8,6 +8,7 @@ export type PaneKind =
   | 'land'
   | 'demand'
   | 'factory'
+  | 'production'
   | 'cargo'
   | 'fleet'
   | 'ticker'
@@ -86,7 +87,14 @@ export const PANE_CATALOG: PaneMeta[] = [
   { kind: 'demand', label: '城市需求', description: '本回合城市消费需求与本地报价', group: '观察' },
   { kind: 'items', label: '物品总表', description: '全物品检索：持有、挂单、行情、用途', group: '观察', keywords: '物品 目录 索引 搜索 全部' },
   { kind: 'item', label: '物品详情', description: '单个物品的配方、库存分布、全站行情、我的挂单', group: '观察', keywords: '物品 详情 配方 用途' },
-  { kind: 'factory', label: '工厂产线', description: '地块槽位、建筑建造与热切配方', group: '生产' },
+  { kind: 'factory', label: '我的工厂', description: '地块槽位、建筑建造与热切配方', group: '生产' },
+  {
+    kind: 'production',
+    label: '产线图鉴',
+    description: '全星系工厂建筑造价与生产配方静态图鉴（原料、产出与周期）',
+    group: '生产',
+    keywords: '产线 图鉴 配方 工厂 建筑 造价 原料 产出 recipe building',
+  },
   { kind: 'cargo', label: '仓库库存', description: '查看任一地点库存（可搜索/只看有货）', group: '生产' },
   { kind: 'fleet', label: '舰队调度', description: '飞船状态、混装派船运输与修船', group: '生产' },
   { kind: 'ticker', label: '全站行情', description: '按站点查看买一/卖一/最新价（可搜索排序）', group: '贸易' },
@@ -146,7 +154,13 @@ export function paneTitle(kind: PaneKind, params: PaneParams | undefined, ctx: T
     case 'demand':
       return `需求 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
     case 'factory':
-      return `产线 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+      return `我的工厂 · ${p.planetId ? world.planetName(p.planetId) : NOT_CHOSEN}`;
+    case 'production':
+      return p.buildingId
+        ? `产线图鉴 · ${catalog.buildingName(p.buildingId)}`
+        : p.itemId
+          ? `产线图鉴 · ${itemTitle(catalog, p.itemId)}`
+          : '产线图鉴';
     case 'cargo':
       return `仓库 · ${p.locationId ? world.locationLabel(p.locationId) : NOT_CHOSEN}`;
     case 'fleet':

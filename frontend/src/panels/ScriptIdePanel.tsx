@@ -262,6 +262,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
   const updateDraftModule = useGameStore((s) => s.updateDraftModule);
   const createDraftModule = useGameStore((s) => s.createDraftModule);
   const saveDraftScripts = useGameStore((s) => s.saveDraftScripts);
+  const discardDraftScripts = useGameStore((s) => s.discardDraftScripts);
 
   const [addingFile, setAddingFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
@@ -269,6 +270,7 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
 
   const editorHostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const lastLocalDocRef = useRef<{ mod: string; code: string } | null>(null);
 
   const topLevelCompletions = useMemo<Completion[]>(() => {
     const items = catalog?.items ?? [];
@@ -411,7 +413,9 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
         ]),
         EditorView.updateListener.of((upd) => {
           if (upd.docChanged) {
-            updateDraftRef.current(activeMod, upd.state.doc.toString());
+            const code = upd.state.doc.toString();
+            lastLocalDocRef.current = { mod: activeMod, code };
+            updateDraftRef.current(activeMod, code);
           }
         }),
         EditorView.theme(
@@ -471,17 +475,19 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
     };
   }, [activeMod]);
 
-  // Sync content when active file is updated externally (e.g., reset or initial load)
+  // Sync content when active file is updated externally (e.g., reset, draft restore, or discard)
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const expected = draftModules[activeMod] ?? scripts?.modules[activeMod] ?? '';
-    if (view.state.doc.toString() !== expected && !dirty) {
+    const isOwnTypingEcho =
+      lastLocalDocRef.current?.mod === activeMod && lastLocalDocRef.current?.code === expected;
+    if (view.state.doc.toString() !== expected && !isOwnTypingEcho) {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: expected },
       });
     }
-  }, [draftModules, scripts, activeMod, dirty]);
+  }, [draftModules, scripts, activeMod]);
 
   const handleSave = async () => {
     await saveDraftScripts();
@@ -551,6 +557,15 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
           <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
             耗时 {cpuMs.toFixed(2)} / {(scripts?.cpu_limit_ms ?? 10).toFixed(2)} ms
           </span>
+          {dirty && (
+            <button
+              onClick={() => discardDraftScripts()}
+              className="pill-btn py-0 text-[10px] text-amber-300 border-amber-500/40 whitespace-nowrap"
+              title="放弃未保存的本地浏览器草稿，恢复为服务端当前运行的脚本"
+            >
+              放弃草稿
+            </button>
+          )}
           <button onClick={() => void handleSave()} className="cta-green text-[10px] py-0.5 whitespace-nowrap">
             {dirty ? '保存并热重载 *' : saveNote || '保存热重载'}
           </button>

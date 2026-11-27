@@ -11,6 +11,7 @@ import {
   User,
 } from 'lucide-react';
 import { ApiError, authApi, setCurrentCompany, type AuthConfig, type SessionUser } from '../api/client';
+import { MeridianLogo } from '../components/MeridianLogo';
 
 type Mode = 'login' | 'register';
 
@@ -319,10 +320,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
       <div className="relative z-10 flex h-full items-center justify-center px-6 py-8">
         <div className="grid w-full max-w-[860px] items-center gap-12 md:grid-cols-[1fr_360px]">
           {/* 品牌栏：只放名称与标语，不暴露任何运行时/环境信息 */}
-          <div className="hidden select-none md:block">
-            <h1 className="text-[34px] font-semibold tracking-[0.30em] text-slate-100">MERIDIAN</h1>
-            <div className="mt-2 text-[11px] tracking-[0.18em] text-slate-500">
-              星际供应链 · 实时经济模拟
+          <div className="hidden select-none md:flex items-center gap-4">
+            <MeridianLogo framed className="w-14 h-14 shrink-0" />
+            <div>
+              <h1 className="text-[34px] font-semibold tracking-[0.30em] text-slate-100">MERIDIAN</h1>
+              <div className="mt-1.5 text-[11px] tracking-[0.18em] text-slate-500">
+                星际供应链 · 实时经济模拟
+              </div>
             </div>
           </div>
 

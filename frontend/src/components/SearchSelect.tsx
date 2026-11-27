@@ -76,6 +76,10 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
+  const [scrollTarget, setScrollTarget] = useState<{ index: number; seq: number }>({
+    index: 0,
+    seq: 0,
+  });
   const [facetSel, setFacetSel] = useState<Record<string, string | undefined>>({});
   const [rect, setRect] = useState<{ top: number; left: number; width: number; maxHeight: number }>({
     top: 0,
@@ -190,12 +194,15 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
   useEffect(() => {
     if (open) {
       setQuery('');
-      setActive(0);
+      const selectedIdx = value ? options.findIndex((o) => o.id === value) : -1;
+      const initIdx = selectedIdx >= 0 ? selectedIdx : 0;
+      setActive(initIdx);
+      setScrollTarget((prev) => ({ index: initIdx, seq: prev.seq + 1 }));
       window.setTimeout(() => inputRef.current?.focus(), 10);
     } else {
       setFacetSel({});
     }
-  }, [open]);
+  }, [open, value, options]);
 
   const commit = useCallback(
     (id: string) => {
@@ -213,12 +220,20 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((v) => Math.min(measured.length - 1, v + 1));
+      setActive((v) => {
+        const next = Math.min(Math.max(0, measured.length - 1), v + 1);
+        setScrollTarget((prev) => ({ index: next, seq: prev.seq + 1 }));
+        return next;
+      });
       return;
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActive((v) => Math.max(0, v - 1));
+      setActive((v) => {
+        const next = Math.max(0, v - 1);
+        setScrollTarget((prev) => ({ index: next, seq: prev.seq + 1 }));
+        return next;
+      });
       return;
     }
     if (e.key === 'Enter') {
@@ -321,6 +336,8 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
               count={measured.length}
               rowHeight={ROW_HEIGHT}
               className="h-full overflow-y-auto"
+              scrollToIndex={scrollTarget.index}
+              scrollTrigger={scrollTarget.seq}
               emptyState={
                 <div className="px-3 py-4 text-[11px] text-slate-500">
                   没有匹配项{options.length > 0 ? `（共 ${options.length} 个可选）` : ''}
@@ -328,16 +345,23 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
               }
               renderRow={(idx) => {
                 const opt = measured[idx];
+                const isSel = opt.id === value;
+                const isAct = idx === active;
                 return (
                   <button
                     onMouseEnter={() => setActive(idx)}
                     onClick={() => !opt.disabled && commit(opt.id)}
                     disabled={opt.disabled}
                     className={`w-full text-left px-2 flex items-center justify-between gap-2 h-[24px] rounded-sm disabled:opacity-40 ${
-                      idx === active ? 'bg-sky-500/20 text-sky-100' : 'text-slate-300 hover:bg-sky-500/10'
+                      isAct
+                        ? 'bg-sky-500/25 text-white'
+                        : isSel
+                          ? 'bg-sky-500/10 text-sky-200'
+                          : 'text-slate-300'
                     }`}
                   >
-                    <span className="truncate text-[11px]">
+                    <span className="truncate text-[11px] flex items-center gap-1.5">
+                      {isSel && <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />}
                       <Highlight text={opt.label} query={query} />
                     </span>
                     <span className="flex items-center gap-2 shrink-0">

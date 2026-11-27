@@ -57,6 +57,92 @@ function mergeQuoteHistory(
 }
 
 const FOLDERS_STORAGE_KEY = 'meridian.script_folders.v1';
+const DRAFT_STORAGE_PREFIX = 'meridian.script_draft.v1.';
+
+interface StoredScriptDraft {
+  modules: Record<string, string>;
+  activeModule?: string;
+}
+
+function loadScriptDraft(companyId: string): StoredScriptDraft | null {
+  try {
+    const raw = window.localStorage.getItem(`${DRAFT_STORAGE_PREFIX}${companyId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const obj = parsed as { modules?: unknown; activeModule?: unknown };
+    if (!obj.modules || typeof obj.modules !== 'object' || Array.isArray(obj.modules)) return null;
+    const cleanMods: Record<string, string> = {};
+    for (const [k, v] of Object.entries(obj.modules)) {
+      if (typeof v === 'string') cleanMods[k] = v;
+    }
+    if (Object.keys(cleanMods).length === 0) return null;
+    return {
+      modules: cleanMods,
+      activeModule: typeof obj.activeModule === 'string' ? obj.activeModule : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveScriptDraft(companyId: string, modules: Record<string, string>, activeModule: string): void {
+  try {
+    window.localStorage.setItem(
+      `${DRAFT_STORAGE_PREFIX}${companyId}`,
+      JSON.stringify({ modules, activeModule, savedAt: Date.now() }),
+    );
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function clearScriptDraft(companyId: string): void {
+  try {
+    window.localStorage.removeItem(`${DRAFT_STORAGE_PREFIX}${companyId}`);
+  } catch {
+    // ignore
+  }
+}
+
+function modulesEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ka = Object.keys(a);
+  const kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
+function resolveInitialDraftState(
+  companyId: string,
+  serverMods: Record<string, string>,
+  currentActive: string,
+): { draftModules: Record<string, string>; scriptDirty: boolean; activeScriptModule: string } {
+  const stored = loadScriptDraft(companyId);
+  if (stored && !modulesEqual(stored.modules, serverMods)) {
+    const active =
+      stored.activeModule && stored.modules[stored.activeModule] !== undefined
+        ? stored.activeModule
+        : stored.modules[currentActive] !== undefined
+          ? currentActive
+          : stored.modules.main !== undefined
+            ? 'main'
+            : Object.keys(stored.modules)[0] ?? 'main';
+    return { draftModules: stored.modules, scriptDirty: true, activeScriptModule: active };
+  }
+  if (stored) {
+    clearScriptDraft(companyId);
+  }
+  const active =
+    serverMods[currentActive] !== undefined
+      ? currentActive
+      : serverMods.main !== undefined
+        ? 'main'
+        : Object.keys(serverMods)[0] ?? 'main';
+  return { draftModules: serverMods, scriptDirty: false, activeScriptModule: active };
+}
 
 function loadFolders(): string[] {
   try {
@@ -107,6 +193,7 @@ interface GameStore {
   simControl: (action: 'pause' | 'resume' | 'step' | 'speed' | 'reset', tickMs?: number) => Promise<void>;
   saveScripts: (modules: Record<string, string>, enabled?: boolean) => Promise<void>;
   saveDraftScripts: () => Promise<void>;
+  discardDraftScripts: () => void;
   saveMemory: (memoryJson: string) => Promise<void>;
   setActiveScriptModule: (name: string) => void;
   updateDraftModule: (name: string, code: string) => void;
@@ -157,15 +244,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
         api.getScripts(get().companyId).catch(() => null),
       ]);
       const mods = scripts?.modules ?? {};
-      set((prev) => ({
-        catalog,
-        state,
-        scripts,
-        quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
-        draftModules: prev.scriptDirty ? prev.draftModules : mods,
-        activeScriptModule: mods[prev.activeScriptModule] !== undefined ? prev.activeScriptModule : (mods.main !== undefined ? 'main' : Object.keys(mods)[0] ?? 'main'),
-        lastError: null,
-      }));
+      set((prev) => {
+        if (prev.scriptDirty) {
+          return {
+            catalog,
+            state,
+            scripts,
+            quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
+            lastError: null,
+          };
+        }
+        const resolved = resolveInitialDraftState(prev.companyId, mods, prev.activeScriptModule);
+        return {
+          catalog,
+          state,
+          scripts,
+          quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
+          draftModules: resolved.draftModules,
+          scriptDirty: resolved.scriptDirty,
+          activeScriptModule: resolved.activeScriptModule,
+          lastError: null,
+        };
+      });
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
@@ -327,11 +427,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   refreshScripts: async () => {
     try {
-      const scripts = await api.getScripts(get().companyId);
-      set((prev) => ({
-        scripts,
-        draftModules: prev.scriptDirty ? prev.draftModules : scripts.modules,
-      }));
+      const cid = get().companyId;
+      const scripts = await api.getScripts(cid);
+      set((prev) => {
+        if (prev.scriptDirty) return { scripts };
+        const resolved = resolveInitialDraftState(cid, scripts.modules, prev.activeScriptModule);
+        return {
+          scripts,
+          draftModules: resolved.draftModules,
+          scriptDirty: resolved.scriptDirty,
+          activeScriptModule: resolved.activeScriptModule,
+        };
+      });
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
     }
@@ -410,7 +517,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   saveScripts: async (modules, enabled) => {
     try {
-      await api.saveScripts(get().companyId, modules, enabled);
+      const cid = get().companyId;
+      await api.saveScripts(cid, modules, enabled);
+      clearScriptDraft(cid);
       set({ scriptDirty: false, draftModules: modules });
       await get().refreshScripts();
     } catch (e) {
@@ -424,6 +533,23 @@ export const useGameStore = create<GameStore>((set, get) => ({
     await get().saveScripts(toSave, scripts?.enabled ?? true);
   },
 
+  discardDraftScripts: () => {
+    const { companyId, scripts, activeScriptModule } = get();
+    clearScriptDraft(companyId);
+    const serverMods = scripts?.modules ?? { main: '' };
+    const nextActive =
+      serverMods[activeScriptModule] !== undefined
+        ? activeScriptModule
+        : serverMods.main !== undefined
+          ? 'main'
+          : Object.keys(serverMods)[0] ?? 'main';
+    set({
+      draftModules: serverMods,
+      scriptDirty: false,
+      activeScriptModule: nextActive,
+    });
+  },
+
   saveMemory: async (memoryJson) => {
     try {
       await api.saveMemory(get().companyId, memoryJson);
@@ -433,25 +559,49 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
-  setActiveScriptModule: (name) => set({ activeScriptModule: name }),
+  setActiveScriptModule: (name) =>
+    set((prev) => {
+      if (prev.scriptDirty) {
+        saveScriptDraft(prev.companyId, prev.draftModules, name);
+      }
+      return { activeScriptModule: name };
+    }),
 
   updateDraftModule: (name, code) =>
-    set((prev) => ({
-      draftModules: { ...prev.draftModules, [name]: code },
-      scriptDirty: true,
-    })),
+    set((prev) => {
+      const base =
+        Object.keys(prev.draftModules).length > 0
+          ? prev.draftModules
+          : (prev.scripts?.modules ?? {});
+      const next = { ...base, [name]: code };
+      const dirty = !modulesEqual(next, prev.scripts?.modules ?? {});
+      if (dirty) saveScriptDraft(prev.companyId, next, name);
+      else clearScriptDraft(prev.companyId);
+      return {
+        draftModules: next,
+        scriptDirty: dirty,
+      };
+    }),
 
   createDraftModule: (name, code) => {
     const clean = name.trim().replace(/^\/+|\/+$/g, '').replace(/\.js$/, '');
     if (!clean) return;
-    set((prev) => ({
-      draftModules: {
-        ...prev.draftModules,
-        [clean]: prev.draftModules[clean] ?? code ?? `// 模块 ${clean}.js\nexports.run = function () {\n  \n};\n`,
-      },
-      activeScriptModule: clean,
-      scriptDirty: true,
-    }));
+    set((prev) => {
+      const base =
+        Object.keys(prev.draftModules).length > 0
+          ? prev.draftModules
+          : (prev.scripts?.modules ?? {});
+      const next = {
+        ...base,
+        [clean]: base[clean] ?? code ?? `// 模块 ${clean}.js\nexports.run = function () {\n  \n};\n`,
+      };
+      saveScriptDraft(prev.companyId, next, clean);
+      return {
+        draftModules: next,
+        activeScriptModule: clean,
+        scriptDirty: true,
+      };
+    });
   },
 
   renameDraftModule: (oldName, newName) => {
@@ -466,10 +616,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const next = { ...base };
       next[clean] = next[oldName];
       delete next[oldName];
+      const nextActive = prev.activeScriptModule === oldName ? clean : prev.activeScriptModule;
+      const dirty = !modulesEqual(next, prev.scripts?.modules ?? {});
+      if (dirty) saveScriptDraft(prev.companyId, next, nextActive);
+      else clearScriptDraft(prev.companyId);
       return {
         draftModules: next,
-        activeScriptModule: prev.activeScriptModule === oldName ? clean : prev.activeScriptModule,
-        scriptDirty: true,
+        activeScriptModule: nextActive,
+        scriptDirty: dirty,
       };
     });
   },
@@ -488,10 +642,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
         prev.activeScriptModule === name
           ? (next.main !== undefined ? 'main' : Object.keys(next)[0] ?? 'main')
           : prev.activeScriptModule;
+      const dirty = !modulesEqual(next, prev.scripts?.modules ?? {});
+      if (dirty) saveScriptDraft(prev.companyId, next, nextActive);
+      else clearScriptDraft(prev.companyId);
       return {
         draftModules: next,
         activeScriptModule: nextActive,
-        scriptDirty: true,
+        scriptDirty: dirty,
       };
     });
   },
@@ -521,11 +678,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set((prev) => {
       const nextMods: Record<string, string> = {};
       const prefix = `${cleanOld}/`;
-      let changed = false;
       for (const [k, v] of Object.entries(prev.draftModules)) {
         if (k.startsWith(prefix)) {
           nextMods[`${cleanNew}/${k.slice(prefix.length)}`] = v;
-          changed = true;
         } else {
           nextMods[k] = v;
         }
@@ -543,11 +698,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const nextActive = prev.activeScriptModule.startsWith(prefix)
         ? `${cleanNew}/${prev.activeScriptModule.slice(prefix.length)}`
         : prev.activeScriptModule;
+      const dirty = !modulesEqual(nextMods, prev.scripts?.modules ?? {});
+      if (dirty) saveScriptDraft(prev.companyId, nextMods, nextActive);
+      else clearScriptDraft(prev.companyId);
       return {
         draftModules: nextMods,
         scriptFolders: nextFolders,
         activeScriptModule: nextActive,
-        scriptDirty: prev.scriptDirty || changed,
+        scriptDirty: dirty,
       };
     });
   },
@@ -558,11 +716,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set((prev) => {
       const prefix = `${clean}/`;
       const nextMods: Record<string, string> = {};
-      let changed = false;
       for (const [k, v] of Object.entries(prev.draftModules)) {
-        if (k.startsWith(prefix)) {
-          changed = true;
-        } else {
+        if (!k.startsWith(prefix)) {
           nextMods[k] = v;
         }
       }
@@ -571,11 +726,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const nextActive = prev.activeScriptModule.startsWith(prefix)
         ? (nextMods.main !== undefined ? 'main' : Object.keys(nextMods)[0] ?? 'main')
         : prev.activeScriptModule;
+      const dirty = !modulesEqual(nextMods, prev.scripts?.modules ?? {});
+      if (dirty) saveScriptDraft(prev.companyId, nextMods, nextActive);
+      else clearScriptDraft(prev.companyId);
       return {
         draftModules: nextMods,
         scriptFolders: nextFolders,
         activeScriptModule: nextActive,
-        scriptDirty: prev.scriptDirty || changed,
+        scriptDirty: dirty,
       };
     });
   },

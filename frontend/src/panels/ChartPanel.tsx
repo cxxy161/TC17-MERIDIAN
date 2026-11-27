@@ -28,6 +28,27 @@ const PAGE_BUCKETS = 600;
 const DEFAULT_VISIBLE_BARS = 64;
 const MAX_ALL_HISTORY_BARS = 6000;
 const PERIOD_OPTIONS = [1, 5, 15, 60] as const;
+const CHART_PERIOD_STORAGE_KEY = 'meridian.chart.period.v1';
+
+function loadSavedPeriod(): number {
+  try {
+    const raw = window.localStorage.getItem(CHART_PERIOD_STORAGE_KEY);
+    if (!raw) return 1;
+    const n = Number(raw);
+    if ((PERIOD_OPTIONS as readonly number[]).includes(n)) return n;
+  } catch {
+    // ignore storage errors
+  }
+  return 1;
+}
+
+function savePeriodPref(period: number): void {
+  try {
+    window.localStorage.setItem(CHART_PERIOD_STORAGE_KEY, String(period));
+  } catch {
+    // ignore storage errors
+  }
+}
 
 const UP_COLOR = '#3fb950';
 const DOWN_COLOR = '#f85149';
@@ -340,7 +361,11 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
   const stationId =
     params.stationId ?? world.stations.find((s) => s.isHub)?.id ?? world.stations[0]?.id ?? '';
   const itemId = params.itemId ?? catalogIdx.items[0]?.id ?? '';
-  const [period, setPeriod] = useState<number>(1);
+  const [period, setPeriod] = useState<number>(() => loadSavedPeriod());
+  const updatePeriod = useCallback((next: number) => {
+    savePeriodPref(next);
+    setPeriod(next);
+  }, []);
   const [hoverBar, setHoverBar] = useState<HoverReadout | null>(null);
   const [historySlice, setHistorySlice] = useState<HistorySlice | null>(null);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
@@ -995,7 +1020,7 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
         PERIOD_OPTIONS.find((p) => Math.floor(effectiveTick / p) + 1 <= MAX_ALL_HISTORY_BARS) ?? 60;
       pendingFitAllRef.current = true;
       if (chosen !== period) {
-        setPeriod(chosen);
+        updatePeriod(chosen);
         return;
       }
     }
@@ -1098,7 +1123,7 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
           {PERIOD_OPTIONS.map((p) => (
             <button
               key={p}
-              onClick={() => setPeriod(p)}
+              onClick={() => updatePeriod(p)}
               className={`pill-btn py-0 text-[10px] ${period === p ? 'active' : ''}`}
             >
               {p}回合

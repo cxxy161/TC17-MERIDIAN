@@ -35,6 +35,7 @@ use crate::storage::{CandleRow, TradeRow};
 
 const ADMIN_HTML: &str = include_str!("../assets/admin.html");
 const ADMIN_JS: &str = include_str!("../assets/admin.js");
+const FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
 
 /// 请求体上限（2 MiB）。
 const MAX_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -71,6 +72,7 @@ static ALLOWED_ORIGINS: LazyLock<Vec<HeaderValue>> = LazyLock::new(|| {
 
 pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
     let api_router = Router::new()
+        .route("/favicon.svg", get(favicon_handler))
         .route("/admin", get(admin_page_handler))
         .route("/admin.html", get(admin_page_handler))
         .route("/admin.js", get(admin_js_handler))
@@ -318,6 +320,16 @@ struct HealthResp {
 
 async fn admin_page_handler() -> Html<&'static str> {
     Html(ADMIN_HTML)
+}
+
+async fn favicon_handler() -> ([(header::HeaderName, &'static str); 2], &'static str) {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        FAVICON_SVG,
+    )
 }
 
 async fn admin_js_handler() -> ([(header::HeaderName, &'static str); 1], &'static str) {

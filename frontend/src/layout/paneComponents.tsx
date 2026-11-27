@@ -8,6 +8,7 @@ import { PlanetPanel } from '../panels/PlanetPanel';
 import { LandPanel } from '../panels/LandPanel';
 import { DemandPanel } from '../panels/DemandPanel';
 import { FactoryPanel } from '../panels/FactoryPanel';
+import { ProductionCatalogPanel } from '../panels/ProductionCatalogPanel';
 import { CargoPanel } from '../panels/CargoPanel';
 import { FleetPanel } from '../panels/FleetPanel';
 import { TickerPanel } from '../panels/TickerPanel';
@@ -31,6 +32,7 @@ const PANEL_COMPONENTS: Record<PaneKind, React.FC<PaneProps>> = {
   land: LandPanel,
   demand: DemandPanel,
   factory: FactoryPanel,
+  production: ProductionCatalogPanel,
   cargo: CargoPanel,
   fleet: FleetPanel,
   ticker: TickerPanel,

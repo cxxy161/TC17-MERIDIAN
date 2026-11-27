@@ -10,6 +10,9 @@ export interface VirtualListProps {
   emptyState?: React.ReactNode;
   /** Optional fixed height; when omitted the list measures its own box. */
   height?: number;
+  /** Ensure this item index is visible whenever index or trigger changes. */
+  scrollToIndex?: number | null;
+  scrollTrigger?: number;
 }
 
 /**
@@ -25,6 +28,8 @@ export const VirtualList: React.FC<VirtualListProps> = ({
   overscan = 6,
   emptyState,
   height,
+  scrollToIndex,
+  scrollTrigger,
 }) => {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -47,6 +52,20 @@ export const VirtualList: React.FC<VirtualListProps> = ({
     ro.observe(el);
     return () => ro.disconnect();
   }, [height]);
+
+  useEffect(() => {
+    if (scrollToIndex === undefined || scrollToIndex === null || scrollToIndex < 0) return;
+    const el = hostRef.current;
+    if (!el) return;
+    const vh = el.clientHeight || viewport;
+    const rowTop = scrollToIndex * rowHeight;
+    const rowBottom = rowTop + rowHeight;
+    if (rowTop < el.scrollTop || rowBottom > el.scrollTop + vh) {
+      const target = Math.max(0, rowTop - Math.max(0, vh - rowHeight) / 2);
+      el.scrollTop = target;
+      setScrollTop(target);
+    }
+  }, [scrollToIndex, scrollTrigger, rowHeight, viewport]);
 
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);

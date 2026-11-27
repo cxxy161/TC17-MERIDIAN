@@ -22,6 +22,7 @@ import {
 import type { PlanetSummary } from '../types/meridian';
 import { Planet3DCanvas } from '../components/Planet3DCanvas';
 import { StarSystemOrbitSvg } from '../components/StarSystemOrbitSvg';
+import { MeridianLogo } from '../components/MeridianLogo';
 
 export interface OnboardingScreenProps {
   user: SessionUser;
@@ -308,6 +309,7 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({
       {/* Header */}
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[rgba(56,189,248,0.16)] bg-[#232a36] px-4 py-2">
         <div className="flex flex-wrap items-center gap-2.5">
+          <MeridianLogo className="w-5 h-5 shrink-0" />
           <span className="inline-flex items-center gap-1.5 rounded-[2px] border border-sky-400/35 bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold tracking-[0.16em] text-sky-300">
             MERIDIAN · 星际开局勘探
           </span>

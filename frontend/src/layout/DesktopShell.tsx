@@ -15,6 +15,7 @@ import {
   ShoppingBag,
   Terminal,
   Trophy,
+  Workflow,
   X,
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
@@ -49,6 +50,7 @@ import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SplitLayout } from './SplitLayout';
 import { FloatingWindowsLayer } from './FloatingWindowsLayer';
 import { CommandPalette } from './CommandPalette';
+import { MeridianLogo } from '../components/MeridianLogo';
 
 /**
  * Rail entries carry no entity ids: what they open is resolved from the player's last focused
@@ -58,7 +60,8 @@ const RAIL_BUTTONS: Array<{ kind: PaneKind; label: string; icon: React.ReactNode
   { kind: 'orbit', label: '星图', icon: <Compass className="w-4 h-4" /> },
   { kind: 'planet', label: '行星', icon: <Globe2 className="w-4 h-4" /> },
   { kind: 'demand', label: '需求', icon: <ShoppingBag className="w-4 h-4" /> },
-  { kind: 'factory', label: '产线', icon: <Factory className="w-4 h-4" /> },
+  { kind: 'factory', label: '工厂', icon: <Factory className="w-4 h-4" /> },
+  { kind: 'production', label: '图鉴', icon: <Workflow className="w-4 h-4" /> },
   { kind: 'cargo', label: '仓库', icon: <Box className="w-4 h-4" /> },
   { kind: 'fleet', label: '舰队', icon: <Rocket className="w-4 h-4" /> },
   { kind: 'items', label: '物品', icon: <PackageSearch className="w-4 h-4" /> },
@@ -362,11 +365,7 @@ export const DesktopShell: React.FC = () => {
       <header className="h-9 bg-[#1f2630] border-b border-sky-500/15 px-3 flex items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex items-center gap-2 pr-3 border-r border-slate-800 shrink-0">
-            <svg viewBox="0 0 24 24" className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <circle cx="12" cy="12" r="9" />
-              <ellipse cx="12" cy="12" rx="4" ry="9" stroke="#34d399" />
-              <line x1="3" y1="12" x2="21" y2="12" />
-            </svg>
+            <MeridianLogo className="w-4 h-4 shrink-0" />
             <span className="font-semibold tracking-[0.18em] text-[11px] text-slate-100 whitespace-nowrap">
               子午线 · MERIDIAN
             </span>
