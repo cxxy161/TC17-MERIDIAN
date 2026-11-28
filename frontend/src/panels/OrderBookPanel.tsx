@@ -7,11 +7,14 @@ import {
   creditsToMoney,
   moneyToCredits,
   READ_ONLY_OBSERVATION_MODE,
+  type BookOrderRow,
 } from '../types/meridian';
 import { useGameStore } from '../store/useGameStore';
 
 const DEPTH_ROWS = 10;
 const TRADE_ROWS = 14;
+const ORDER_ROWS = 6;
+const fmtPrice = (p: number): string => (p < 1 ? p.toFixed(4) : p.toFixed(2));
 
 /**
  * Market depth for one (station, item) pair.
@@ -27,6 +30,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
   const books = useGameStore((s) => s.books);
   const watchBook = useGameStore((s) => s.watchBook);
   const sendIntent = useGameStore((s) => s.sendIntent);
+  const companyId = useGameStore((s) => s.companyId);
   const leaderboard = useGameStore((s) => s.state?.leaderboard);
 
   const stationId = params.stationId;
@@ -37,6 +41,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
   const [side, setSide] = useState<'buy' | 'sell'>('sell');
   const [priceStr, setPriceStr] = useState('');
   const [qtyStr, setQtyStr] = useState('');
+  const [dealQtyStr, setDealQtyStr] = useState('10');
 
   useEffect(() => {
     if (!stationId || !itemId || !itemExists) return undefined;
@@ -97,6 +102,8 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
 
   const bids = useMemo(() => book?.bids?.slice(0, DEPTH_ROWS) ?? [], [book]);
   const asks = useMemo(() => book?.asks?.slice(0, DEPTH_ROWS) ?? [], [book]);
+  const bidOrders = useMemo(() => (book?.bid_orders ?? []).slice(0, ORDER_ROWS), [book]);
+  const askOrders = useMemo(() => (book?.ask_orders ?? []).slice(0, ORDER_ROWS), [book]);
   const trades = useMemo(() => (book?.recent_trades ?? []).slice(0, TRADE_ROWS), [book]);
 
   const maxDepthQty = useMemo(() => {
@@ -139,6 +146,77 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
         price: creditsToMoney(price),
       },
     });
+  };
+
+  const handleDeal = (orderId: number, maxQty: number, useAll: boolean) => {
+    const parsed = Math.floor(Number(dealQtyStr));
+    const amount = useAll ? maxQty : Math.min(maxQty, Number.isFinite(parsed) && parsed > 0 ? parsed : 0);
+    if (amount <= 0) return;
+    void sendIntent({ DealOrder: { order_id: orderId, amount } });
+  };
+
+  const bestCounterpartyBid = bidOrders.find((o) => o.owner_id !== companyId)?.price ?? null;
+  const bestCounterpartyAsk = askOrders.find((o) => o.owner_id !== companyId)?.price ?? null;
+
+  const renderCounterpartyOrder = (o: BookOrderRow, bookSide: 'buy' | 'sell') => {
+    const isOwn = o.owner_id === companyId;
+    const isPlanet = o.owner_id.startsWith('PLANET:');
+    const blockedByBetter =
+      !isOwn &&
+      (bookSide === 'buy'
+        ? bestCounterpartyBid !== null && o.price < bestCounterpartyBid
+        : bestCounterpartyAsk !== null && o.price > bestCounterpartyAsk);
+    return (
+      <div
+        key={o.order_id}
+        className="flex items-center justify-between gap-1.5 bg-[#1b212b] border border-slate-800/80 px-1.5 py-1 rounded-sm"
+      >
+        <div className="min-w-0 truncate">
+          <span className={bookSide === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>
+            {bookSide === 'buy' ? '买' : '卖'} {fmtPrice(o.price)}
+          </span>
+          <span className="text-slate-400 ml-1">× {o.qty}</span>
+          <span
+            className={`ml-1.5 text-[9px] ${isPlanet ? 'text-amber-300' : 'text-slate-500'}`}
+            title={`#${o.order_id}`}
+          >
+            {isOwn ? '我方' : nameOf(o.owner_id)}
+          </span>
+        </div>
+        {!isOwn && (
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              disabled={blockedByBetter}
+              onClick={() => handleDeal(o.order_id, o.qty, false)}
+              className={`pill-btn py-0 px-1.5 text-[9px] disabled:opacity-35 ${
+                bookSide === 'buy'
+                  ? 'text-emerald-300 border-emerald-500/40'
+                  : 'text-rose-300 border-rose-500/40'
+              }`}
+              title={
+                blockedByBetter
+                  ? '需先吃掉更优价格的对手挂单'
+                  : `${bookSide === 'buy' ? '向' : '从'} #${o.order_id} 成交最多 ${dealQtyStr} 件`
+              }
+            >
+              吃单
+            </button>
+            <button
+              disabled={blockedByBetter}
+              onClick={() => handleDeal(o.order_id, o.qty, true)}
+              className="pill-btn py-0 px-1.5 text-[9px] text-sky-300 border-sky-500/40 disabled:opacity-35"
+              title={
+                blockedByBetter
+                  ? '需先吃掉更优价格的对手挂单'
+                  : `吃满 #${o.order_id} 全部 ${o.qty} 件`
+              }
+            >
+              全吃
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const stationPicker = (
@@ -298,7 +376,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
               bids.map((l, idx) => (
                 <div
                   key={idx}
-                  onClick={() => setPriceStr(l.price.toFixed(2))}
+                  onClick={() => setPriceStr(String(l.price))}
                   className="relative flex justify-between cursor-pointer hover:bg-emerald-500/10 px-1 overflow-hidden"
                   title="点击填入下单价格"
                 >
@@ -306,7 +384,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
                     className="absolute inset-y-0 right-0 bg-emerald-500/10"
                     style={{ width: `${Math.round((l.qty / maxDepthQty) * 100)}%` }}
                   />
-                  <span className="relative text-emerald-300">{l.price.toFixed(2)}</span>
+                  <span className="relative text-emerald-300">{fmtPrice(l.price)}</span>
                   <span className="relative text-slate-400">{l.qty}</span>
                 </div>
               ))
@@ -323,7 +401,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
               asks.map((l, idx) => (
                 <div
                   key={idx}
-                  onClick={() => setPriceStr(l.price.toFixed(2))}
+                  onClick={() => setPriceStr(String(l.price))}
                   className="relative flex justify-between cursor-pointer hover:bg-rose-500/10 px-1 overflow-hidden"
                   title="点击填入下单价格"
                 >
@@ -331,7 +409,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
                     className="absolute inset-y-0 right-0 bg-rose-500/10"
                     style={{ width: `${Math.round((l.qty / maxDepthQty) * 100)}%` }}
                   />
-                  <span className="relative text-rose-300">{l.price.toFixed(2)}</span>
+                  <span className="relative text-rose-300">{fmtPrice(l.price)}</span>
                   <span className="relative text-slate-400">{l.qty}</span>
                 </div>
               ))
@@ -410,6 +488,28 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
             </button>
           </div>
         </div>
+
+        {!READ_ONLY_OBSERVATION_MODE && (bidOrders.length > 0 || askOrders.length > 0) && (
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <span className="text-[10px] text-slate-400">盘口对手挂单（直接吃单 DealOrder）</span>
+              <div className="flex items-center gap-1 text-[10px]">
+                <span className="text-slate-500">吃单数量</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={dealQtyStr}
+                  onChange={(e) => setDealQtyStr(e.target.value)}
+                  className="w-16 bg-[#191f27] border border-slate-700 px-1.5 py-0.5 text-[10px] mono text-right rounded-sm"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mono text-[10px]">
+              <div className="space-y-1">{bidOrders.map((o) => renderCounterpartyOrder(o, 'buy'))}</div>
+              <div className="space-y-1">{askOrders.map((o) => renderCounterpartyOrder(o, 'sell'))}</div>
+            </div>
+          </div>
+        )}
 
         <div>
           <div className="text-[10px] text-slate-400 mb-1">最近成交流水（{trades.length} 笔）</div>

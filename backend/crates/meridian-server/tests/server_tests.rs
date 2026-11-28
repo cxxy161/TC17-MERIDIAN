@@ -277,6 +277,8 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         .await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(book_res["station_id"], "ST:HUB");
+        assert!(book_res["bid_orders"].is_array());
+        assert!(book_res["ask_orders"].is_array());
 
         // 6a2. Inspect /api/planets/{planet_id}/plots public land grid endpoint
         let (st, plots_res) = read_json(
@@ -1336,4 +1338,49 @@ async fn test_player_deferred_onboarding_flow_and_conservation() {
     )
     .await;
     assert_eq!(st, StatusCode::CONFLICT);
+}
+
+#[test]
+fn test_manual_intent_rejection_surfaces_in_broadcast_and_state() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let mut engine = GameEngine::bootstrap(data_json_path(), store, 1000).expect("bootstrap");
+
+    let home_pid = engine.world.companies["player1"].home_planet_id.clone();
+    let other_pid = engine
+        .world
+        .planets
+        .keys()
+        .find(|pid| *pid != &home_pid)
+        .expect("at least 2 planets")
+        .clone();
+
+    engine
+        .queue_manual_intent(
+            "player1".to_string(),
+            Intent::BankOp {
+                planet_id: other_pid,
+                op: meridian_core::BankOpKind::Deposit,
+                amount: to_money(10.0),
+            },
+        )
+        .expect("queue manual intent");
+
+    let bcast = engine.step_once().expect("step_once");
+    let rejs = bcast
+        .company_rejections
+        .get("player1")
+        .expect("player1 must appear in company_rejections");
+    assert_eq!(rejs.len(), 1);
+    assert!(
+        rejs[0].action.starts_with("manual:"),
+        "expected manual: prefix, got {}",
+        rejs[0].action
+    );
+    assert!(rejs[0].reason.contains("home planet"), "reason={}", rejs[0].reason);
+
+    let state = engine.state_response("player1");
+    assert_eq!(state.last_rejected.len(), 1);
+    assert_eq!(state.last_rejected[0].action, rejs[0].action);
+    assert_eq!(state.last_rejected[0].code, rejs[0].code);
 }

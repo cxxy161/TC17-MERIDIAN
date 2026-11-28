@@ -142,6 +142,8 @@ export const DesktopShell: React.FC = () => {
   const wsStatus = useGameStore((s) => s.wsStatus);
   const lastError = useGameStore((s) => s.lastError);
   const clearError = useGameStore((s) => s.clearError);
+  const actionNotices = useGameStore((s) => s.actionNotices);
+  const dismissActionNotice = useGameStore((s) => s.dismissActionNotice);
   const touchFocus = useGameStore((s) => s.touchFocus);
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
@@ -554,6 +556,33 @@ export const DesktopShell: React.FC = () => {
         onClose={() => setPaletteOpen(false)}
         openTemp={openTemp}
       />
+
+      {actionNotices.length > 0 && (
+        <div className="fixed right-3 top-11 z-[9998] flex flex-col gap-1.5 max-w-[380px] pointer-events-none">
+          {actionNotices.map((n) => (
+            <div
+              key={n.id}
+              className={`pointer-events-auto flex items-start justify-between gap-2 px-2.5 py-1.5 rounded-[3px] border text-[11px] shadow-xl backdrop-blur-sm ${
+                n.level === 'error'
+                  ? 'bg-[#2a171c]/95 border-rose-500/55 text-rose-200'
+                  : 'bg-[#1a2634]/95 border-sky-500/45 text-sky-100'
+              }`}
+            >
+              <div className="min-w-0 leading-snug break-all">
+                <span className="mono text-[9px] opacity-70 mr-1.5">T#{n.tick}</span>
+                <span>{n.message}</span>
+              </div>
+              <button
+                onClick={() => dismissActionNotice(n.id)}
+                className="text-slate-400 hover:text-white shrink-0 mt-0.5"
+                title="关闭提示"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {windowListOpen && (
         <div className="fixed right-2 top-11 z-[9999] w-64 bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden">

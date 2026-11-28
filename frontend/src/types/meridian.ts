@@ -1,10 +1,9 @@
 export const MONEY_SCALE = 10_000;
 
 /**
- * Pure-code play mode: hides manual intent forms/buttons in observation panels while
- * preserving manual intent handlers cleanly for potential future re-enable.
+ * Hybrid play mode: manual UI controls work directly alongside player scripts.
  */
-export const READ_ONLY_OBSERVATION_MODE = true;
+export const READ_ONLY_OBSERVATION_MODE = false;
 
 export function moneyToCredits(m: number | null | undefined): number {
   if (m === null || m === undefined || !Number.isFinite(m)) return 0;
@@ -352,6 +351,14 @@ export interface PlayerRunOutput {
   oom: boolean;
 }
 
+export interface RejectedIntent {
+  intentIndex?: number;
+  action: string;
+  target: string;
+  code: number;
+  reason: string;
+}
+
 export interface StateResponse {
   tick: number;
   cpi: number;
@@ -368,6 +375,7 @@ export interface StateResponse {
   market_tickers: MarketTickerRow[];
   player_snapshot: WorldSnapshot | null;
   last_player_output: PlayerRunOutput | null;
+  last_rejected?: RejectedIntent[];
 }
 
 export interface CandleRow {
@@ -390,6 +398,14 @@ export interface TradeRow {
   seller_id: string;
 }
 
+export interface BookOrderRow {
+  order_id: number;
+  owner_id: string;
+  price: number;
+  qty: number;
+  created_tick: number;
+}
+
 export interface MarketBookResp {
   station_id: string;
   item_id: string;
@@ -401,8 +417,17 @@ export interface MarketBookResp {
   vol_50t: number;
   bids: Array<{ price: number; qty: number }>;
   asks: Array<{ price: number; qty: number }>;
+  bid_orders?: BookOrderRow[];
+  ask_orders?: BookOrderRow[];
   candles: CandleRow[];
   recent_trades: TradeRow[];
+}
+
+export interface SendIntentResp {
+  ok: boolean;
+  queued?: boolean;
+  tick?: number;
+  paused?: boolean;
 }
 
 export interface MarketCandlesResp {

@@ -5,7 +5,12 @@ import { api } from '../api/client';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { useGameStore } from '../store/useGameStore';
 import { SearchSelect, type PickerOption } from '../components/SearchSelect';
-import type { PlanetPlotsResp, PublicLandTile } from '../types/meridian';
+import {
+  moneyToCredits,
+  READ_ONLY_OBSERVATION_MODE,
+  type PlanetPlotsResp,
+  type PublicLandTile,
+} from '../types/meridian';
 
 type StatusFilter = 'all' | 'unclaimed' | 'listed' | 'owned' | 'mine' | 'city';
 type SortMode = 'slot' | 'mine_smelter' | 'power_water_station' | 'bio_greenhouse' | 'capacity' | 'price';
@@ -29,6 +34,8 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
   const catalog = useCatalogIndex();
   const tick = useGameStore((s) => s.state?.tick ?? 0);
   const homePlanetId = useGameStore((s) => s.state?.player_snapshot?.company.home_planet_id);
+  const cash = moneyToCredits(useGameStore((s) => s.state?.player_snapshot?.company.cash));
+  const sendIntent = useGameStore((s) => s.sendIntent);
 
   const activePlanetId = params.planetId || homePlanetId || world.planets[0]?.id || '';
   const [data, setData] = useState<PlanetPlotsResp | null>(null);
@@ -422,6 +429,75 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                       ))}
                     </div>
                   </div>
+
+                  {!READ_ONLY_OBSERVATION_MODE && (
+                    <div className="px-2.5 py-1.5 bg-[#1a2029] flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[10px] mono text-slate-400">
+                        可用现金 <b className="text-emerald-300">{cash.toFixed(1)} Cr</b>
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {selectedTile.status === 'unclaimed' && (
+                          <button
+                            type="button"
+                            disabled={selectedTile.price !== null && cash < selectedTile.price}
+                            onClick={() =>
+                              void sendIntent({
+                                BuyPlot: {
+                                  planet_id: activePlanetId,
+                                  slot_id: selectedTile.slot_id,
+                                  listing_id: null,
+                                },
+                              })
+                            }
+                            title={
+                              selectedTile.price !== null && cash < selectedTile.price
+                                ? '可用现金不足'
+                                : '购买该一手未开发工业用地'
+                            }
+                            className="cta-green py-0.5 px-2.5 text-[10.5px] disabled:opacity-40"
+                          >
+                            购买一手空地
+                            {selectedTile.price !== null ? ` (${selectedTile.price.toFixed(1)} Cr)` : ''}
+                          </button>
+                        )}
+                        {selectedTile.status === 'listed' &&
+                          !selectedTile.is_mine &&
+                          selectedTile.listing_id !== null && (
+                            <button
+                              type="button"
+                              disabled={selectedTile.price !== null && cash < selectedTile.price}
+                              onClick={() =>
+                                void sendIntent({
+                                  BuyPlot: {
+                                    planet_id: activePlanetId,
+                                    slot_id: null,
+                                    listing_id: selectedTile.listing_id,
+                                  },
+                                })
+                              }
+                              title={
+                                selectedTile.price !== null && cash < selectedTile.price
+                                  ? '可用现金不足'
+                                  : '购买该二手挂牌工业用地'
+                              }
+                              className="cta-blue py-0.5 px-2.5 text-[10.5px] disabled:opacity-40"
+                            >
+                              购买挂牌地块
+                              {selectedTile.price !== null ? ` (${selectedTile.price.toFixed(1)} Cr)` : ''}
+                            </button>
+                          )}
+                        {selectedTile.is_mine && (
+                          <button
+                            type="button"
+                            onClick={() => openTemp('factory', { planetId: activePlanetId })}
+                            className="pill-btn py-0.5 px-2 text-[10.5px] text-sky-300 border-sky-500/40"
+                          >
+                            在工厂管理打开
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

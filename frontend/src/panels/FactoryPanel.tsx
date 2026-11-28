@@ -28,7 +28,7 @@ type FactoryRow =
  * planet and the pending build type live in `params`; the building/recipe pickers are the shared
  * `SearchSelect`; recipes come from the prebuilt `recipesByBuilding` index.
  */
-export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
+export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   const state = useGameStore((s) => s.state);
@@ -346,8 +346,14 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
         count={rows.length}
         rowHeight={ROW_HEIGHT}
         emptyState={
-          <div className="metric-card text-center py-6 text-slate-500 text-[11px]">
-            当前公司在该星球尚未拥有地块，请先在行星遥测面板购置地块。
+          <div className="metric-card text-center py-6 text-slate-500 text-[11px] space-y-2">
+            <div>当前公司在该星球尚未拥有地块，请先购买工业用地。</div>
+            <button
+              onClick={() => openTemp('land', { planetId: planet.id })}
+              className="cta-blue text-[10px] py-0.5 px-2.5"
+            >
+              前往地块浏览购地
+            </button>
           </div>
         }
         renderRow={(idx) => {

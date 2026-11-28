@@ -5,6 +5,7 @@ import type {
   IntentPayload,
   MarketBookResp,
   ProductionPack,
+  RejectedIntent,
   ScriptsResp,
   StateResponse,
 } from '../types/meridian';
@@ -14,6 +15,13 @@ export interface LogHistoryLine {
   level: 'log' | 'warn' | 'error' | 'system' | 'input' | 'result';
   message: string;
   values?: ConsoleValue[];
+}
+
+export interface ActionNotice {
+  id: number;
+  level: 'info' | 'error';
+  tick: number;
+  message: string;
 }
 
 export interface QuoteSample {
@@ -182,6 +190,7 @@ interface GameStore {
   touchFocus: (patch: FocusState) => void;
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   consoleHistory: LogHistoryLine[];
+  actionNotices: ActionNotice[];
   lastError: string | null;
 
   init: () => Promise<void>;
@@ -190,6 +199,8 @@ interface GameStore {
   watchBook: (stationId: string, itemId: string) => () => void;
   fetchBook: (stationId: string, itemId: string) => Promise<void>;
   sendIntent: (intent: IntentPayload) => Promise<void>;
+  dismissActionNotice: (id: number) => void;
+  clearActionNotices: () => void;
   simControl: (action: 'pause' | 'resume' | 'step' | 'speed' | 'reset', tickMs?: number) => Promise<void>;
   saveScripts: (modules: Record<string, string>, enabled?: boolean) => Promise<void>;
   saveDraftScripts: () => Promise<void>;
@@ -215,9 +226,44 @@ let tickSyncInFlight = false;
 let tickSyncPending = false;
 let bookSeqCounter = 0;
 let bookRotation = 0;
+let actionNoticeSeq = 1;
+const actionNoticeTimers: Record<number, number> = {};
 /** Upper bound of book refreshes started in a single tick. */
 const MAX_BOOK_FETCH_PER_TICK = 6;
 const latestBookSeq: Record<string, number> = {};
+
+function describeIntent(intent: IntentPayload): string {
+  if ('CreateOrder' in intent) {
+    const o = intent.CreateOrder;
+    return `${o.side === 'buy' ? '买入' : '卖出'}挂单 ${o.item_id} × ${o.qty} @ ${(o.price / 10_000).toFixed(2)} (${o.station_id})`;
+  }
+  if ('CancelOrder' in intent) return `撤单 #${intent.CancelOrder.order_id}`;
+  if ('DealOrder' in intent) return `吃单 #${intent.DealOrder.order_id} × ${intent.DealOrder.amount}`;
+  if ('SetRecipe' in intent) return `切换建筑 #${intent.SetRecipe.building_id} 配方为 ${intent.SetRecipe.recipe_id}`;
+  if ('ToggleBuilding' in intent) {
+    return `${intent.ToggleBuilding.active ? '启动' : '待机'}建筑 #${intent.ToggleBuilding.building_id}`;
+  }
+  if ('BuildFacility' in intent) {
+    return `地块 #${intent.BuildFacility.plot_id} 建造 ${intent.BuildFacility.building_type}`;
+  }
+  if ('DemolishFacility' in intent) return `拆除建筑 #${intent.DemolishFacility.building_id}`;
+  if ('BuyPlot' in intent) {
+    const b = intent.BuyPlot;
+    return b.listing_id !== null
+      ? `购买二手挂牌地块 #${b.listing_id}`
+      : `购买 ${b.planet_id} 一手空地 #${b.slot_id ?? '?'}`;
+  }
+  if ('DispatchShip' in intent) {
+    const d = intent.DispatchShip;
+    return `飞船 #${d.ship_id} 发往 ${d.to}`;
+  }
+  if ('RepairShip' in intent) return `维修飞船 #${intent.RepairShip.ship_id}`;
+  if ('BankOp' in intent) {
+    const labels = { deposit: '存款', withdraw: '取款', borrow: '借款', repay: '还款' } as const;
+    return `央行${labels[intent.BankOp.op]} ${(intent.BankOp.amount / 10_000).toFixed(2)} Cr`;
+  }
+  return '执行动作';
+}
 
 export const useGameStore = create<GameStore>((set, get) => ({
   catalog: null,
@@ -234,6 +280,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   lastFocus: {},
   wsStatus: 'connecting',
   consoleHistory: [],
+  actionNotices: [],
   lastError: null,
 
   init: async () => {
@@ -319,6 +366,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
             if (additions.length > 0) {
               set((prev) => ({
                 consoleHistory: [...prev.consoleHistory, ...additions].slice(-500),
+              }));
+            }
+
+            const manualRejections = (
+              (msg.company_rejections?.[cid] as RejectedIntent[] | undefined) ?? []
+            ).filter((r) => r.action.startsWith('manual:'));
+            if (manualRejections.length > 0) {
+              const newNotices: ActionNotice[] = manualRejections.map((r) => {
+                const id = actionNoticeSeq++;
+                const act = r.action.replace(/^manual:/, '');
+                actionNoticeTimers[id] = window.setTimeout(() => {
+                  get().dismissActionNotice(id);
+                }, 12_000);
+                return {
+                  id,
+                  level: 'error',
+                  tick: msg.tick,
+                  message: `操作结算失败 [${r.code}]：${act}(${r.target}) — ${r.reason}`,
+                };
+              });
+              set((prev) => ({
+                actionNotices: [...prev.actionNotices, ...newNotices].slice(-6),
               }));
             }
 
@@ -489,11 +558,58 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  dismissActionNotice: (id) => {
+    const timer = actionNoticeTimers[id];
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      delete actionNoticeTimers[id];
+    }
+    set((prev) => ({
+      actionNotices: prev.actionNotices.filter((n) => n.id !== id),
+    }));
+  },
+
+  clearActionNotices: () => {
+    for (const k of Object.keys(actionNoticeTimers)) {
+      const id = Number(k);
+      window.clearTimeout(actionNoticeTimers[id]);
+      delete actionNoticeTimers[id];
+    }
+    set({ actionNotices: [] });
+  },
+
   sendIntent: async (intent) => {
+    const label = describeIntent(intent);
     try {
-      await api.sendIntent(get().companyId, intent);
+      const resp = await api.sendIntent(get().companyId, intent);
+      const id = actionNoticeSeq++;
+      const curTick = resp.tick ?? get().state?.tick ?? 0;
+      const suffix = resp.paused
+        ? '（当前仿真已暂停，恢复或单步后生效）'
+        : `（等待 T#${curTick + 1} 结算）`;
+      actionNoticeTimers[id] = window.setTimeout(() => {
+        get().dismissActionNotice(id);
+      }, 4000);
+      set((prev) => ({
+        actionNotices: [
+          ...prev.actionNotices,
+          { id, level: 'info' as const, tick: curTick, message: `已提交：${label}${suffix}` },
+        ].slice(-6),
+      }));
     } catch (e) {
-      set({ lastError: e instanceof Error ? e.message : String(e) });
+      const msg = e instanceof Error ? e.message : String(e);
+      const id = actionNoticeSeq++;
+      const curTick = get().state?.tick ?? 0;
+      actionNoticeTimers[id] = window.setTimeout(() => {
+        get().dismissActionNotice(id);
+      }, 12_000);
+      set((prev) => ({
+        lastError: msg,
+        actionNotices: [
+          ...prev.actionNotices,
+          { id, level: 'error' as const, tick: curTick, message: `提交失败：${label} — ${msg}` },
+        ].slice(-6),
+      }));
     }
   },
 
@@ -502,6 +618,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       await api.simControl(action, tickMs);
       if (action === 'reset') {
         for (const k of Object.keys(latestBookSeq)) delete latestBookSeq[k];
+        get().clearActionNotices();
         set({ scriptDirty: false, consoleHistory: [], books: {}, quoteHistory: {} });
         await get().refreshState();
         await get().refreshScripts();

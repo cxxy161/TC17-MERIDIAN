@@ -7,6 +7,7 @@ import type {
   ProductionPack,
   PublicCompanyDetail,
   ScriptsResp,
+  SendIntentResp,
   StateResponse,
 } from '../types/meridian';
 
@@ -369,7 +370,7 @@ export const api = {
     });
   },
 
-  sendIntent(companyId: string, intent: IntentPayload): Promise<{ ok: boolean }> {
+  sendIntent(companyId: string, intent: IntentPayload): Promise<SendIntentResp> {
     return jsonFetch('/api/intent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

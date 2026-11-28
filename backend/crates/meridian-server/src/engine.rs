@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use meridian_core::{
-    from_money, snapshot::StarSystemView, Intent, ProductionCatalog, TickReport, World,
-    WorldSnapshot,
+    from_money, snapshot::StarSystemView, Intent, ProductionCatalog, RejectedIntent, TickReport,
+    World, WorldSnapshot,
 };
 use meridian_sandbox::{
     NpcGenome, PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle, SimulationRunner,
@@ -109,6 +109,8 @@ pub struct StateResponse {
     pub market_tickers: Vec<MarketTickerRow>,
     pub player_snapshot: Option<WorldSnapshot>,
     pub last_player_output: Option<PlayerRunOutput>,
+    #[serde(default)]
+    pub last_rejected: Vec<RejectedIntent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +130,8 @@ pub struct TickBroadcast {
     pub planets: Vec<PlanetSummary>,
     pub leaderboard: Vec<LeaderboardRow>,
     pub player_outputs: HashMap<String, PlayerRunOutput>,
+    #[serde(default)]
+    pub company_rejections: HashMap<String, Vec<RejectedIntent>>,
 }
 
 fn env_npc_count(key: &str, default: usize) -> usize {
@@ -1796,6 +1800,12 @@ impl GameEngine {
             market_tickers: self.market_tickers(),
             player_snapshot: self.world.snapshot_for(company_id),
             last_player_output: self.runner.last_player_outputs.get(company_id).cloned(),
+            last_rejected: self
+                .runner
+                .last_tick_feedback
+                .get(company_id)
+                .map(|f| f.rejected.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -1839,6 +1849,7 @@ impl GameEngine {
             planets: self.planet_summaries(),
             leaderboard: self.leaderboard(),
             player_outputs: self.runner.last_player_outputs.clone(),
+            company_rejections: report.rejected_by_company.clone(),
         }
     }
 }

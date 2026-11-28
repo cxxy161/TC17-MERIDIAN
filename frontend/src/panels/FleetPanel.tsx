@@ -30,6 +30,34 @@ const CARGO_ROW_HEIGHT = 30;
 
 const shipLabel = (ship: ShipView): string => `${SHIP_SIZE_NAMES[ship.size] ?? ship.size}-${ship.id}`;
 
+function computeShipRouteSpec(
+  from: string,
+  to: string,
+  ship: ShipView,
+  baseSpec: [number, number],
+  planets?: Record<string, { gravity: number }>,
+): [number, number] {
+  const [baseTicks, baseFuel] = baseSpec;
+  const pid =
+    to.startsWith('ST:') && from === to.slice(3)
+      ? from
+      : from.startsWith('ST:') && to === from.slice(3)
+        ? to
+        : null;
+  let ticks = baseTicks;
+  let fuel = baseFuel;
+  if (pid && planets?.[pid]) {
+    const scale = ship.size === 'large' ? 4 : ship.size === 'medium' ? 2 : 1;
+    const g = planets[pid].gravity;
+    ticks = Math.max(1, Math.round(scale * (0.6 + g * 0.7)));
+    fuel = Math.max(1, Math.round(scale * (0.6 + g * 0.8)));
+  }
+  if (ship.durability <= 0) {
+    ticks *= 2;
+  }
+  return [ticks, fuel];
+}
+
 interface StockRow {
   id: string;
   /** How many units of this item sit at the ship's current location. */
@@ -84,8 +112,15 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
   const destOptions = useMemo<PickerOption[]>(() => {
     if (!activeShip) return [];
     const table = routes[activeShip.location] ?? {};
-    const opts: PickerOption[] = Object.entries(table).map(([dest, spec]) => {
-      const [ticks, fuel] = spec;
+    const planetMap = state?.player_snapshot?.planets;
+    const opts: PickerOption[] = Object.entries(table).map(([dest, baseSpec]) => {
+      const [ticks, fuel] = computeShipRouteSpec(
+        activeShip.location,
+        dest,
+        activeShip,
+        baseSpec,
+        planetMap,
+      );
       const known = world.locationExists(dest);
       return {
         id: dest,
@@ -97,7 +132,7 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
     });
     opts.sort((a, b) => a.label.localeCompare(b.label, 'zh-Hans-CN'));
     return opts;
-  }, [activeShip, routes, world]);
+  }, [activeShip, routes, state?.player_snapshot?.planets, world]);
 
   /**
    * No hardcoded default destination: the previous implementation started at `ST:P1` forever.
@@ -111,8 +146,18 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
     return usableDests[0]?.id ?? '';
   }, [usableDests, destId]);
 
-  const routeSpec =
+  const baseRouteSpec =
     activeShip && effectiveDest ? routes[activeShip.location]?.[effectiveDest] : undefined;
+  const routeSpec = useMemo<[number, number] | undefined>(() => {
+    if (!activeShip || !effectiveDest || !baseRouteSpec) return undefined;
+    return computeShipRouteSpec(
+      activeShip.location,
+      effectiveDest,
+      activeShip,
+      baseRouteSpec,
+      state?.player_snapshot?.planets,
+    );
+  }, [activeShip, effectiveDest, baseRouteSpec, state?.player_snapshot?.planets]);
   const routeFuel = routeSpec?.[1] ?? 0;
 
   /** Sparse read: only items that actually exist at the ship's location, straight from worldIndex. */
@@ -204,7 +249,6 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
     if (activeShip.is_busy) return '飞船航行中，抵达后才能调度';
     if (usableDests.length === 0) return '当前位置没有可用航线';
     if (!effectiveDest) return '没有有效目的地';
-    if (totalSelected <= 0) return '请先填写装货数量';
     if (totalSelected > capacity) return `超出载重（${totalSelected}/${capacity}）`;
     if (!fuelItemId && routeFuel > 0) return '生产包未声明 fuel 标签物品，无法校验燃料储备';
     if (fuelHave < routeFuel) return `起点燃料不足：需 ${routeFuel}，现有 ${fuelHave}`;
@@ -231,7 +275,6 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
     const cargo = cargoPlan
       .filter((r) => r.qty > 0)
       .map((r): [string, number] => [r.id, r.qty]);
-    if (cargo.length === 0) return;
     void sendIntent({
       DispatchShip: {
         ship_id: activeShip.id,
@@ -428,7 +471,7 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
                     {routeSpec ? (
                       <span
                         className="mono text-[10px] text-emerald-400 ml-auto"
-                        title="航线表中的耗时/油耗以小型船为基准，大船按引擎规则更高"
+                        title="按当前飞船船型、起降重力与耐久计算"
                       >
                         耗时 {routeSpec[0]} 回合 · 油耗 {routeSpec[1]} 燃料
                       </span>
@@ -528,7 +571,7 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
                         onClick={handleDispatch}
                         className="cta-green disabled:opacity-40"
                       >
-                        确认启航发运
+                        {totalSelected > 0 ? '确认启航发运' : '空船启航'}
                       </button>
                     </div>
                   </div>

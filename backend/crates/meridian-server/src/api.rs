@@ -650,6 +650,15 @@ struct DepthPoint {
 }
 
 #[derive(Serialize)]
+struct BookOrderRow {
+    order_id: u64,
+    owner_id: String,
+    price: f64,
+    qty: u32,
+    created_tick: u64,
+}
+
+#[derive(Serialize)]
 struct MarketBookResp {
     station_id: String,
     item_id: String,
@@ -661,6 +670,8 @@ struct MarketBookResp {
     vol_50t: u64,
     bids: Vec<DepthPoint>,
     asks: Vec<DepthPoint>,
+    bid_orders: Vec<BookOrderRow>,
+    ask_orders: Vec<BookOrderRow>,
     candles: Vec<CandleRow>,
     recent_trades: Vec<TradeRow>,
 }
@@ -701,6 +712,25 @@ async fn market_book_handler(
             qty: l.qty,
         })
         .collect();
+    let order_lim = depth_lim.min(40);
+    let to_book_rows = |orders: Option<&Vec<meridian_core::Order>>| -> Vec<BookOrderRow> {
+        orders
+            .map(|v| {
+                v.iter()
+                    .take(order_lim)
+                    .map(|o| BookOrderRow {
+                        order_id: o.order_id,
+                        owner_id: o.owner_id.clone(),
+                        price: from_money(o.price),
+                        qty: o.qty,
+                        created_tick: o.created_tick,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let bid_orders = to_book_rows(st.bids.get(item_id));
+    let ask_orders = to_book_rows(st.asks.get(item_id));
 
     let candles = eng
         .store
@@ -722,6 +752,8 @@ async fn market_book_handler(
         vol_50t: quote.vol_50t,
         bids,
         asks,
+        bid_orders,
+        ask_orders,
         candles,
         recent_trades,
     }))
@@ -1045,6 +1077,8 @@ async fn post_intent_handler(
     ensure_owner(&user, &req.company_id)?;
     let company_id = req.company_id;
     let mut eng = engine.lock().await;
+    let tick = eng.world.tick;
+    let paused = eng.paused;
     eng.queue_manual_intent(company_id.clone(), req.intent)
         .map_err(|e| match e {
             IntentQueueError::QueueFull { limit, .. } => (
@@ -1055,7 +1089,7 @@ async fn post_intent_handler(
                 (StatusCode::NOT_FOUND, format!("公司 '{id}' 不存在"))
             }
         })?;
-    Ok(Json(serde_json::json!({ "ok": true, "queued": true })))
+    Ok(Json(serde_json::json!({ "ok": true, "queued": true, "tick": tick, "paused": paused })))
 }
 
 #[derive(Deserialize)]
