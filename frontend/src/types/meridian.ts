@@ -207,6 +207,8 @@ export interface BuildingView {
   active: boolean;
   progress: number;
   cycle_ticks: number;
+  idle_ticks?: number;
+  stall_reason?: string | null;
 }
 
 export interface SiteView {

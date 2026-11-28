@@ -280,6 +280,34 @@
       "ref_price": 580.0,
       "base_demand_per_1k": 0.0,
       "tags": ["ship"]
+    },
+    {
+      "id": "ship_medium",
+      "name": "中货船",
+      "role": "capital",
+      "profession": "mining_ind",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 3,
+      "volume": 60.0,
+      "mass": 80.0,
+      "ref_price": 1650.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["ship"]
+    },
+    {
+      "id": "ship_large",
+      "name": "大货船",
+      "role": "capital",
+      "profession": "mining_ind",
+      "demand_category": null,
+      "wealth_tier": 1,
+      "step_depth": 4,
+      "volume": 140.0,
+      "mass": 200.0,
+      "ref_price": 4600.0,
+      "base_demand_per_1k": 0.0,
+      "tags": ["ship"]
     }
   ],
   "buildings": [
@@ -605,6 +633,40 @@
       "outputs": [{ "item": "ship_small", "qty": 1 }],
       "enabled": true,
       "notes": "前期即可自产的星际货运飞船"
+    },
+    {
+      "id": "build_ship_medium",
+      "name": "中货船建造",
+      "building_id": "shipyard",
+      "tier": 1,
+      "cycle_ticks": 18,
+      "power_cost": 24,
+      "labor_cost": 65.0,
+      "inputs": [
+        { "item": "steel", "qty": 36 },
+        { "item": "building_mat", "qty": 22 },
+        { "item": "daily_goods", "qty": 18 }
+      ],
+      "outputs": [{ "item": "ship_medium", "qty": 1 }],
+      "enabled": true,
+      "notes": "中程高载重主力货运飞船（货舱 120）"
+    },
+    {
+      "id": "build_ship_large",
+      "name": "大货船建造",
+      "building_id": "shipyard",
+      "tier": 1,
+      "cycle_ticks": 28,
+      "power_cost": 42,
+      "labor_cost": 140.0,
+      "inputs": [
+        { "item": "steel", "qty": 100 },
+        { "item": "building_mat", "qty": 60 },
+        { "item": "daily_goods", "qty": 50 }
+      ],
+      "outputs": [{ "item": "ship_large", "qty": 1 }],
+      "enabled": true,
+      "notes": "重型超大型远洋货运巨轮（货舱 360）"
     }
   ]
 }

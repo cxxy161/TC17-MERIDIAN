@@ -298,6 +298,18 @@ export const accountApi = {
       body: JSON.stringify(target),
     });
   },
+
+  getLayouts(): Promise<{ bundle: unknown | null; updated_at: number | null }> {
+    return accountRequest<{ bundle: unknown | null; updated_at: number | null }>('/api/account/layouts');
+  },
+
+  saveLayouts(bundle: unknown): Promise<{ ok: boolean; updated_at: number }> {
+    return accountRequest<{ ok: boolean; updated_at: number }>('/api/account/layouts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bundle }),
+    });
+  },
 };
 
 export const api = {

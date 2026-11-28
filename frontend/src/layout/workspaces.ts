@@ -207,3 +207,142 @@ export function persistWorkspaces(list: WorkspaceEntry[], activeId: string): voi
     // ignore storage quota errors
   }
 }
+
+export type PresetDeviceTag = 'all' | 'desktop' | 'portrait';
+
+export interface LayoutPreset {
+  id: string;
+  name: string;
+  device: PresetDeviceTag;
+  workspaces: WorkspaceEntry[];
+  activeWorkspaceId: string;
+  updatedAt: number;
+}
+
+export interface LayoutBundle {
+  version: 1;
+  presets: LayoutPreset[];
+}
+
+const BUNDLE_STORAGE_KEY = 'meridian.layout_bundle.v1';
+const DEVICE_PRESET_KEY = 'meridian.device_preset_id.v1';
+
+export function createDefaultPresetBundle(initialDesktop?: {
+  list: WorkspaceEntry[];
+  activeId: string;
+}): LayoutBundle {
+  const now = Date.now();
+  const desktopWorkspaces = initialDesktop?.list ?? createDefaultWorkspaces();
+  const desktopActive = initialDesktop?.activeId ?? desktopWorkspaces[0].id;
+  const portraitWorkspaces = createDefaultWorkspaces();
+  return {
+    version: 1,
+    presets: [
+      {
+        id: 'desktop-default',
+        name: '桌面默认',
+        device: 'desktop',
+        workspaces: desktopWorkspaces,
+        activeWorkspaceId: desktopActive,
+        updatedAt: now,
+      },
+      {
+        id: 'portrait-default',
+        name: '竖屏便携',
+        device: 'portrait',
+        workspaces: portraitWorkspaces,
+        activeWorkspaceId: portraitWorkspaces[0].id,
+        updatedAt: now,
+      },
+    ],
+  };
+}
+
+export function loadLocalLayoutBundle(isPortrait: boolean): {
+  bundle: LayoutBundle;
+  activePresetId: string;
+} {
+  let bundle: LayoutBundle | null = null;
+  try {
+    const raw = window.localStorage.getItem(BUNDLE_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<LayoutBundle>;
+      if (parsed?.version === 1 && Array.isArray(parsed.presets) && parsed.presets.length > 0) {
+        const valid = parsed.presets.filter(
+          (p): p is LayoutPreset =>
+            Boolean(p && typeof p.id === 'string' && typeof p.name === 'string' && Array.isArray(p.workspaces) && p.workspaces.length > 0),
+        );
+        if (valid.length > 0) {
+          bundle = { version: 1, presets: valid };
+        }
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  if (!bundle) {
+    bundle = createDefaultPresetBundle(loadSavedWorkspaces());
+  }
+
+  let savedPresetId: string | null = null;
+  try {
+    savedPresetId = window.localStorage.getItem(DEVICE_PRESET_KEY);
+  } catch {
+    savedPresetId = null;
+  }
+
+  const matchedSaved = savedPresetId ? bundle.presets.find((p) => p.id === savedPresetId) : undefined;
+  const targetDevice: PresetDeviceTag = isPortrait ? 'portrait' : 'desktop';
+  const matchedDevice = bundle.presets.find((p) => p.device === targetDevice);
+  const chosen = matchedSaved ?? matchedDevice ?? bundle.presets[0];
+
+  return { bundle, activePresetId: chosen.id };
+}
+
+export function persistLocalLayoutBundle(bundle: LayoutBundle, activePresetId: string): void {
+  try {
+    window.localStorage.setItem(BUNDLE_STORAGE_KEY, JSON.stringify(bundle));
+    window.localStorage.setItem(DEVICE_PRESET_KEY, activePresetId);
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+export function mergeLayoutBundles(local: LayoutBundle, remoteRaw: unknown): LayoutBundle {
+  if (!remoteRaw || typeof remoteRaw !== 'object') return local;
+  const remote = remoteRaw as Partial<LayoutBundle>;
+  if (remote.version !== 1 || !Array.isArray(remote.presets)) return local;
+
+  const byId = new Map<string, LayoutPreset>();
+  for (const p of local.presets) {
+    byId.set(p.id, p);
+  }
+  for (const rp of remote.presets) {
+    if (
+      !rp ||
+      typeof rp.id !== 'string' ||
+      typeof rp.name !== 'string' ||
+      !Array.isArray(rp.workspaces) ||
+      rp.workspaces.length === 0
+    ) {
+      continue;
+    }
+    const existing = byId.get(rp.id);
+    if (!existing || (Number(rp.updatedAt) || 0) > (Number(existing.updatedAt) || 0)) {
+      byId.set(rp.id, {
+        id: rp.id,
+        name: rp.name,
+        device: rp.device === 'desktop' || rp.device === 'portrait' ? rp.device : 'all',
+        workspaces: rp.workspaces,
+        activeWorkspaceId:
+          rp.activeWorkspaceId && rp.workspaces.some((w) => w.id === rp.activeWorkspaceId)
+            ? rp.activeWorkspaceId
+            : rp.workspaces[0].id,
+        updatedAt: Number(rp.updatedAt) || Date.now(),
+      });
+    }
+  }
+  const merged = Array.from(byId.values());
+  return merged.length > 0 ? { version: 1, presets: merged } : local;
+}

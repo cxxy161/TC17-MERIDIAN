@@ -80,7 +80,7 @@ export const CompanyPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
   );
 
   return (
-    <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden select-none">
+    <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
       {/* Top Search Bar */}
       <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#202732] flex items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">

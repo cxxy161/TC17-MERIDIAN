@@ -1,21 +1,26 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   BookOpen,
   Box,
   CandlestickChart,
+  Check,
+  ChevronDown,
   Compass,
   Factory,
   Globe2,
   HelpCircle,
   Landmark,
   Layers,
+  Monitor,
   PackageSearch,
   Plus,
+  RefreshCw,
   Rocket,
   Search,
   ShoppingBag,
   Terminal,
+  Trash2,
   Trophy,
   User,
   Workflow,
@@ -23,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
 import { useSessionStore } from '../store/useSessionStore';
+import { accountApi } from '../api/client';
 import { moneyToCredits } from '../types/meridian';
 import {
   focusDefaults,
@@ -35,6 +41,7 @@ import {
 import {
   clearLeaf,
   closeLeaf,
+  flattenLeaves,
   makeLeaf,
   setLeafContent,
   setLeafParams,
@@ -45,8 +52,13 @@ import {
 } from './splitTree';
 import {
   hydrateWorkspaces,
-  loadSavedWorkspaces,
+  loadLocalLayoutBundle,
+  mergeLayoutBundles,
+  persistLocalLayoutBundle,
   persistWorkspaces,
+  type LayoutBundle,
+  type LayoutPreset,
+  type PresetDeviceTag,
   type WorkspaceEntry,
 } from './workspaces';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
@@ -140,7 +152,24 @@ function slotPosition(index: number, width: number, height: number): { x: number
   };
 }
 
+const PORTRAIT_MEDIA_QUERY = '(max-width: 767px), ((orientation: portrait) and (max-width: 1024px))';
+
+function useIsPortrait(): boolean {
+  const [portrait, setPortrait] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia(PORTRAIT_MEDIA_QUERY).matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(PORTRAIT_MEDIA_QUERY);
+    const update = () => setPortrait(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+  return portrait;
+}
+
 export const DesktopShell: React.FC = () => {
+  const isPortrait = useIsPortrait();
   const init = useGameStore((s) => s.init);
   const state = useGameStore((s) => s.state);
   const wsStatus = useGameStore((s) => s.wsStatus);
@@ -157,22 +186,140 @@ export const DesktopShell: React.FC = () => {
   const sessionUser = useSessionStore((s) => s.user);
   const playerName = sessionUser?.nickname ?? '本地预览';
 
-  const initialWs = useRef(loadSavedWorkspaces());
-  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialWs.current.list);
-  const [activeWsId, setActiveWsId] = useState<string>(initialWs.current.activeId);
+  const initialBundleRef = useRef(
+    loadLocalLayoutBundle(
+      typeof window !== 'undefined' ? window.matchMedia(PORTRAIT_MEDIA_QUERY).matches : false,
+    ),
+  );
+  const [layoutBundle, setLayoutBundle] = useState<LayoutBundle>(initialBundleRef.current.bundle);
+  const [activePresetId, setActivePresetId] = useState<string>(initialBundleRef.current.activePresetId);
+  const initialActivePreset =
+    initialBundleRef.current.bundle.presets.find((p) => p.id === initialBundleRef.current.activePresetId) ??
+    initialBundleRef.current.bundle.presets[0];
+
+  const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialActivePreset.workspaces);
+  const [activeWsId, setActiveWsId] = useState<string>(initialActivePreset.activeWorkspaceId);
   const [floatingWindows, setFloatingWindows] = useState<FloatingWindowItem[]>([]);
   const [dropTargetTileId, setDropTargetTileId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [addingWs, setAddingWs] = useState(false);
   const [newWsName, setNewWsName] = useState('');
   const [windowListOpen, setWindowListOpen] = useState(false);
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [newPresetName, setNewPresetName] = useState('');
+  const [newPresetDevice, setNewPresetDevice] = useState<PresetDeviceTag>(
+    isPortrait ? 'portrait' : 'desktop',
+  );
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'offline'>(
+    sessionUser ? 'idle' : 'offline',
+  );
+  const [portraitLeafIdx, setPortraitLeafIdx] = useState(0);
   const hydratedRef = useRef(false);
   const workspaceRef = useRef(workspaces);
   workspaceRef.current = workspaces;
+  const layoutBundleRef = useRef(layoutBundle);
+  layoutBundleRef.current = layoutBundle;
+  const activePresetIdRef = useRef(activePresetId);
+  activePresetIdRef.current = activePresetId;
+  const cloudSyncTimerRef = useRef<number | null>(null);
+  const cloudSyncedUserRef = useRef<string | null>(null);
   const worldRef = useRef(world);
   worldRef.current = world;
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
+
+  const scheduleCloudPush = useCallback(
+    (bundleToPush: LayoutBundle) => {
+      if (!sessionUser) {
+        setCloudSyncStatus('offline');
+        return;
+      }
+      if (cloudSyncTimerRef.current !== null) {
+        window.clearTimeout(cloudSyncTimerRef.current);
+      }
+      setCloudSyncStatus('syncing');
+      cloudSyncTimerRef.current = window.setTimeout(() => {
+        cloudSyncTimerRef.current = null;
+        accountApi
+          .saveLayouts(bundleToPush)
+          .then(() => setCloudSyncStatus('synced'))
+          .catch(() => setCloudSyncStatus('offline'));
+      }, 800);
+    },
+    [sessionUser],
+  );
+
+  const commitPresetState = useCallback(
+    (nextWorkspaces: WorkspaceEntry[], nextActiveWsId: string, pushCloud = true) => {
+      persistWorkspaces(nextWorkspaces, nextActiveWsId);
+      const curBundle = layoutBundleRef.current;
+      const curPresetId = activePresetIdRef.current;
+      const now = Date.now();
+      const nextBundle: LayoutBundle = {
+        version: 1,
+        presets: curBundle.presets.map((p) =>
+          p.id === curPresetId
+            ? { ...p, workspaces: nextWorkspaces, activeWorkspaceId: nextActiveWsId, updatedAt: now }
+            : p,
+        ),
+      };
+      setLayoutBundle(nextBundle);
+      persistLocalLayoutBundle(nextBundle, curPresetId);
+      if (pushCloud) {
+        scheduleCloudPush(nextBundle);
+      }
+    },
+    [scheduleCloudPush],
+  );
+
+  const pullCloudPresets = useCallback(async () => {
+    if (!sessionUser) {
+      setCloudSyncStatus('offline');
+      return;
+    }
+    setCloudSyncStatus('syncing');
+    try {
+      const resp = await accountApi.getLayouts();
+      if (resp.bundle) {
+        const merged = mergeLayoutBundles(layoutBundleRef.current, resp.bundle);
+        setLayoutBundle(merged);
+        const curPresetId = activePresetIdRef.current;
+        const activeP = merged.presets.find((p) => p.id === curPresetId) ?? merged.presets[0];
+        if (activeP) {
+          setActivePresetId(activeP.id);
+          setWorkspaces(activeP.workspaces);
+          setActiveWsId(activeP.activeWorkspaceId);
+          persistWorkspaces(activeP.workspaces, activeP.activeWorkspaceId);
+          persistLocalLayoutBundle(merged, activeP.id);
+        }
+        setCloudSyncStatus('synced');
+      } else {
+        await accountApi.saveLayouts(layoutBundleRef.current);
+        setCloudSyncStatus('synced');
+      }
+    } catch {
+      setCloudSyncStatus('offline');
+    }
+  }, [sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) {
+      cloudSyncedUserRef.current = null;
+      setCloudSyncStatus('offline');
+      return;
+    }
+    if (cloudSyncedUserRef.current === sessionUser.email) return;
+    cloudSyncedUserRef.current = sessionUser.email;
+    void pullCloudPresets();
+  }, [sessionUser, pullCloudPresets]);
+
+  useEffect(() => {
+    return () => {
+      if (cloudSyncTimerRef.current !== null) {
+        window.clearTimeout(cloudSyncTimerRef.current);
+      }
+    };
+  }, []);
 
   const topZRef = useRef(40);
   const floatSeqRef = useRef(1);
@@ -200,11 +347,11 @@ export const DesktopShell: React.FC = () => {
     setWorkspaces((prev) => {
       const next = hydrateWorkspaces(prev, ctx);
       if (next === prev) return prev;
-      persistWorkspaces(next, activeWsId);
+      commitPresetState(next, activeWsId, false);
       return next;
     });
     // Deps are primitives: this only re-runs when the resolved defaults actually change.
-  }, [world.ready, world.homePlanetId, hubStationId, defaultItemId, activeWsId, workspaces]);
+  }, [world.ready, world.homePlanetId, hubStationId, defaultItemId, activeWsId, workspaces, commitPresetState]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -213,6 +360,7 @@ export const DesktopShell: React.FC = () => {
         setPaletteOpen((v) => !v);
       } else if (e.key === 'Escape') {
         setPaletteOpen(false);
+        setPresetMenuOpen(false);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -223,11 +371,11 @@ export const DesktopShell: React.FC = () => {
     (fn: (tree: SplitNode) => SplitNode) => {
       setWorkspaces((prev) => {
         const next = prev.map((w) => (w.id === activeWsId ? { ...w, tree: fn(w.tree) } : w));
-        persistWorkspaces(next, activeWsId);
+        commitPresetState(next, activeWsId);
         return next;
       });
     },
-    [activeWsId],
+    [activeWsId, commitPresetState],
   );
 
   const openTemp = useCallback(
@@ -241,7 +389,7 @@ export const DesktopShell: React.FC = () => {
         worldRef.current,
         catalogRef.current,
       );
-      const width =
+      const rawW =
         kind === 'apidocs'
           ? 760
           : kind === 'script'
@@ -251,7 +399,11 @@ export const DesktopShell: React.FC = () => {
               : kind === 'chart' || kind === 'orbit'
                 ? 520
                 : 460;
-      const height = kind === 'apidocs' ? 560 : kind === 'script' || kind === 'settings' ? 460 : 380;
+      const rawH = kind === 'apidocs' ? 560 : kind === 'script' || kind === 'settings' ? 460 : 380;
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+      const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+      const width = Math.min(rawW, Math.max(260, vw - 16));
+      const height = Math.min(rawH, Math.max(240, vh - 96));
 
       setFloatingWindows((prev) => {
         const next = [
@@ -338,7 +490,8 @@ export const DesktopShell: React.FC = () => {
 
   const switchWorkspace = (nextId: string) => {
     setActiveWsId(nextId);
-    persistWorkspaces(workspaces, nextId);
+    setPortraitLeafIdx(0);
+    commitPresetState(workspaces, nextId);
   };
 
   const openAddWorkspace = () => {
@@ -361,24 +514,104 @@ export const DesktopShell: React.FC = () => {
     const next = [...workspaces, entry];
     setWorkspaces(next);
     setActiveWsId(newId);
-    persistWorkspaces(next, newId);
+    setPortraitLeafIdx(0);
+    commitPresetState(next, newId);
     setAddingWs(false);
     setNewWsName('');
   };
 
+  const selectPreset = (presetId: string) => {
+    const target = layoutBundle.presets.find((p) => p.id === presetId);
+    if (!target) return;
+    setActivePresetId(target.id);
+    setWorkspaces(target.workspaces);
+    setActiveWsId(target.activeWorkspaceId);
+    setPortraitLeafIdx(0);
+    persistWorkspaces(target.workspaces, target.activeWorkspaceId);
+    persistLocalLayoutBundle(layoutBundle, target.id);
+    setPresetMenuOpen(false);
+  };
+
+  const saveAsNewPreset = () => {
+    const trimmed = newPresetName.trim();
+    if (!trimmed) return;
+    const now = Date.now();
+    const id = `preset-${now}`;
+    const clonedWorkspaces = JSON.parse(JSON.stringify(workspaces)) as WorkspaceEntry[];
+    const created: LayoutPreset = {
+      id,
+      name: trimmed,
+      device: newPresetDevice,
+      workspaces: clonedWorkspaces,
+      activeWorkspaceId: activeWsId,
+      updatedAt: now,
+    };
+    const nextBundle: LayoutBundle = {
+      version: 1,
+      presets: [...layoutBundle.presets, created],
+    };
+    setLayoutBundle(nextBundle);
+    setActivePresetId(id);
+    persistLocalLayoutBundle(nextBundle, id);
+    scheduleCloudPush(nextBundle);
+    setNewPresetName('');
+  };
+
+  const overwritePreset = (presetId: string) => {
+    const now = Date.now();
+    const clonedWorkspaces = JSON.parse(JSON.stringify(workspaces)) as WorkspaceEntry[];
+    const nextBundle: LayoutBundle = {
+      version: 1,
+      presets: layoutBundle.presets.map((p) =>
+        p.id === presetId
+          ? { ...p, workspaces: clonedWorkspaces, activeWorkspaceId: activeWsId, updatedAt: now }
+          : p,
+      ),
+    };
+    setLayoutBundle(nextBundle);
+    setActivePresetId(presetId);
+    persistLocalLayoutBundle(nextBundle, presetId);
+    scheduleCloudPush(nextBundle);
+  };
+
+  const deletePreset = (presetId: string) => {
+    if (layoutBundle.presets.length <= 1) return;
+    const nextPresets = layoutBundle.presets.filter((p) => p.id !== presetId);
+    const nextBundle: LayoutBundle = { version: 1, presets: nextPresets };
+    const nextActiveId = activePresetId === presetId ? nextPresets[0].id : activePresetId;
+    setLayoutBundle(nextBundle);
+    if (activePresetId === presetId) {
+      const fallback = nextPresets[0];
+      setActivePresetId(fallback.id);
+      setWorkspaces(fallback.workspaces);
+      setActiveWsId(fallback.activeWorkspaceId);
+      setPortraitLeafIdx(0);
+      persistWorkspaces(fallback.workspaces, fallback.activeWorkspaceId);
+    }
+    persistLocalLayoutBundle(nextBundle, nextActiveId);
+    scheduleCloudPush(nextBundle);
+  };
+
+  const activePreset = layoutBundle.presets.find((p) => p.id === activePresetId) ?? layoutBundle.presets[0];
   const activeWorkspace = workspaces.find((w) => w.id === activeWsId) ?? workspaces[0];
+  const portraitLeaves = useMemo(
+    () => (activeWorkspace ? flattenLeaves(activeWorkspace.tree) : []),
+    [activeWorkspace],
+  );
+  const clampedLeafIdx = portraitLeaves.length > 0 ? Math.min(portraitLeafIdx, portraitLeaves.length - 1) : 0;
+  const activePortraitLeaf = portraitLeaves[clampedLeafIdx] ?? null;
   const cash = moneyToCredits(state?.player_snapshot?.company.cash);
   const paused = state?.paused ?? false;
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#161b22] text-slate-200 overflow-hidden">
+    <div className="h-full w-full flex flex-col bg-[#161b22] text-slate-200 overflow-hidden">
       {/* Top Telemetry Chrome */}
-      <header className="h-9 bg-[#1f2630] border-b border-sky-500/15 px-3 flex items-center justify-between gap-3 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex items-center gap-2 pr-3 border-r border-slate-800 shrink-0">
+      <header className="min-h-9 bg-[#1f2630] border-b border-sky-500/15 px-2 sm:px-3 py-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-full">
+          <div className="flex items-center gap-1.5 sm:gap-2 pr-2 sm:pr-3 border-r border-slate-800 shrink-0">
             <MeridianLogo className="w-4 h-4 shrink-0" />
-            <span className="font-semibold tracking-[0.18em] text-[11px] text-slate-100 whitespace-nowrap">
-              子午线 · MERIDIAN
+            <span className="font-semibold tracking-[0.14em] sm:tracking-[0.18em] text-[11px] text-slate-100 whitespace-nowrap">
+              <span className="hidden sm:inline">子午线 · </span>MERIDIAN
             </span>
           </div>
 
@@ -470,11 +703,30 @@ export const DesktopShell: React.FC = () => {
             </span>
           </div>
 
-          <div className="flex items-center gap-2 pl-2.5 border-l border-slate-700/60">
+          <div className="flex items-center gap-1.5 sm:gap-2 pl-2 sm:pl-2.5 border-l border-slate-700/60">
+            <button
+              onClick={() => {
+                setPresetMenuOpen((v) => !v);
+                setWindowListOpen(false);
+              }}
+              className={`h-7 px-2 rounded-[2px] border text-[11px] inline-flex items-center gap-1 whitespace-nowrap transition-colors ${
+                presetMenuOpen
+                  ? 'border-sky-400 bg-sky-500/15 text-sky-100'
+                  : 'border-slate-700/80 bg-[#232a36] text-slate-300 hover:border-sky-400/50 hover:text-sky-100'
+              }`}
+              title="切换或保存多设备窗口预设"
+            >
+              <Monitor className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
+              <span className="max-w-[72px] truncate font-sans">{activePreset?.name ?? '预设'}</span>
+              <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+            </button>
             {floatingWindows.length > 0 && (
               <button
-                onClick={() => setWindowListOpen((v) => !v)}
-                className="h-7 px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                onClick={() => {
+                  setWindowListOpen((v) => !v);
+                  setPresetMenuOpen(false);
+                }}
+                className="h-7 px-2 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1 whitespace-nowrap transition-colors"
                 title="列出/切换已打开的临时窗口"
               >
                 <span>悬浮窗</span>
@@ -484,29 +736,29 @@ export const DesktopShell: React.FC = () => {
             <button
               onClick={() => setPaletteOpen(true)}
               title="全局搜索 (Ctrl / ⌘ + K)"
-              className="h-7 px-3 rounded-[2px] border border-slate-700/80 bg-[#181e26] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-slate-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              className="h-7 px-2 sm:px-3 rounded-[2px] border border-slate-700/80 bg-[#181e26] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-slate-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
             >
               <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span className="font-sans">搜索</span>
+              <span className="hidden sm:inline font-sans">搜索</span>
             </button>
             <button
               onClick={() => {
                 bringTutorialToFront();
                 openTutorial();
               }}
-              className="h-7 px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
               title="打开新手引导教程"
             >
               <HelpCircle className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
-              <span className="font-sans">引导</span>
+              <span className="hidden sm:inline font-sans">引导</span>
             </button>
             <button
               onClick={() => openTemp('settings')}
               title="个人设置"
-              className="h-7 px-2.5 rounded-[2px] border border-slate-700/70 bg-[#232a36]/80 text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/70 bg-[#232a36]/80 text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
             >
               <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span className="max-w-[96px] truncate font-sans">{playerName}</span>
+              <span className="max-w-[72px] sm:max-w-[96px] truncate font-sans">{playerName}</span>
             </button>
           </div>
         </div>
@@ -521,36 +773,79 @@ export const DesktopShell: React.FC = () => {
         </div>
       )}
 
-      {/* Body: Left Rail (all clicks open temporary floating windows!) + Split Tile Desktop */}
-      <div className="flex-1 flex min-h-0 relative">
-        <aside className="w-12 bg-[#1a2029] border-r border-sky-500/15 py-2 flex flex-col items-center justify-between shrink-0 overflow-y-auto">
-          <div className="flex flex-col gap-1">
-            {RAIL_BUTTONS.map((btn) => {
-              const isTutTarget = tutorialHighlight === `rail:${btn.kind}`;
+      {/* Body: Left Rail (desktop) / Bottom Dock + Single-Pane Tabs (portrait) */}
+      <div className={isPortrait ? 'flex-1 flex flex-col min-h-0 relative' : 'flex-1 flex min-h-0 relative'}>
+        {!isPortrait && (
+          <aside className="w-12 bg-[#1a2029] border-r border-sky-500/15 py-2 flex flex-col items-center justify-between shrink-0 overflow-y-auto">
+            <div className="flex flex-col gap-1">
+              {RAIL_BUTTONS.map((btn) => {
+                const isTutTarget = tutorialHighlight === `rail:${btn.kind}`;
+                return (
+                  <button
+                    key={btn.kind}
+                    onClick={() => openTemp(btn.kind)}
+                    className={`w-10 min-h-[38px] py-1 px-0.5 rounded-[3px] flex flex-col items-center justify-center transition-colors border ${
+                      isTutTarget
+                        ? 'text-cyan-200 bg-cyan-500/20 border-cyan-400 ring-1 ring-cyan-400/70 animate-pulse'
+                        : 'text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border-transparent hover:border-sky-500/30'
+                    }`}
+                    title={`打开临时悬浮窗：${btn.label}`}
+                  >
+                    <span className="shrink-0 flex items-center justify-center">{btn.icon}</span>
+                    <span className="text-[9px] mt-0.5 whitespace-nowrap leading-none">{btn.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        )}
+
+        {/* Portrait single-pane leaf switcher */}
+        {isPortrait && portraitLeaves.length > 0 && (
+          <div className="bg-[#1a2029] border-b border-sky-500/15 px-1.5 py-1 flex items-center gap-1 overflow-x-auto shrink-0">
+            {portraitLeaves.map((leaf, idx) => {
+              const active = idx === clampedLeafIdx;
+              const title = leaf.content
+                ? paneTitle(leaf.content.kind, leaf.content.params, { catalog, world })
+                : `空白窗口 ${idx + 1}`;
               return (
                 <button
-                  key={btn.kind}
-                  onClick={() => openTemp(btn.kind)}
-                  className={`w-10 min-h-[38px] py-1 px-0.5 rounded-[3px] flex flex-col items-center justify-center transition-colors border ${
-                    isTutTarget
-                      ? 'text-cyan-200 bg-cyan-500/20 border-cyan-400 ring-1 ring-cyan-400/70 animate-pulse'
-                      : 'text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border-transparent hover:border-sky-500/30'
+                  key={leaf.id}
+                  onClick={() => setPortraitLeafIdx(idx)}
+                  className={`px-2 py-1 rounded-[2px] text-[10px] whitespace-nowrap border transition-colors shrink-0 ${
+                    active
+                      ? 'bg-sky-500/20 border-sky-400/70 text-sky-100'
+                      : 'bg-[#212834] border-slate-700/70 text-slate-400 hover:text-slate-200'
                   }`}
-                  title={`打开临时悬浮窗：${btn.label}`}
                 >
-                  <span className="shrink-0 flex items-center justify-center">{btn.icon}</span>
-                  <span className="text-[9px] mt-0.5 whitespace-nowrap leading-none">{btn.label}</span>
+                  {title}
                 </button>
               );
             })}
+            {activePortraitLeaf && (
+              <button
+                onClick={() => {
+                  updateActiveTree((tree) => splitLeaf(tree, activePortraitLeaf.id, 'horizontal'));
+                  setPortraitLeafIdx(portraitLeaves.length);
+                }}
+                className="px-2 py-1 rounded-[2px] text-[10px] whitespace-nowrap border border-dashed border-slate-700 text-slate-400 hover:text-sky-200 hover:border-sky-400/60 shrink-0"
+                title="在当前工作区新增一页"
+              >
+                + 页
+              </button>
+            )}
           </div>
-        </aside>
+        )}
 
-        {/* Tiled Split Layout Workspace (strictly 1 panel per tile, NO tabs!) */}
+        {/* Tiled Split Layout Workspace (desktop) or Active Single Leaf (portrait) */}
         <div className="flex-1 min-w-0 min-h-0 p-1 bg-[#161b22]">
-          {activeWorkspace && (
+          {activeWorkspace && (!isPortrait || activePortraitLeaf) && (
             <SplitLayout
-              node={activeWorkspace.tree}
+              node={
+                isPortrait && activePortraitLeaf
+                  ? { id: activePortraitLeaf.id, type: 'leaf', content: activePortraitLeaf.content }
+                  : activeWorkspace.tree
+              }
               dropTargetTileId={dropTargetTileId}
               onSplit={(tileId, dir: SplitDirection) =>
                 updateActiveTree((tree) => splitLeaf(tree, tileId, dir))
@@ -578,6 +873,30 @@ export const DesktopShell: React.FC = () => {
             />
           )}
         </div>
+
+        {/* Portrait Bottom Quick-Launch Dock */}
+        {isPortrait && (
+          <nav className="h-12 bg-[#1a2029] border-t border-sky-500/15 px-1.5 flex items-center gap-1 shrink-0 overflow-x-auto">
+            {RAIL_BUTTONS.map((btn) => {
+              const isTutTarget = tutorialHighlight === `rail:${btn.kind}`;
+              return (
+                <button
+                  key={btn.kind}
+                  onClick={() => openTemp(btn.kind)}
+                  className={`min-w-[44px] h-10 px-1.5 rounded-[3px] flex flex-col items-center justify-center transition-colors border shrink-0 ${
+                    isTutTarget
+                      ? 'text-cyan-200 bg-cyan-500/20 border-cyan-400 ring-1 ring-cyan-400/70 animate-pulse'
+                      : 'text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border-transparent hover:border-sky-500/30'
+                  }`}
+                  title={`打开临时悬浮窗：${btn.label}`}
+                >
+                  <span className="shrink-0 flex items-center justify-center">{btn.icon}</span>
+                  <span className="text-[9px] mt-0.5 whitespace-nowrap leading-none">{btn.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+        )}
       </div>
 
       {/* Temporary Floating Windows Layer */}
@@ -632,6 +951,126 @@ export const DesktopShell: React.FC = () => {
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {presetMenuOpen && (
+        <div className="fixed right-2 top-11 z-[9999] w-80 max-w-[calc(100vw-16px)] bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden text-[11px]">
+          <div className="px-2.5 py-2 border-b border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="font-medium text-slate-100">多设备窗口预设</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded ${
+                  cloudSyncStatus === 'synced'
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : cloudSyncStatus === 'syncing'
+                      ? 'bg-sky-500/15 text-sky-300'
+                      : 'bg-slate-700/60 text-slate-400'
+                }`}
+              >
+                {cloudSyncStatus === 'synced'
+                  ? '云端已同步'
+                  : cloudSyncStatus === 'syncing'
+                    ? '同步中…'
+                    : '仅本地'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {sessionUser && (
+                <button
+                  onClick={() => void pullCloudPresets()}
+                  className="text-slate-400 hover:text-sky-300 p-0.5"
+                  title="从云端拉取最新预设"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              )}
+              <button onClick={() => setPresetMenuOpen(false)} className="text-slate-400 hover:text-white p-0.5">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/70">
+            {layoutBundle.presets.map((p) => {
+              const isCur = p.id === activePresetId;
+              const deviceLabel =
+                p.device === 'portrait' ? '竖屏' : p.device === 'desktop' ? '桌面' : '通用';
+              return (
+                <div
+                  key={p.id}
+                  className={`px-2.5 py-1.5 flex items-center justify-between gap-2 ${
+                    isCur ? 'bg-sky-500/10' : 'hover:bg-slate-800/50'
+                  }`}
+                >
+                  <button
+                    onClick={() => selectPreset(p.id)}
+                    className="flex-1 min-w-0 text-left flex items-center gap-1.5"
+                  >
+                    <Check className={`w-3.5 h-3.5 shrink-0 ${isCur ? 'text-sky-300' : 'opacity-0'}`} />
+                    <span className={`truncate ${isCur ? 'text-sky-100 font-medium' : 'text-slate-200'}`}>
+                      {p.name}
+                    </span>
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-slate-800 text-slate-400 shrink-0">
+                      {deviceLabel}
+                    </span>
+                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => overwritePreset(p.id)}
+                      className="text-[10px] px-1.5 py-0.5 rounded border border-slate-700/80 text-slate-300 hover:border-sky-400/50 hover:text-sky-200"
+                      title="用当前工作区覆盖保存到此预设"
+                    >
+                      保存
+                    </button>
+                    {layoutBundle.presets.length > 1 && (
+                      <button
+                        onClick={() => deletePreset(p.id)}
+                        className="text-slate-500 hover:text-rose-300 p-0.5"
+                        title="删除预设"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="p-2.5 border-t border-slate-800 bg-[#1a2029] space-y-1.5">
+            <div className="text-[10px] text-slate-400">另存当前工作区为新预设（不同设备独立选择激活项）：</div>
+            <div className="flex items-center gap-1.5">
+              <input
+                value={newPresetName}
+                onChange={(e) => setNewPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    saveAsNewPreset();
+                  }
+                }}
+                placeholder="预设名称（如：手机盘口）"
+                className="flex-1 min-w-0 h-7 px-2 bg-[#161b22] border border-slate-700 rounded-[2px] text-[11px] text-slate-100 outline-none focus:border-sky-400"
+              />
+              <select
+                value={newPresetDevice}
+                onChange={(e) => setNewPresetDevice(e.target.value as PresetDeviceTag)}
+                className="h-7 px-1.5 bg-[#161b22] border border-slate-700 rounded-[2px] text-[10px] text-slate-200 outline-none"
+              >
+                <option value="desktop">桌面</option>
+                <option value="portrait">竖屏</option>
+                <option value="all">通用</option>
+              </select>
+              <button
+                onClick={saveAsNewPreset}
+                disabled={!newPresetName.trim()}
+                className="h-7 px-2.5 rounded-[2px] bg-sky-500/20 border border-sky-400/60 text-sky-100 text-[10px] hover:bg-sky-500/30 disabled:opacity-40 shrink-0"
+              >
+                新建
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

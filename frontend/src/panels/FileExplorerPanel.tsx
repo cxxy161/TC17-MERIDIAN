@@ -527,7 +527,7 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
     });
 
   return (
-    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden select-none">
+    <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
       {/* VSC Explorer Header Toolbar */}
       <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between gap-1 shrink-0">
         <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">

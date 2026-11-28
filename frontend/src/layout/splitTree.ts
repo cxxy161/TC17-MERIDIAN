@@ -145,3 +145,11 @@ export function updateSplitRatio(node: SplitNode, splitId: string, ratio: number
     second: updateSplitRatio(node.second, splitId, clamped),
   };
 }
+
+/** Collect all leaf tiles in deterministic left-to-right / top-to-bottom order. */
+export function flattenLeaves(node: SplitNode): Array<{ id: string; content: TileContent | null }> {
+  if (node.type === 'leaf') {
+    return [{ id: node.id, content: node.content }];
+  }
+  return [...flattenLeaves(node.first), ...flattenLeaves(node.second)];
+}

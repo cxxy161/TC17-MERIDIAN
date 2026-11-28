@@ -20,11 +20,15 @@ fn load_production_catalog() -> ProductionCatalog {
 #[test]
 fn test_production_json_loads_and_has_zero_deadlocks() {
     let catalog = load_production_catalog();
-    assert_eq!(catalog.items.len(), 16);
+    assert_eq!(catalog.items.len(), 18);
     assert_eq!(catalog.buildings.len(), 7);
-    assert_eq!(catalog.recipes.len(), 18);
+    assert_eq!(catalog.recipes.len(), 20);
     assert_eq!(catalog.professions.len(), 3);
     assert!(catalog.recipes_by_building.contains_key("recycling_plant"));
+    assert!(catalog.items.contains_key("ship_medium"));
+    assert!(catalog.items.contains_key("ship_large"));
+    assert!(catalog.recipes.contains_key("build_ship_medium"));
+    assert!(catalog.recipes.contains_key("build_ship_large"));
 }
 
 #[test]

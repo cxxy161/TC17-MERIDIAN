@@ -332,6 +332,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
     <div className="h-full flex flex-col bg-[#202732] text-slate-200 overflow-hidden">
       {header}
 
+      <div className="flex-1 min-h-0 overflow-y-auto">
       {/* Quote summary */}
       <div className="px-2.5 py-1 border-b border-slate-800/80 flex items-center gap-3 mono text-[10px] shrink-0 flex-wrap">
         <span className="text-slate-500">
@@ -453,7 +454,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
       )}
 
       {/* Own Active Orders & Recent Trades */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-3 text-[11px]">
+      <div className="p-2.5 space-y-3 text-[11px]">
         <div>
           <div className="text-[10px] text-slate-400 mb-1">我的当前挂单（永久有效，无48回合强制过期）</div>
           {ownOrders.length === 0 ? (
@@ -533,6 +534,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

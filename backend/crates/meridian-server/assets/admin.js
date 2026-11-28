@@ -8,6 +8,31 @@ let selectedCompId = null;
 let detailTab = 'overview';
 let rawJsonOpen = false;
 let confirmingReset = false;
+let uiFrozen = false;
+
+function hasTextSelection() {
+  const sel = window.getSelection();
+  return !!sel && !sel.isCollapsed && String(sel).trim().length > 0;
+}
+
+function captureScrolls() {
+  const saved = [];
+  document.querySelectorAll('.table-scroll, #detailBox, .raw-json pre, .syslog-box').forEach((el, idx) => {
+    saved.push({ idx, top: el.scrollTop, left: el.scrollLeft });
+  });
+  return saved;
+}
+
+function restoreScrolls(saved) {
+  const els = document.querySelectorAll('.table-scroll, #detailBox, .raw-json pre, .syslog-box');
+  for (const s of saved) {
+    const el = els[s.idx];
+    if (el) {
+      el.scrollTop = s.top;
+      el.scrollLeft = s.left;
+    }
+  }
+}
 
 const ITEM_NAMES = {};
 const PROF_NAMES = {};
@@ -301,16 +326,23 @@ function renderAll() {
   document.getElementById('kWs').textContent = `${rt.ws_total || 0}`;
   document.getElementById('kRtt').textContent = `${lastRttMs.toFixed(0)}ms`;
 
+  if (uiFrozen) return;
+  const savedScrolls = captureScrolls();
+  const selecting = hasTextSelection();
+
   renderRuntime();
   renderEconCharts();
-  renderAccounts();
-  renderPlanetFilters();
-  renderPlanets();
-  renderCompanies();
-  renderMatrix();
-  renderFlights();
-  renderTrades();
-  renderDetail();
+  if (!selecting) {
+    renderAccounts();
+    renderPlanetFilters();
+    renderPlanets();
+    renderCompanies();
+    renderMatrix();
+    renderFlights();
+    renderTrades();
+    renderDetail();
+  }
+  restoreScrolls(savedScrolls);
 }
 
 function renderRuntime() {
@@ -933,9 +965,12 @@ function renderDetail() {
 
   const info = analyzeCompany(comp);
   titleEl.textContent = `${comp.name} (${comp.id})`;
-  subEl.innerHTML = comp.is_player
-    ? `<span class="tag player">玩家</span> ${esc(comp.home_planet_id)} <button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">查看完整沙盒/日志</button>`
-    : `<span class="tag npc">NPC</span> ${esc(comp.home_planet_id)} · ${esc(PROF_NAMES[comp.profession] || comp.profession)}`;
+  subEl.innerHTML =
+    (comp.is_player
+      ? `<span class="tag player">玩家</span> ${esc(comp.home_planet_id)} <button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">查看完整沙盒/日志</button>`
+      : `<span class="tag npc">NPC</span> ${esc(comp.home_planet_id)} · ${esc(PROF_NAMES[comp.profession] || comp.profession)}`) +
+    ` <button class="xs" data-action="copy-comp-id" data-company-id="${esc(comp.id)}">复制ID</button>` +
+    ` <button class="xs" data-action="copy-comp-json" data-company-id="${esc(comp.id)}">复制JSON</button>`;
 
   const tabsHtml = `<div class="sub-tabs">
     <button class="xs ${detailTab === 'overview' ? 'active' : ''}" data-action="detail-tab" data-tab="overview">总览与诊断</button>
@@ -1258,7 +1293,17 @@ function connectWs() {
 renderResetBox();
 loadMe();
 loadCatalog().then(refreshAll);
-setInterval(() => { if (authReady) refreshAll(); }, 3000);
+setInterval(() => { if (authReady && !uiFrozen) refreshAll(); }, 3000);
+
+const btnFreeze = document.getElementById('btnFreezeUi');
+if (btnFreeze) {
+  btnFreeze.onclick = () => {
+    uiFrozen = !uiFrozen;
+    btnFreeze.classList.toggle('active', uiFrozen);
+    btnFreeze.textContent = uiFrozen ? '恢复实时渲染' : '冻结画面';
+    if (!uiFrozen) refreshAll();
+  };
+}
 
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('button[data-action]');
@@ -1268,6 +1313,20 @@ document.addEventListener('click', (e) => {
     togglePlayerScript(btn.dataset.companyId, btn.dataset.enabled === 'true');
   } else if (action === 'inspect-sandbox') {
     inspectPlayerSandbox(btn.dataset.companyId);
+  } else if (action === 'copy-comp-id') {
+    navigator.clipboard?.writeText(btn.dataset.companyId || '').then(() => {
+      btn.textContent = '已复制';
+      setTimeout(() => { btn.textContent = '复制ID'; }, 1200);
+    }).catch(() => {});
+  } else if (action === 'copy-comp-json') {
+    const cid = btn.dataset.companyId;
+    const comp = (overview?.companies || []).find((c) => c.id === cid);
+    if (comp) {
+      navigator.clipboard?.writeText(JSON.stringify(comp, null, 2)).then(() => {
+        btn.textContent = '已复制';
+        setTimeout(() => { btn.textContent = '复制JSON'; }, 1200);
+      }).catch(() => {});
+    }
   } else if (action === 'reset-password') {
     resetUserPassword(Number(btn.dataset.userId), btn.dataset.email || '');
   } else if (action === 'kick-user') {

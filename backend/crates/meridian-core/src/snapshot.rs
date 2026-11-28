@@ -54,6 +54,10 @@ pub struct BuildingView {
     pub active: bool,
     pub progress: u32,
     pub cycle_ticks: u32,
+    #[serde(default)]
+    pub idle_ticks: u32,
+    #[serde(default)]
+    pub stall_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

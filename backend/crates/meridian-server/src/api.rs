@@ -106,6 +106,7 @@ pub fn build_router(engine: SharedEngine, dist_dir: Option<PathBuf>) -> Router {
         .route("/api/account", get(account_handler).patch(update_account_handler))
         .route("/api/account/password", post(change_password_handler))
         .route("/api/account/sessions/revoke", post(revoke_sessions_handler))
+        .route("/api/account/layouts", get(get_layouts_handler).put(put_layouts_handler))
         .route("/ws", get(ws_handler))
         .with_state(engine);
 
@@ -2121,4 +2122,60 @@ async fn revoke_sessions_handler(
         .delete_session(session_id)
         .map_err(ApiError::internal)?;
     Ok(Json(serde_json::json!({ "ok": true, "revoked": 1 })))
+}
+
+const MAX_LAYOUT_BUNDLE_BYTES: usize = 262_144;
+
+async fn get_layouts_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let eng = engine.lock().await;
+    if let Some((raw, updated_at)) = eng.store.get_user_layouts(user.user.id) {
+        let bundle: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        Ok(Json(serde_json::json!({
+            "bundle": bundle,
+            "updated_at": updated_at,
+        })))
+    } else {
+        Ok(Json(serde_json::json!({
+            "bundle": serde_json::Value::Null,
+            "updated_at": serde_json::Value::Null,
+        })))
+    }
+}
+
+#[derive(Deserialize)]
+struct SaveLayoutsReq {
+    bundle: serde_json::Value,
+}
+
+async fn put_layouts_handler(
+    State(engine): State<SharedEngine>,
+    user: AuthUser,
+    Json(req): Json<SaveLayoutsReq>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !req.bundle.is_object() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "预设数据格式无效",
+        ));
+    }
+    let serialized = serde_json::to_string(&req.bundle).map_err(ApiError::internal)?;
+    if serialized.len() > MAX_LAYOUT_BUNDLE_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "预设数据体积超出上限（256 KB）",
+        ));
+    }
+    let eng = engine.lock().await;
+    let updated_at = eng
+        .store
+        .save_user_layouts(user.user.id, &serialized)
+        .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "updated_at": updated_at,
+    })))
 }

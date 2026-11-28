@@ -205,10 +205,17 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     };
   }, [open, reposition]);
 
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   useEffect(() => {
     if (open) {
       setQuery('');
-      const selectedIdx = value ? options.findIndex((o) => o.id === value) : -1;
+      const curVal = valueRef.current;
+      const curOpts = optionsRef.current;
+      const selectedIdx = curVal ? curOpts.findIndex((o) => o.id === curVal) : -1;
       const initIdx = selectedIdx >= 0 ? selectedIdx : 0;
       setActive(initIdx);
       setScrollTarget((prev) => ({ index: initIdx, seq: prev.seq + 1 }));
@@ -216,7 +223,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     } else {
       setFacetSel({});
     }
-  }, [open, value, options]);
+  }, [open]);
 
   const commit = useCallback(
     (id: string) => {
@@ -310,7 +317,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
           </div>
 
           {facets && facets.length > 0 && (
-            <div className="px-2 py-1.5 border-b border-slate-800 space-y-1 shrink-0 max-h-[92px] overflow-y-auto">
+            <div className="px-2 py-1.5 border-b border-slate-800 space-y-1 shrink-0 max-h-[76px] overflow-y-auto">
               {facets.map((f) => (
                 <div key={f.key} className="flex items-center gap-1 flex-wrap">
                   <span className="text-[9px] text-slate-500 w-9 shrink-0">{f.label}</span>
@@ -342,6 +349,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
 
           <div
             ref={listBoxRef}
+            className="flex-1 min-h-0"
             style={{
               height: listDesiredHeight,
               minHeight: 0,
@@ -367,7 +375,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
                     onMouseEnter={() => setActive(idx)}
                     onClick={() => !opt.disabled && commit(opt.id)}
                     disabled={opt.disabled}
-                    className={`w-full text-left px-2 flex items-center justify-between gap-2 h-[24px] rounded-sm disabled:opacity-40 ${
+                    className={`w-full text-left px-2 flex items-center justify-between gap-2 h-[24px] rounded-sm disabled:opacity-40 hover:bg-sky-500/20 ${
                       isAct
                         ? 'bg-sky-500/25 text-white'
                         : isSel

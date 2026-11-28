@@ -3726,6 +3726,55 @@ impl World {
                 let Some(b) = self.buildings.get(bid) else {
                     continue;
                 };
+                let recipe_opt = self.catalog.recipes.get(&b.recipe_id);
+                let cycle_ticks = recipe_opt.map(|r| r.cycle_ticks).unwrap_or(1);
+                let stall_reason = if !b.active {
+                    Some("已手动待机".to_string())
+                } else if !b.active_batch {
+                    if let Some(r) = recipe_opt {
+                        let wage = to_money(r.labor_cost * self.cpi);
+                        if comp.cash < wage {
+                            Some(format!("现金不足支付人工（需 {:.2} Cr）", from_money(wage)))
+                        } else if r.power_cost > 0
+                            && comp.ground_qty(&b.planet_id, "power") < r.power_cost
+                        {
+                            Some(format!(
+                                "地面电力不足（{}/{}）",
+                                comp.ground_qty(&b.planet_id, "power"),
+                                r.power_cost
+                            ))
+                        } else {
+                            let mut missing = None;
+                            for inp in &r.inputs {
+                                let have = if inp.item == "waste" {
+                                    comp.ground_qty(&b.planet_id, "waste")
+                                        + self
+                                            .planets
+                                            .get(&b.planet_id)
+                                            .map(|p| p.waste_backlog)
+                                            .unwrap_or(0)
+                                } else {
+                                    comp.ground_qty(&b.planet_id, &inp.item)
+                                };
+                                if have < inp.qty {
+                                    let iname = self
+                                        .catalog
+                                        .items
+                                        .get(&inp.item)
+                                        .map(|it| it.name.as_str())
+                                        .unwrap_or(inp.item.as_str());
+                                    missing = Some(format!("缺少 {iname}（{have}/{}）", inp.qty));
+                                    break;
+                                }
+                            }
+                            missing
+                        }
+                    } else {
+                        Some("未配置有效配方".to_string())
+                    }
+                } else {
+                    None
+                };
                 buildings.push(BuildingView {
                     id: b.id,
                     building_type: b.building_type.clone(),
@@ -3735,12 +3784,9 @@ impl World {
                     recipe_id: b.recipe_id.clone(),
                     active: b.active,
                     progress: b.progress,
-                    cycle_ticks: self
-                        .catalog
-                        .recipes
-                        .get(&b.recipe_id)
-                        .map(|r| r.cycle_ticks)
-                        .unwrap_or(1),
+                    cycle_ticks,
+                    idle_ticks: b.idle_ticks,
+                    stall_reason,
                 });
             }
         }

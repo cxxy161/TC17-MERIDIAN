@@ -215,10 +215,37 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
     const recipeOptions = recipeOptionsByBuilding.get(b.building_type) ?? [];
     const recipeDef = catalog.recipe(b.recipe_id);
 
+    const groundStore = state?.player_snapshot?.planets?.[b.planet_id]?.ground_store ?? {};
+    let stallReason = b.stall_reason ?? null;
+    if (stallReason === null && b.active && b.progress === 0 && recipeDef) {
+      const pwrHave = groundStore.power ?? 0;
+      if (recipeDef.power_cost > 0 && pwrHave < recipeDef.power_cost) {
+        stallReason = `地面电力不足（${pwrHave}/${recipeDef.power_cost}）`;
+      } else {
+        for (const inp of recipeDef.inputs) {
+          if (inp.item === 'waste') continue;
+          const have = groundStore[inp.item] ?? 0;
+          if (have < inp.qty) {
+            stallReason = `缺少 ${catalog.itemName(inp.item)}（${have}/${inp.qty}）`;
+            break;
+          }
+        }
+      }
+    }
+    const isStalled = b.active && !!stallReason;
+
     return (
-      <div className="h-full border border-slate-800/80 bg-[#1b212b] rounded-sm px-2 py-1 flex flex-col justify-center gap-1">
+      <div
+        className={`h-full border bg-[#1b212b] rounded-sm px-2 py-1 flex flex-col justify-center gap-1 ${
+          isStalled ? 'border-rose-500/45' : 'border-slate-800/80'
+        }`}
+      >
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-1 h-4 shrink-0 ${b.active ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+          <span
+            className={`w-1 h-4 shrink-0 ${
+              !b.active ? 'bg-slate-600' : isStalled ? 'bg-rose-400' : 'bg-emerald-400'
+            }`}
+          />
           <span className="text-[11px] font-medium text-slate-100 truncate">
             {catalog.buildingName(b.building_type)}{' '}
             <span className="text-[9px] mono text-slate-500">#{b.id}</span>
@@ -273,11 +300,29 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
           <span className="shrink-0">地形效率 {b.efficiency.toFixed(2)}x</span>
         </div>
 
-        {recipeDef && <div className="text-[9px] text-slate-500 truncate">{recipeIo(recipeDef)}</div>}
+        <div className="flex items-center justify-between gap-2 text-[9px] min-w-0">
+          <span className="text-slate-500 truncate">
+            {recipeDef ? recipeIo(recipeDef) : '—'}
+          </span>
+          {isStalled ? (
+            <span className="text-rose-300 font-medium shrink-0 truncate max-w-[55%]">
+              停产：{stallReason}
+              {b.idle_ticks && b.idle_ticks > 0 ? ` (${b.idle_ticks}t)` : ''}
+            </span>
+          ) : !b.active ? (
+            <span className="text-slate-400 shrink-0">已手动待机</span>
+          ) : null}
+        </div>
 
         <div className="h-1 bg-slate-800">
           <div
-            className={`h-full ${b.active ? 'bg-gradient-to-r from-sky-400 to-emerald-400' : 'bg-slate-600'}`}
+            className={`h-full ${
+              !b.active
+                ? 'bg-slate-600'
+                : isStalled
+                  ? 'bg-rose-500/70'
+                  : 'bg-gradient-to-r from-sky-400 to-emerald-400'
+            }`}
             style={{ width: `${pct}%` }}
           />
         </div>

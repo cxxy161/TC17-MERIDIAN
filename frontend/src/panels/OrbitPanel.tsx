@@ -20,7 +20,7 @@ export const OrbitPanel: React.FC<PaneProps> = ({ openTemp }) => {
   const ticksPerDay = catalog?.meta.ticks_per_day || 24;
 
   return (
-    <div className="h-full flex flex-col bg-[#191f27] text-slate-200 select-none">
+    <div className="h-full flex flex-col bg-[#191f27] text-slate-200">
       <div className="px-3 py-1.5 border-b border-sky-500/10 flex items-center justify-between text-[11px] bg-[#232a36]">
         <span className="text-slate-400">
           点击星体查看遥测 · 在途飞船{' '}

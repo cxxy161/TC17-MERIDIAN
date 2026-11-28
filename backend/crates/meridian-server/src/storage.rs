@@ -437,6 +437,12 @@ impl SqliteStore {
                 user_agent TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+
+            CREATE TABLE IF NOT EXISTS user_layouts (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                presets_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             "#,
         )?;
         let _ = conn.execute(
@@ -1948,6 +1954,35 @@ impl SqliteStore {
             )
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn get_user_layouts(&self, user_id: i64) -> Option<(String, i64)> {
+        self.conn
+            .query_row(
+                "SELECT presets_json, updated_at FROM user_layouts WHERE user_id = ?1",
+                params![user_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    pub fn save_user_layouts(&self, user_id: i64, presets_json: &str) -> Result<i64, String> {
+        let now = unix_secs();
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO user_layouts (user_id, presets_json, updated_at)
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    presets_json = excluded.presets_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![user_id, presets_json, now],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(now)
     }
 
     pub fn delete_other_sessions(&self, user_id: i64, keep_session_id: i64) -> Result<usize, String> {

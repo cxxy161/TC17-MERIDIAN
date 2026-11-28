@@ -111,19 +111,27 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
     <div
       data-floating-win="true"
       onPointerDown={() => onFocus?.()}
-      style={{
-        left: x,
-        top: y,
-        width: w,
-        height: h,
-        zIndex: z,
-      }}
+      style={(() => {
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const effW = Math.max(Math.min(minW, vw - 12), Math.min(w, vw - 12));
+        const effH = Math.max(Math.min(minH, vh - 88), Math.min(h, vh - 88));
+        const effX = Math.max(6, Math.min(x, Math.max(6, vw - effW - 6)));
+        const effY = Math.max(38, Math.min(y, Math.max(38, vh - effH - 48)));
+        return {
+          left: effX,
+          top: effY,
+          width: effW,
+          height: effH,
+          zIndex: z,
+        };
+      })()}
       className="fixed flex flex-col bg-[#212834] border border-sky-400/60 rounded-[3px] shadow-[0_14px_40px_rgba(0,0,0,0.75)] overflow-hidden"
     >
       {/* Draggable Header */}
       <div
         onPointerDown={handleDragStart}
-        className="h-7 bg-[#2a3545] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 cursor-move select-none shrink-0"
+        className="h-7 bg-[#2a3545] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 cursor-move touch-none select-none shrink-0"
       >
         <div className="flex items-center gap-1.5 min-w-0">
           <GripHorizontal className="w-3.5 h-3.5 text-sky-400 shrink-0" />
