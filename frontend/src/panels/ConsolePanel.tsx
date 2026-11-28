@@ -322,6 +322,24 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
         <div ref={bottomRef} />
       </div>
 
+      {/* Recent command chips for touch users without arrow keys */}
+      {cmdHistory.length > 0 && (
+        <div className="border-t border-slate-800/80 bg-[#1a2029] px-2.5 py-1 flex items-center gap-1.5 overflow-x-auto shrink-0">
+          <span className="text-[10px] text-slate-500 shrink-0">历史:</span>
+          {cmdHistory.slice(0, 6).map((h, idx) => (
+            <button
+              key={`${idx}-${h}`}
+              type="button"
+              onClick={() => setCmd(h)}
+              className="pill-btn py-0 px-2 text-[10px] mono max-w-[160px] truncate shrink-0"
+              title={h}
+            >
+              {h}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Interactive F12 REPL prompt */}
       <div className="border-t border-sky-500/20 bg-[#1e2530] px-2.5 py-1.5 flex items-center gap-2 shrink-0">
         <span className="text-sky-400 mono font-bold text-[12px]">&gt;</span>
@@ -352,9 +370,17 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
               }
             }
           }}
-          placeholder="输入 JS 命令回车进沙盒执行，↑↓ 翻历史，help 看示例..."
-          className="flex-1 bg-transparent outline-none mono text-[11px] text-slate-100 placeholder:text-slate-500 disabled:opacity-60"
+          placeholder="输入 JS 命令（回车或点执行），help 看示例..."
+          className="flex-1 min-w-0 bg-transparent outline-none mono text-[11px] text-slate-100 placeholder:text-slate-500 disabled:opacity-60"
         />
+        <button
+          type="button"
+          disabled={busy || !cmd.trim()}
+          onClick={() => void executeCommand()}
+          className="cta-blue py-0.5 px-2.5 text-[10px] disabled:opacity-40 shrink-0"
+        >
+          执行
+        </button>
       </div>
     </div>
   );

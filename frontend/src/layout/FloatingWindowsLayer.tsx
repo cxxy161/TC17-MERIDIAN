@@ -66,7 +66,7 @@ export const FloatingWindowsLayer: React.FC<FloatingWindowsLayerProps> = ({
             z={win.z}
             title={title}
             badge={
-              <span className="text-[9px] px-1 py-0 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
+              <span className="hidden sm:inline-block text-[9px] px-1 py-0 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">
                 临时悬浮 · 拖入空窗口嵌入
               </span>
             }

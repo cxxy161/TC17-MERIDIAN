@@ -255,7 +255,7 @@ export const StarSystemOrbitSvg: React.FC<StarSystemOrbitSvgProps> = ({
   };
 
   return (
-    <svg viewBox="0 0 520 380" className={className}>
+    <svg viewBox="0 0 520 380" className={`${className} select-none`}>
       <defs>
         <radialGradient id="orbitStarGlow" cx="50%" cy="50%" r="50%">
           <stop offset="0%" stopColor="#fde68a" stopOpacity="0.95" />
@@ -362,6 +362,7 @@ export const StarSystemOrbitSvg: React.FC<StarSystemOrbitSvgProps> = ({
                   }
                 }}
               >
+                <circle r={14} fill="transparent" />
                 <circle r={5.5} fill="rgba(34,211,238,0.14)" />
                 <path
                   d={OWN_SHIP_PATHS[f.size]}
@@ -404,7 +405,7 @@ export const StarSystemOrbitSvg: React.FC<StarSystemOrbitSvgProps> = ({
                 strokeDasharray="2.5 2"
               />
             )}
-            <circle cx={px} cy={py} r={12} fill="transparent" />
+            <circle cx={px} cy={py} r={22} fill="transparent" />
             <circle cx={px} cy={py} r={r} fill={col} />
           </g>
         );
@@ -418,7 +419,7 @@ export const StarSystemOrbitSvg: React.FC<StarSystemOrbitSvgProps> = ({
         className={onSelectHub ? 'cursor-pointer' : undefined}
         onClick={() => onSelectHub?.()}
       >
-        <circle r={10} fill="transparent" />
+        <circle r={20} fill="transparent" />
         <polygon points="0,-4.5 4.5,0 0,4.5 -4.5,0" fill="#38bdf8" />
       </g>
 

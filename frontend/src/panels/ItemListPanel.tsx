@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, PackageSearch, Search } from 'lucide-react';
+import { isCoarsePointer } from '../utils/useDragPointer';
 import type { PaneProps } from '../layout/paneRegistry';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { VirtualList } from '../components/VirtualList';
@@ -121,14 +122,22 @@ export const ItemListPanel: React.FC<PaneProps> = ({ setParams, openTemp }) => {
     }
   };
 
+  const coarse = isCoarsePointer();
+
   const SortHead: React.FC<{ k: SortKey; label: string; className?: string }> = ({ k, label, className }) => (
     <button
       onClick={() => toggleSort(k)}
-      className={`flex items-center justify-end gap-0.5 hover:text-sky-300 ${className ?? ''}`}
+      className={`flex items-center justify-end gap-0.5 hover:text-sky-300 ${
+        sortKey === k ? 'text-sky-300' : ''
+      } ${className ?? ''}`}
       title="点击按此列排序"
     >
       {label}
-      {sortKey === k && (sortDir === 1 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />)}
+      {sortKey === k ? (
+        sortDir === 1 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />
+      ) : (
+        <span className="opacity-35 text-[8px]">↕</span>
+      )}
     </button>
   );
 
@@ -207,50 +216,56 @@ export const ItemListPanel: React.FC<PaneProps> = ({ setParams, openTemp }) => {
         ))}
       </div>
 
-      <div className="px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid grid-cols-[1fr_52px_50px_50px_50px_44px_36px] gap-1 text-[9px] text-slate-500 shrink-0">
-        <SortHead k="name" label="物品" className="justify-start" />
-        <SortHead k="held" label="持有" />
-        <SortHead k="bid" label="买一" />
-        <SortHead k="ask" label="卖一" />
-        <SortHead k="last" label="最新" />
-        <SortHead k="vol" label="50量" />
-        <SortHead k="orders" label="挂单" />
-      </div>
-
-      <VirtualList
-        className="flex-1 min-h-0 overflow-y-auto"
-        count={filtered.length}
-        rowHeight={ROW_HEIGHT}
-        emptyState={
-          <div className="px-3 py-6 text-center text-[11px] text-slate-500 flex flex-col items-center gap-2">
-            <PackageSearch className="w-5 h-5 text-slate-600" />
-            没有匹配的物品。清空搜索或关闭筛选试试。
+      <div className="flex-1 min-h-0 flex flex-col overflow-x-auto">
+        <div className="min-w-[400px] flex-1 min-h-0 flex flex-col">
+          <div className="px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid grid-cols-[minmax(96px,1fr)_52px_50px_50px_50px_44px_36px] gap-1 text-[10px] text-slate-400 shrink-0">
+            <SortHead k="name" label="物品" className="justify-start" />
+            <SortHead k="held" label="持有" />
+            <SortHead k="bid" label="买一" />
+            <SortHead k="ask" label="卖一" />
+            <SortHead k="last" label="最新" />
+            <SortHead k="vol" label="50量" />
+            <SortHead k="orders" label="挂单" />
           </div>
-        }
-        renderRow={(idx) => {
-          const r = filtered[idx];
-          return (
-            <div
-              onClick={() => openTemp('item', { itemId: r.id })}
-              className="h-[26px] grid grid-cols-[1fr_52px_50px_50px_50px_44px_36px] gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40"
-            >
-              <span className="flex items-center gap-1 min-w-0">
-                <span className="truncate text-slate-100">{r.name}</span>
-                {r.instant && <span className="text-[8px] px-1 bg-emerald-500/15 text-emerald-300 shrink-0">瞬时</span>}
-                {r.orders > 0 && <span className="text-[8px] text-amber-300 shrink-0">●</span>}
-              </span>
-              <span className={`text-right mono ${r.held > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
-                {r.held}
-              </span>
-              <span className="text-right mono text-emerald-400/90">{r.bid?.toFixed(1) ?? '--'}</span>
-              <span className="text-right mono text-rose-400/90">{r.ask?.toFixed(1) ?? '--'}</span>
-              <span className="text-right mono text-sky-300">{r.last?.toFixed(1) ?? '--'}</span>
-              <span className="text-right mono text-slate-400">{r.vol || ''}</span>
-              <span className="text-right mono text-amber-300">{r.orders || ''}</span>
-            </div>
-          );
-        }}
-      />
+
+          <VirtualList
+            className="flex-1 min-h-0 overflow-y-auto"
+            count={filtered.length}
+            rowHeight={coarse ? 40 : ROW_HEIGHT}
+            emptyState={
+              <div className="px-3 py-6 text-center text-[11px] text-slate-500 flex flex-col items-center gap-2">
+                <PackageSearch className="w-5 h-5 text-slate-600" />
+                没有匹配的物品。清空搜索或关闭筛选试试。
+              </div>
+            }
+            renderRow={(idx) => {
+              const r = filtered[idx];
+              return (
+                <div
+                  onClick={() => openTemp('item', { itemId: r.id })}
+                  className={`${
+                    coarse ? 'h-[40px]' : 'h-[26px]'
+                  } grid grid-cols-[minmax(96px,1fr)_52px_50px_50px_50px_44px_36px] gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40`}
+                >
+                  <span className="flex items-center gap-1 min-w-0">
+                    <span className="truncate text-slate-100">{r.name}</span>
+                    {r.instant && <span className="text-[8px] px-1 bg-emerald-500/15 text-emerald-300 shrink-0">瞬时</span>}
+                    {r.orders > 0 && <span className="text-[8px] text-amber-300 shrink-0">●</span>}
+                  </span>
+                  <span className={`text-right mono ${r.held > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
+                    {r.held}
+                  </span>
+                  <span className="text-right mono text-emerald-400/90">{r.bid?.toFixed(1) ?? '--'}</span>
+                  <span className="text-right mono text-rose-400/90">{r.ask?.toFixed(1) ?? '--'}</span>
+                  <span className="text-right mono text-sky-300">{r.last?.toFixed(1) ?? '--'}</span>
+                  <span className="text-right mono text-slate-400">{r.vol || ''}</span>
+                  <span className="text-right mono text-amber-300">{r.orders || ''}</span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      </div>
 
       <div className="px-2 py-1 border-t border-slate-800 text-[9px] text-slate-500 flex items-center justify-between shrink-0">
         <span>点击行打开物品详情（在当前位置展开，不弹新窗口）</span>

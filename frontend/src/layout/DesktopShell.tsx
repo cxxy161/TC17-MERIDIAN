@@ -367,6 +367,29 @@ export const DesktopShell: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  useEffect(() => {
+    const onResize = () => {
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      setFloatingWindows((prev) =>
+        prev.map((win) => {
+          const nw = Math.max(Math.min(260, vw - 12), Math.min(win.w, vw - 12));
+          const nh = Math.max(Math.min(200, vh - 88), Math.min(win.h, vh - 88));
+          const nx = Math.max(6, Math.min(win.x, Math.max(6, vw - nw - 6)));
+          const ny = Math.max(38, Math.min(win.y, Math.max(38, vh - nh - 48)));
+          if (nx === win.x && ny === win.y && nw === win.w && nh === win.h) return win;
+          return { ...win, x: nx, y: ny, w: nw, h: nh };
+        }),
+      );
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+
   const updateActiveTree = useCallback(
     (fn: (tree: SplitNode) => SplitNode) => {
       setWorkspaces((prev) => {
@@ -669,7 +692,27 @@ export const DesktopShell: React.FC = () => {
         </div>
 
         {/* Player Metrics & Window Palette */}
-        <div className="flex items-center gap-3 text-[11px] mono shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3 text-[11px] mono shrink-0">
+          {/* Compact mobile summary so cash & tick stay visible below md */}
+          <div className="flex md:hidden items-center gap-2 text-[10px] text-slate-400">
+            <span className="whitespace-nowrap">
+              T<strong className="text-slate-100">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
+            </span>
+            <span className="whitespace-nowrap">
+              <strong className="text-emerald-400">
+                {cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </strong>
+            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                paused
+                  ? 'bg-amber-400'
+                  : wsStatus === 'connected'
+                    ? 'bg-emerald-400'
+                    : 'bg-amber-400 animate-pulse'
+              }`}
+            />
+          </div>
           <div className="hidden md:flex items-center gap-3 text-slate-400">
             <span className="whitespace-nowrap">
               回合 <strong className="text-slate-100">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
@@ -955,7 +998,9 @@ export const DesktopShell: React.FC = () => {
       )}
 
       {presetMenuOpen && (
-        <div className="fixed right-2 top-11 z-[9999] w-80 max-w-[calc(100vw-16px)] bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden text-[11px]">
+        <>
+          <div className="fixed inset-0 z-[9998]" onClick={() => setPresetMenuOpen(false)} />
+          <div className="fixed right-2 top-11 z-[9999] w-80 max-w-[calc(100vw-16px)] bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden text-[11px]">
           <div className="px-2.5 py-2 border-b border-slate-800 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="font-medium text-slate-100">多设备窗口预设</span>
@@ -1072,42 +1117,49 @@ export const DesktopShell: React.FC = () => {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {windowListOpen && (
-        <div className="fixed right-2 top-11 z-[9999] w-64 bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden">
-          <div className="px-2 py-1.5 border-b border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
-            <span>临时窗口（{floatingWindows.length}/{MAX_FLOATING_WINDOWS}）</span>
-            <button onClick={() => setWindowListOpen(false)} className="hover:text-white">
-              <X className="w-3 h-3" />
-            </button>
+        <>
+          <div className="fixed inset-0 z-[9998]" onClick={() => setWindowListOpen(false)} />
+          <div className="fixed right-2 top-11 z-[9999] w-72 max-w-[calc(100vw-16px)] bg-[#212834] border border-sky-400/45 rounded-[3px] shadow-2xl overflow-hidden">
+            <div className="px-2.5 py-2 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400">
+              <span>临时窗口（{floatingWindows.length}/{MAX_FLOATING_WINDOWS}）</span>
+              <button
+                onClick={() => setWindowListOpen(false)}
+                className="w-7 h-7 touch-target flex items-center justify-center hover:text-white rounded-[2px]"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto overscroll-contain divide-y divide-slate-800/60">
+              {floatingWindows.length === 0 && (
+                <div className="px-2.5 py-3 text-[11px] text-slate-500">没有打开的临时窗口</div>
+              )}
+              {floatingWindows.map((win) => (
+                <div key={win.id} className="px-2.5 py-1.5 touch-row flex items-center justify-between gap-2 hover:bg-sky-500/10">
+                  <button
+                    onClick={() => {
+                      bringFloatToFront(win.id);
+                      setWindowListOpen(false);
+                    }}
+                    className="flex-1 min-w-0 py-1 text-[11px] text-sky-200 truncate text-left"
+                  >
+                    {paneTitle(win.kind, win.params, { catalog, world })}
+                  </button>
+                  <button
+                    onClick={() => closeFloat(win.id)}
+                    className="w-8 h-8 touch-target flex items-center justify-center text-slate-400 hover:text-rose-300 hover:bg-rose-500/15 shrink-0 rounded-[2px]"
+                    title="关闭"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="max-h-72 overflow-y-auto">
-            {floatingWindows.length === 0 && (
-              <div className="px-2 py-3 text-[10px] text-slate-500">没有打开的临时窗口</div>
-            )}
-            {floatingWindows.map((win) => (
-              <div key={win.id} className="px-2 py-1 flex items-center justify-between gap-2 hover:bg-sky-500/10">
-                <button
-                  onClick={() => {
-                    bringFloatToFront(win.id);
-                    setWindowListOpen(false);
-                  }}
-                  className="text-[11px] text-sky-200 truncate text-left"
-                >
-                  {paneTitle(win.kind, win.params, { catalog, world })}
-                </button>
-                <button
-                  onClick={() => closeFloat(win.id)}
-                  className="text-slate-500 hover:text-rose-300 shrink-0"
-                  title="关闭"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+        </>
       )}
     </div>
   );

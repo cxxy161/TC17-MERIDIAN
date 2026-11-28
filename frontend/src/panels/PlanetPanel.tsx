@@ -89,7 +89,7 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
       </div>
 
       {/* Clean Multi-Row Telemetry Table + 3D Globe */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto overscroll-contain">
         <div className="divide-y divide-slate-700/60 border-b border-slate-700/70 text-[10.5px] shrink-0">
           <div className="flex">
             <div className="w-[28%] min-w-[76px] bg-[#244465]/75 px-2 py-[3px] text-slate-100 border-r border-slate-700/60 shrink-0">
@@ -230,34 +230,34 @@ export const PlanetPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
             <div className="w-[28%] min-w-[76px] bg-[#244465]/75 px-2 py-1 text-slate-100 border-r border-slate-700/60 flex items-center shrink-0">
               快捷面板
             </div>
-            <div className="flex-1 min-w-0 px-2 py-1 flex flex-wrap justify-end gap-x-2.5 gap-y-0.5">
+            <div className="flex-1 min-w-0 px-2 py-1 flex flex-wrap justify-end gap-1.5">
               <button
                 onClick={() => openTemp('land', { planetId: pSum.id })}
-                className="text-sky-300 hover:text-sky-200 hover:underline"
+                className="pill-btn py-0.5 px-2 text-[10px] text-sky-300 border-sky-500/35"
               >
                 地块总览
               </button>
               <button
                 onClick={() => openTemp('cargo', { locationId: pSum.id })}
-                className="text-sky-300 hover:text-sky-200 hover:underline"
+                className="pill-btn py-0.5 px-2 text-[10px] text-sky-300 border-sky-500/35"
               >
                 地面仓库
               </button>
               <button
                 onClick={() => openTemp('cargo', { locationId: `ST:${pSum.id}` })}
-                className="text-sky-300 hover:text-sky-200 hover:underline"
+                className="pill-btn py-0.5 px-2 text-[10px] text-sky-300 border-sky-500/35"
               >
                 轨道站
               </button>
               <button
                 onClick={() => openTemp('factory', { planetId: pSum.id })}
-                className="text-sky-300 hover:text-sky-200 hover:underline"
+                className="pill-btn py-0.5 px-2 text-[10px] text-sky-300 border-sky-500/35"
               >
                 工业产线
               </button>
               <button
                 onClick={() => openTemp('demand', { planetId: pSum.id })}
-                className="text-emerald-300 hover:text-emerald-200 hover:underline"
+                className="pill-btn py-0.5 px-2 text-[10px] text-emerald-300 border-emerald-500/40"
               >
                 消费需求({demandCount})
               </button>

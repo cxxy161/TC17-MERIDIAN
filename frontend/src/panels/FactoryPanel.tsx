@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { PaneProps } from '../layout/paneRegistry';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
@@ -33,6 +33,7 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
   const world = useWorldIndex();
   const state = useGameStore((s) => s.state);
   const sendIntent = useGameStore((s) => s.sendIntent);
+  const [confirmDemolishId, setConfirmDemolishId] = useState<number | null>(null);
 
   const writable = !READ_ONLY_OBSERVATION_MODE;
   const planetId = params.planetId;
@@ -276,14 +277,32 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
                 >
                   {b.active ? '运行中' : '已待机'}
                 </button>
-                <button
-                  onClick={() =>
-                    void sendIntent({ DemolishFacility: { plot_id: plot.id, building_id: b.id } })
-                  }
-                  className="pill-btn py-0 text-[10px] text-rose-400 hover:border-rose-400"
-                >
-                  拆除
-                </button>
+                {confirmDemolishId === b.id ? (
+                  <span className="ml-2 flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => {
+                        setConfirmDemolishId(null);
+                        void sendIntent({ DemolishFacility: { plot_id: plot.id, building_id: b.id } });
+                      }}
+                      className="pill-btn py-0 px-1.5 text-[10px] bg-rose-500/25 border-rose-400 text-rose-100"
+                    >
+                      确认拆除
+                    </button>
+                    <button
+                      onClick={() => setConfirmDemolishId(null)}
+                      className="pill-btn py-0 px-1.5 text-[10px] text-slate-300"
+                    >
+                      取消
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDemolishId(b.id)}
+                    className="pill-btn py-0 ml-2 text-[10px] text-rose-400 hover:border-rose-400"
+                  >
+                    拆除
+                  </button>
+                )}
               </>
             ) : (
               <span className="text-[10px] px-1.5 py-0.5 bg-[#222935] border border-sky-500/25 text-sky-300">

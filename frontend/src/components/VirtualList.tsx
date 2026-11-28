@@ -85,7 +85,14 @@ export const VirtualList: React.FC<VirtualListProps> = ({
     rows.push(
       <div
         key={i}
-        style={{ position: 'absolute', top: i * rowHeight, height: rowHeight, left: 0, right: 0 }}
+        style={{
+          position: 'absolute',
+          top: i * rowHeight,
+          height: rowHeight,
+          left: 0,
+          right: 0,
+          overflow: 'hidden',
+        }}
       >
         {renderRow(i)}
       </div>,
@@ -97,7 +104,7 @@ export const VirtualList: React.FC<VirtualListProps> = ({
       ref={hostRef}
       onScroll={onScroll}
       style={height !== undefined ? { height } : undefined}
-      className={className ?? 'flex-1 min-h-0 overflow-y-auto'}
+      className={`${className ?? 'flex-1 min-h-0 overflow-y-auto'} overscroll-contain`}
     >
       <div style={{ height: total, position: 'relative' }}>{rows}</div>
     </div>

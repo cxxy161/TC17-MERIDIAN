@@ -47,7 +47,7 @@ const JsonNode: React.FC<{
       <button
         onClick={() => setOpen((v) => !v)}
         style={{ paddingLeft: depth * 14 }}
-        className="w-full text-left flex items-center gap-1 py-0.5 hover:bg-sky-500/10 mono text-[11px]"
+        className="w-full text-left flex items-center gap-1 py-1 touch-row hover:bg-sky-500/10 mono text-[11px]"
       >
         {open ? (
           <ChevronDown className="w-3 h-3 text-slate-500 shrink-0" />
@@ -159,6 +159,21 @@ export const MemoryPanel: React.FC<PaneProps> = () => {
             onChange={(e) => setDraft(e.target.value)}
             className="flex-1 bg-[#1b212b] border border-slate-700 p-2.5 mono text-[11px] text-emerald-300 outline-none resize-none rounded-sm"
           />
+          <div className="flex items-center justify-end gap-2 pt-1 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setJsonError(null);
+                setEditMode(false);
+              }}
+              className="pill-btn py-1 px-3 text-[11px]"
+            >
+              放弃修改
+            </button>
+            <button type="button" onClick={() => void handleSave()} className="cta-green py-1 px-3 text-[11px]">
+              写入保存
+            </button>
+          </div>
         </div>
       )}
     </div>

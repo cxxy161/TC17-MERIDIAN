@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search, X } from 'lucide-react';
 import { VirtualList } from './VirtualList';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 export interface PickerOption {
   id: string;
@@ -92,6 +93,8 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
   const popRef = useRef<HTMLDivElement | null>(null);
   const listBoxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const coarse = isCoarsePointer();
+  const rowHeight = coarse ? 42 : ROW_HEIGHT;
 
   const selected = options.find((o) => o.id === value);
 
@@ -125,7 +128,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     return filtered;
   }, [options, query, facetSel]);
 
-  const listDesiredHeight = Math.min(300, Math.max(120, measured.length * ROW_HEIGHT + 4));
+  const listDesiredHeight = Math.min(320, Math.max(120, measured.length * rowHeight + 4));
 
   /**
    * 用「弹层真实目标高度」决定朝上还是朝下，并始终与触发按钮保持 4px 间距、夹在视口内。
@@ -138,10 +141,16 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     const r = trigger.getBoundingClientRect();
     const margin = 8;
     const gap = 4;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const vv = window.visualViewport;
+    const vvTop = vv?.offsetTop ?? 0;
+    const vvLeft = vv?.offsetLeft ?? 0;
+    const vw = vv ? vv.width : window.innerWidth;
+    const vh = vv ? vv.height : window.innerHeight;
     const width = Math.min(Math.max(r.width, 320), Math.max(240, vw - margin * 2));
-    const left = Math.min(Math.max(margin, r.left), Math.max(margin, vw - width - margin));
+    const left = Math.min(
+      Math.max(vvLeft + margin, r.left),
+      Math.max(vvLeft + margin, vvLeft + vw - width - margin),
+    );
     const pop = popRef.current;
     let naturalHeight = 320;
     if (pop) {
@@ -149,16 +158,16 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       for (const child of Array.from(pop.children) as HTMLElement[]) {
         chromeH += child === listBoxRef.current ? listDesiredHeight : child.offsetHeight;
       }
-      naturalHeight = Math.max(160, chromeH);
+      naturalHeight = Math.max(140, chromeH);
     }
-    const spaceBelow = vh - r.bottom - gap - margin;
-    const spaceAbove = r.top - gap - margin;
+    const spaceBelow = vvTop + vh - r.bottom - gap - margin;
+    const spaceAbove = r.top - vvTop - gap - margin;
     const openUp = spaceBelow < naturalHeight && spaceAbove > spaceBelow;
-    const available = openUp ? spaceAbove : spaceBelow;
-    const maxHeight = Math.max(140, Math.min(naturalHeight, available));
+    const available = Math.max(110, openUp ? spaceAbove : spaceBelow);
+    const maxHeight = Math.max(110, Math.min(naturalHeight, available));
     const top = openUp
-      ? Math.max(margin, r.top - maxHeight - gap)
-      : Math.min(r.bottom + gap, vh - margin - maxHeight);
+      ? Math.max(vvTop + margin, r.top - maxHeight - gap)
+      : Math.min(r.bottom + gap, vvTop + vh - margin - maxHeight);
     setRect((prev) =>
       prev.top === top && prev.left === left && prev.width === width && prev.maxHeight === maxHeight
         ? prev
@@ -195,12 +204,17 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       reposition();
     };
     const onResize = () => reposition();
-    window.addEventListener('mousedown', onDocDown, true);
+    const vv = window.visualViewport;
+    window.addEventListener('pointerdown', onDocDown as EventListener, true);
     window.addEventListener('resize', onResize);
+    vv?.addEventListener('resize', onResize);
+    vv?.addEventListener('scroll', onResize);
     document.addEventListener('scroll', onScroll, true);
     return () => {
-      window.removeEventListener('mousedown', onDocDown, true);
+      window.removeEventListener('pointerdown', onDocDown as EventListener, true);
       window.removeEventListener('resize', onResize);
+      vv?.removeEventListener('resize', onResize);
+      vv?.removeEventListener('scroll', onResize);
       document.removeEventListener('scroll', onScroll, true);
     };
   }, [open, reposition]);
@@ -219,11 +233,13 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       const initIdx = selectedIdx >= 0 ? selectedIdx : 0;
       setActive(initIdx);
       setScrollTarget((prev) => ({ index: initIdx, seq: prev.seq + 1 }));
-      window.setTimeout(() => inputRef.current?.focus(), 10);
+      if (!coarse) {
+        window.setTimeout(() => inputRef.current?.focus(), 10);
+      }
     } else {
       setFacetSel({});
     }
-  }, [open]);
+  }, [open, coarse]);
 
   const commit = useCallback(
     (id: string) => {
@@ -274,7 +290,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
         title={title ?? selected?.label ?? emptyLabel}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1 bg-[#27303e] border border-slate-700 hover:border-sky-500/60 rounded-sm text-slate-200 disabled:opacity-50 max-w-[240px] ${triggerSize} ${className ?? ''}`}
+        className={`flex items-center justify-between gap-1 bg-[#27303e] border border-slate-700 hover:border-sky-500/60 active:border-sky-400 rounded-sm text-slate-200 disabled:opacity-50 max-w-[240px] touch-row ${triggerSize} ${className ?? ''}`}
       >
         <span className={`truncate ${selected ? 'text-sky-300' : 'text-slate-500'}`}>
           {selected?.label ?? emptyLabel}
@@ -309,8 +325,13 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
               className="flex-1 bg-transparent outline-none text-[12px] text-slate-100 placeholder:text-slate-600"
             />
             {query && (
-              <button onClick={() => setQuery('')} className="text-slate-500 hover:text-white" title="清空">
-                <X className="w-3 h-3" />
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="text-slate-500 hover:text-white p-1.5 -m-1 rounded-[2px]"
+                title="清空"
+              >
+                <X className="w-3.5 h-3.5" />
               </button>
             )}
             <span className="text-[10px] text-slate-500 mono shrink-0">{measured.length}</span>
@@ -357,8 +378,8 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
           >
             <VirtualList
               count={measured.length}
-              rowHeight={ROW_HEIGHT}
-              className="h-full overflow-y-auto"
+              rowHeight={rowHeight}
+              className="h-full overflow-y-auto overscroll-contain"
               scrollToIndex={scrollTarget.index}
               scrollTrigger={scrollTarget.seq}
               emptyState={
@@ -373,9 +394,12 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
                 return (
                   <button
                     onMouseEnter={() => setActive(idx)}
+                    onPointerDown={() => setActive(idx)}
                     onClick={() => !opt.disabled && commit(opt.id)}
                     disabled={opt.disabled}
-                    className={`w-full text-left px-2 flex items-center justify-between gap-2 h-[24px] rounded-sm disabled:opacity-40 hover:bg-sky-500/20 ${
+                    className={`w-full text-left px-2 flex items-center justify-between gap-2 ${
+                      coarse ? 'h-[40px]' : 'h-[24px]'
+                    } rounded-sm disabled:opacity-40 hover:bg-sky-500/20 active:bg-sky-500/30 ${
                       isAct
                         ? 'bg-sky-500/25 text-white'
                         : isSel
@@ -399,8 +423,9 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
             />
           </div>
 
-          <div className="px-2 py-1 border-t border-slate-800 text-[9px] text-slate-500 flex justify-between shrink-0">
-            <span>↑↓ Enter Esc</span>
+          <div className="px-2 py-1 border-t border-slate-800 text-[10px] text-slate-500 flex justify-between shrink-0">
+            <span className="touch-hide">↑↓ Enter Esc</span>
+            <span className="touch-only">点选一项</span>
             <span>共 {measured.length} 条</span>
           </div>
         </div>

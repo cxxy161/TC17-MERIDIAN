@@ -574,10 +574,30 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
     setAddingFile(false);
   };
 
+  const [kbInset, setKbInset] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const sync = () => {
+      const diff = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKbInset(diff > 80 ? diff : 0);
+    };
+    sync();
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+    return () => {
+      vv.removeEventListener('resize', sync);
+      vv.removeEventListener('scroll', sync);
+    };
+  }, []);
+
   const cpuMs = scripts?.last_output?.cpu_used_ms ?? 0;
 
   return (
-    <div className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden">
+    <div
+      style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}
+      className="h-full flex flex-col bg-[#1b212b] text-slate-200 overflow-hidden"
+    >
       <div className="px-2.5 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1 flex-wrap min-w-0">
           {moduleNames.map((m) => (

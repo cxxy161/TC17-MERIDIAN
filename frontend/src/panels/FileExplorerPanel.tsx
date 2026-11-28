@@ -6,6 +6,7 @@ import {
   FileCode2,
   FilePlus,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   Trash2,
@@ -101,6 +102,7 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
   const [renaming, setRenaming] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
+  const [movingItem, setMovingItem] = useState<{ kind: 'file' | 'folder'; path: string } | null>(null);
   const [dragItem, setDragItem] = useState<{
     kind: 'file' | 'folder';
     path: string;
@@ -263,6 +265,17 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
     [modNames, scriptFolders],
   );
 
+  const allFolders = useMemo(() => {
+    const set = new Set<string>(scriptFolders);
+    for (const m of modNames) {
+      const parts = m.split('/').filter(Boolean);
+      for (let i = 1; i < parts.length; i += 1) {
+        set.add(parts.slice(0, i).join('/'));
+      }
+    }
+    return Array.from(set).sort();
+  }, [modNames, scriptFolders]);
+
   const isExpanded = (path: string) => expanded[path] ?? true;
 
   const submitCreate = () => {
@@ -343,24 +356,39 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                   <Folder className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                 )}
                 {isRenamingThis ? (
-                  <input
-                    autoFocus
-                    value={renameValue}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') submitRename();
-                      if (e.key === 'Escape') setRenaming(null);
-                    }}
-                    className="w-28 bg-[#191f27] border border-sky-400 px-1 text-[11px] outline-none"
-                  />
+                  <div className="flex items-center gap-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submitRename();
+                        if (e.key === 'Escape') setRenaming(null);
+                      }}
+                      className="w-24 bg-[#191f27] border border-sky-400 px-1 text-[11px] outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={submitRename}
+                      className="pill-btn py-0 px-1.5 text-[10px] text-emerald-300 border-emerald-500/40"
+                    >
+                      确定
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenaming(null)}
+                      className="pill-btn py-0 px-1.5 text-[10px]"
+                    >
+                      取消
+                    </button>
+                  </div>
                 ) : (
                   <span className="truncate">{item.name}</span>
                 )}
               </div>
 
               <div
-                className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0"
+                className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto touch-reveal shrink-0"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
@@ -369,9 +397,9 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                     setCreateValue('');
                   }}
                   title="在此文件夹新建文件"
-                  className="p-0.5 text-slate-400 hover:text-sky-300"
+                  className="p-1 text-slate-400 hover:text-sky-300"
                 >
-                  <FilePlus className="w-3 h-3" />
+                  <FilePlus className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => {
@@ -379,9 +407,22 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                     setCreateValue('');
                   }}
                   title="新建子文件夹"
-                  className="p-0.5 text-slate-400 hover:text-sky-300"
+                  className="p-1 text-slate-400 hover:text-sky-300"
                 >
-                  <FolderPlus className="w-3 h-3" />
+                  <FolderPlus className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() =>
+                    setMovingItem((cur) =>
+                      cur?.kind === 'folder' && cur.path === item.path
+                        ? null
+                        : { kind: 'folder', path: item.path },
+                    )
+                  }
+                  title="移动到文件夹"
+                  className="p-1 text-slate-400 hover:text-sky-300"
+                >
+                  <FolderInput className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => {
@@ -389,24 +430,50 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                     setRenameValue(item.name);
                   }}
                   title="重命名文件夹"
-                  className="p-0.5 text-slate-400 hover:text-white"
+                  className="p-1 text-slate-400 hover:text-white"
                 >
-                  <Edit2 className="w-3 h-3" />
+                  <Edit2 className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => setConfirmDelete({ kind: 'folder', path: item.path })}
                   title="删除文件夹"
-                  className="p-0.5 text-slate-400 hover:text-rose-400"
+                  className="p-1 text-slate-400 hover:text-rose-400"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
+            {movingItem?.kind === 'folder' && movingItem.path === item.path && (
+              <div
+                style={{ paddingLeft: 20 + depth * 14 }}
+                className="flex flex-wrap items-center gap-1 py-1.5 pr-2 bg-[#17202b] border-y border-sky-500/25 text-[10px]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <span className="text-slate-400">移至：</span>
+                {['', ...allFolders].filter((f) => canDropToFolder(movingItem, f)).map((targetFolder) => (
+                  <button
+                    key={targetFolder || '__ROOT__'}
+                    type="button"
+                    onClick={() => {
+                      moveDraggedToFolder(movingItem, targetFolder);
+                      setMovingItem(null);
+                    }}
+                    className="pill-btn py-0 px-1.5 text-[10px] text-sky-200"
+                  >
+                    {targetFolder || '根目录'}
+                  </button>
+                ))}
+                <button type="button" onClick={() => setMovingItem(null)} className="pill-btn py-0 px-1.5 text-[10px]">
+                  取消
+                </button>
+              </div>
+            )}
+
             {isDeletingThis && (
               <div
                 style={{ paddingLeft: 20 + depth * 14 }}
-                className="flex items-center gap-2 py-1 pr-2 bg-rose-500/15 text-[10px]"
+                className="flex items-center gap-2 py-1.5 pr-2 bg-rose-500/15 text-[10px]"
               >
                 <span className="text-rose-300">删除文件夹及内部文件？</span>
                 <button
@@ -414,11 +481,11 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                     deleteScriptFolder(item.path);
                     setConfirmDelete(null);
                   }}
-                  className="text-rose-300 underline font-semibold"
+                  className="pill-btn py-0 px-2 bg-rose-500/25 border-rose-400 text-rose-200 font-semibold"
                 >
                   确定
                 </button>
-                <button onClick={() => setConfirmDelete(null)} className="text-slate-400">
+                <button onClick={() => setConfirmDelete(null)} className="pill-btn py-0 px-2 text-slate-300">
                   取消
                 </button>
               </div>
@@ -460,17 +527,32 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
             <div className="flex items-center gap-1.5 min-w-0 flex-1">
               <FileCode2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               {isRenamingThis ? (
-                <input
-                  autoFocus
-                  value={renameValue}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') submitRename();
-                    if (e.key === 'Escape') setRenaming(null);
-                  }}
-                  className="w-28 bg-[#191f27] border border-sky-400 px-1 text-[11px] mono outline-none"
-                />
+                <div className="flex items-center gap-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') submitRename();
+                      if (e.key === 'Escape') setRenaming(null);
+                    }}
+                    className="w-24 bg-[#191f27] border border-sky-400 px-1 text-[11px] mono outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={submitRename}
+                    className="pill-btn py-0 px-1.5 text-[10px] text-emerald-300 border-emerald-500/40"
+                  >
+                    确定
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRenaming(null)}
+                    className="pill-btn py-0 px-1.5 text-[10px]"
+                  >
+                    取消
+                  </button>
+                </div>
               ) : (
                 <span className="mono truncate">{item.name}.js</span>
               )}
@@ -478,34 +560,73 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
 
             {item.path !== 'main' && (
               <div
-                className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 shrink-0"
+                className="flex items-center gap-0.5 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto touch-reveal shrink-0"
                 onClick={(e) => e.stopPropagation()}
               >
+                <button
+                  onClick={() =>
+                    setMovingItem((cur) =>
+                      cur?.kind === 'file' && cur.path === item.path
+                        ? null
+                        : { kind: 'file', path: item.path },
+                    )
+                  }
+                  title="移动到文件夹"
+                  className="p-1 text-slate-400 hover:text-sky-300"
+                >
+                  <FolderInput className="w-3.5 h-3.5" />
+                </button>
                 <button
                   onClick={() => {
                     setRenaming({ kind: 'file', path: item.path });
                     setRenameValue(item.name);
                   }}
                   title="重命名文件"
-                  className="p-0.5 text-slate-400 hover:text-white"
+                  className="p-1 text-slate-400 hover:text-white"
                 >
-                  <Edit2 className="w-3 h-3" />
+                  <Edit2 className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => setConfirmDelete({ kind: 'file', path: item.path })}
                   title="删除文件"
-                  className="p-0.5 text-slate-400 hover:text-rose-400"
+                  className="p-1 text-slate-400 hover:text-rose-400"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             )}
           </div>
 
+          {movingItem?.kind === 'file' && movingItem.path === item.path && (
+            <div
+              style={{ paddingLeft: 20 + depth * 14 }}
+              className="flex flex-wrap items-center gap-1 py-1.5 pr-2 bg-[#17202b] border-y border-sky-500/25 text-[10px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-slate-400">移至：</span>
+              {['', ...allFolders].filter((f) => canDropToFolder(movingItem, f)).map((targetFolder) => (
+                <button
+                  key={targetFolder || '__ROOT__'}
+                  type="button"
+                  onClick={() => {
+                    moveDraggedToFolder(movingItem, targetFolder);
+                    setMovingItem(null);
+                  }}
+                  className="pill-btn py-0 px-1.5 text-[10px] text-sky-200"
+                >
+                  {targetFolder || '根目录'}
+                </button>
+              ))}
+              <button type="button" onClick={() => setMovingItem(null)} className="pill-btn py-0 px-1.5 text-[10px]">
+                取消
+              </button>
+            </div>
+          )}
+
           {isDeletingThis && (
             <div
               style={{ paddingLeft: 20 + depth * 14 }}
-              className="flex items-center gap-2 py-1 pr-2 bg-rose-500/15 text-[10px]"
+              className="flex items-center gap-2 py-1.5 pr-2 bg-rose-500/15 text-[10px]"
             >
               <span className="text-rose-300">删除 {item.name}.js？</span>
               <button
@@ -513,11 +634,11 @@ export const FileExplorerPanel: React.FC<PaneProps> = () => {
                   deleteDraftModule(item.path);
                   setConfirmDelete(null);
                 }}
-                className="text-rose-300 underline font-semibold"
+                className="pill-btn py-0 px-2 bg-rose-500/25 border-rose-400 text-rose-200 font-semibold"
               >
                 确定
               </button>
-              <button onClick={() => setConfirmDelete(null)} className="text-slate-400">
+              <button onClick={() => setConfirmDelete(null)} className="pill-btn py-0 px-2 text-slate-300">
                 取消
               </button>
             </div>

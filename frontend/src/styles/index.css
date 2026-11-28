@@ -19,6 +19,15 @@
     color: #e2e8f0;
     font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     font-size: 12px;
+    touch-action: manipulation;
+  }
+  button,
+  a,
+  select,
+  input,
+  textarea,
+  [role='button'] {
+    touch-action: manipulation;
   }
   #root {
     box-sizing: border-box;
@@ -89,6 +98,11 @@
   color: #f8fafc;
   border-color: rgba(56, 189, 248, 0.55);
 }
+.pill-btn:active {
+  transform: scale(0.97);
+  background: rgba(56, 189, 248, 0.22);
+  color: #fff;
+}
 .pill-btn.active {
   color: #38bdf8;
   border-color: rgba(56, 189, 248, 0.65);
@@ -109,6 +123,11 @@
   background: rgba(37, 99, 235, 0.42);
   color: #fff;
 }
+.cta-blue:active {
+  transform: scale(0.97);
+  background: rgba(37, 99, 235, 0.52);
+  color: #fff;
+}
 
 .cta-green {
   font-size: 11px;
@@ -123,6 +142,68 @@
 .cta-green:hover {
   background: rgba(16, 185, 129, 0.34);
   color: #fff;
+}
+.cta-green:active {
+  transform: scale(0.97);
+  background: rgba(16, 185, 129, 0.44);
+  color: #fff;
+}
+
+.select-none {
+  -webkit-touch-callout: none;
+}
+
+.overflow-y-auto,
+.overflow-auto {
+  overscroll-behavior: contain;
+}
+
+.touch-only {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']),
+  textarea,
+  select,
+  .cm-content {
+    font-size: 16px !important;
+  }
+
+  .pill-btn,
+  .cta-blue,
+  .cta-green {
+    min-height: 36px;
+    padding: 5px 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .touch-target {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .touch-row {
+    min-height: 40px;
+  }
+
+  .touch-hide {
+    display: none !important;
+  }
+
+  .touch-reveal {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+
+  .touch-only {
+    display: inline !important;
+  }
 }
 
 .metric-card {

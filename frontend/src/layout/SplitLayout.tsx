@@ -5,6 +5,7 @@ import { EmptyTilePane, PaneRenderer } from './paneComponents';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { useGameStore } from '../store/useGameStore';
 import type { SplitDirection, SplitNode } from './splitTree';
+import { isCoarsePointer, useDragPointer } from '../utils/useDragPointer';
 
 interface SplitLayoutProps {
   node: SplitNode;
@@ -39,7 +40,9 @@ const TileFrame: React.FC<{
   onSetParams,
   openTemp,
 }) => {
-  const [actionsHover, setActionsHover] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const coarse = isCoarsePointer();
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   const tutorialHighlight = useGameStore((s) => s.tutorialHighlight);
@@ -64,64 +67,107 @@ const TileFrame: React.FC<{
       }`}
     >
       {/* Single-Pane Header (NO tabs inside tile!) */}
-      <div className="h-7 bg-[#27303e] border-b border-sky-500/15 px-2.5 flex items-center justify-between gap-2 shrink-0 select-none">
+      <div className="h-7 bg-[#27303e] border-b border-sky-500/15 px-2.5 flex items-center justify-between gap-2 shrink-0 select-none relative">
         <span className={`text-[11px] font-medium truncate ${content ? 'text-slate-100' : 'text-slate-400'}`}>
           {title}
         </span>
 
-        {/* Gear hover -> reveals Split Horizontal (─), Split Vertical (│), Close (✕), Swap/Empty (⋮) */}
+        {/* Gear click (and optional desktop hover) reveals Split / Swap / Close */}
         <div
-          className="flex items-center shrink-0 h-5"
-          onMouseEnter={() => setActionsHover(true)}
-          onMouseLeave={() => setActionsHover(false)}
+          className="flex items-center shrink-0 h-5 relative z-20"
+          onMouseEnter={() => {
+            if (!coarse) setActionsOpen(true);
+          }}
+          onMouseLeave={() => {
+            if (!coarse) {
+              setActionsOpen(false);
+              setConfirmClose(false);
+            }
+          }}
         >
-          {actionsHover ? (
-            <div className="flex items-center gap-0.5 bg-[#1e2530] border border-sky-500/25 rounded-[2px] p-0.5">
+          {actionsOpen && (
+            <div
+              className="fixed inset-0 z-30"
+              onClick={() => {
+                setActionsOpen(false);
+                setConfirmClose(false);
+              }}
+            />
+          )}
+          {actionsOpen ? (
+            <div className="relative z-40 flex items-center gap-1.5 bg-[#1e2530] border border-sky-500/35 rounded-[3px] p-1 shadow-lg">
               <button
+                type="button"
                 onClick={() => {
-                  setActionsHover(false);
+                  setActionsOpen(false);
+                  setConfirmClose(false);
                   onSplit(tileId, 'horizontal');
                 }}
                 title="上下分割（新开空窗口）"
-                className="w-5 h-5 flex items-center justify-center text-slate-300 hover:text-white hover:bg-sky-500/20"
+                className="min-w-[24px] min-h-[24px] touch-target flex items-center justify-center text-slate-300 hover:text-white hover:bg-sky-500/20 rounded-[2px]"
               >
-                <span className="block w-3 h-[1.5px] bg-current" />
+                <span className="block w-3.5 h-[2px] bg-current" />
               </button>
               <button
+                type="button"
                 onClick={() => {
-                  setActionsHover(false);
+                  setActionsOpen(false);
+                  setConfirmClose(false);
                   onSplit(tileId, 'vertical');
                 }}
                 title="左右分割（新开空窗口）"
-                className="w-5 h-5 flex items-center justify-center text-slate-300 hover:text-white hover:bg-sky-500/20"
+                className="min-w-[24px] min-h-[24px] touch-target flex items-center justify-center text-slate-300 hover:text-white hover:bg-sky-500/20 rounded-[2px]"
               >
-                <span className="block w-[1.5px] h-3 bg-current" />
+                <span className="block w-[2px] h-3.5 bg-current" />
               </button>
               <button
+                type="button"
                 onClick={() => {
-                  setActionsHover(false);
-                  onClose(tileId);
-                }}
-                title="关闭此窗口"
-                className="w-5 h-5 flex items-center justify-center text-slate-300 hover:text-rose-300 hover:bg-rose-500/20"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => {
-                  setActionsHover(false);
+                  setActionsOpen(false);
+                  setConfirmClose(false);
                   onClear(tileId);
                 }}
                 title="更换窗口内容（置为空窗口）"
-                className="w-5 h-5 flex items-center justify-center bg-sky-500/25 text-sky-300 hover:bg-sky-500/45 hover:text-white"
+                className="min-w-[24px] min-h-[24px] touch-target flex items-center justify-center bg-sky-500/20 text-sky-300 hover:bg-sky-500/40 hover:text-white rounded-[2px]"
               >
                 <MoreVertical className="w-3.5 h-3.5" />
               </button>
+              {confirmClose ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionsOpen(false);
+                    setConfirmClose(false);
+                    onClose(tileId);
+                  }}
+                  className="px-2 min-h-[24px] touch-target text-[10px] font-medium bg-rose-500/30 border border-rose-400/70 text-rose-100 rounded-[2px] whitespace-nowrap"
+                >
+                  确认关闭
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (coarse || content !== null) {
+                      setConfirmClose(true);
+                    } else {
+                      setActionsOpen(false);
+                      onClose(tileId);
+                    }
+                  }}
+                  title="关闭此窗口"
+                  className="min-w-[24px] min-h-[24px] touch-target ml-1 flex items-center justify-center text-slate-300 hover:text-rose-300 hover:bg-rose-500/20 rounded-[2px]"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           ) : (
             <button
+              type="button"
               aria-label="窗口布局操作"
-              className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-sky-300"
+              onClick={() => setActionsOpen(true)}
+              className="min-w-[24px] min-h-[24px] touch-target flex items-center justify-center text-slate-400 hover:text-sky-300"
             >
               <Settings className="w-3.5 h-3.5" />
             </button>
@@ -167,6 +213,7 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
   openTemp,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const startDragPointer = useDragPointer();
 
   if (node.type === 'leaf') {
     return (
@@ -190,19 +237,20 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
     e.preventDefault();
     const box = containerRef.current?.getBoundingClientRect();
     if (!box) return;
+    const totalSize = isRow ? Math.max(1, box.height) : Math.max(1, box.width);
+    const origin = isRow ? box.top : box.left;
+    const pointerPos = isRow ? e.clientY : e.clientX;
+    const currentDividerPos = origin + node.ratio * totalSize;
+    const grabOffset = pointerPos - currentDividerPos;
 
-    const onMove = (ev: PointerEvent) => {
-      const nextRatio = isRow
-        ? (ev.clientY - box.top) / Math.max(1, box.height)
-        : (ev.clientX - box.left) / Math.max(1, box.width);
-      onResize(node.id, nextRatio);
-    };
-    const onUp = () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    startDragPointer(e, {
+      thresholdPx: e.pointerType === 'touch' ? 6 : 2,
+      onMove: (ev) => {
+        const pos = isRow ? ev.clientY : ev.clientX;
+        const nextRatio = (pos - grabOffset - origin) / totalSize;
+        onResize(node.id, nextRatio);
+      },
+    });
   };
 
   return (
@@ -229,12 +277,28 @@ export const SplitLayout: React.FC<SplitLayoutProps> = ({
 
       <div
         onPointerDown={startDrag}
+        onContextMenu={(e) => e.preventDefault()}
         className={`${
           isRow
-            ? 'h-1.5 w-full cursor-row-resize hover:bg-sky-400/40'
-            : 'w-1.5 h-full cursor-col-resize hover:bg-sky-400/40'
-        } shrink-0 bg-transparent transition-colors`}
-      />
+            ? 'h-1.5 w-full cursor-row-resize'
+            : 'w-1.5 h-full cursor-col-resize'
+        } relative shrink-0 select-none touch-none group`}
+      >
+        {/* Expanded invisible hit area (22px wide/tall) so touch never misses into neighbor pane */}
+        <div
+          className={`absolute ${
+            isRow ? '-inset-y-2 inset-x-0' : '-inset-x-2 inset-y-0'
+          } z-10`}
+        />
+        {/* Always-visible 1px subtle seam */}
+        <div
+          className={`pointer-events-none absolute ${
+            isRow
+              ? 'inset-x-0 top-1/2 -translate-y-1/2 h-[1px]'
+              : 'inset-y-0 left-1/2 -translate-x-1/2 w-[1px]'
+          } bg-sky-500/20 group-hover:bg-sky-400/70 transition-colors`}
+        />
+      </div>
 
       <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
         <SplitLayout

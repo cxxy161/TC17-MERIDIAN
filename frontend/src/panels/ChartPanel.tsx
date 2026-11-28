@@ -20,6 +20,7 @@ import type { PaneProps } from '../layout/paneRegistry';
 import type { CandleRow } from '../types/meridian';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SearchSelect, type PickerOption } from '../components/SearchSelect';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 // Exact UTC midnight (2024-01-01 00:00:00 UTC) so minute-stepped ticks align cleanly.
 const BASE_TS = 1_704_067_200;
@@ -366,7 +367,11 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
     savePeriodPref(next);
     setPeriod(next);
   }, []);
+  const coarse = isCoarsePointer();
   const [hoverBar, setHoverBar] = useState<HoverReadout | null>(null);
+  const [lockedBar, setLockedBar] = useState<HoverReadout | null>(null);
+  const lockedBarRef = useRef<HoverReadout | null>(null);
+  lockedBarRef.current = lockedBar;
   const [historySlice, setHistorySlice] = useState<HistorySlice | null>(null);
   const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
 
@@ -660,6 +665,18 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
         autoScale: true,
         scaleMargins: { top: 0.12, bottom: 0.22 },
       },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: !coarse,
+        axisDoubleClickReset: true,
+      },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: !coarse,
+      },
       timeScale: {
         borderColor: 'rgba(148, 163, 184, 0.18)',
         barSpacing: 9,
@@ -721,37 +738,62 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
+    const toReadout = (bar: DisplayBar): HoverReadout => ({
+      tick: bar.bucket_tick,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      volume: bar.volume,
+      ma10: bar.ma10,
+      prevClose: bar.prevClose,
+      isReal: bar.isReal,
+    });
+
     const onCrosshairMove = (param: MouseEventParams<Time>) => {
       if (!param || param.time === undefined || typeof param.time !== 'number') {
         setHoverBar(null);
         return;
       }
       const bar = barByTimeRef.current.get(param.time);
-      if (bar) {
-        setHoverBar({
-          tick: bar.bucket_tick,
-          open: bar.open,
-          high: bar.high,
-          low: bar.low,
-          close: bar.close,
-          volume: bar.volume,
-          ma10: bar.ma10,
-          prevClose: bar.prevClose,
-          isReal: bar.isReal,
-        });
-      } else {
-        setHoverBar(null);
-      }
+      setHoverBar(bar ? toReadout(bar) : null);
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
 
+    const onChartClick = (param: MouseEventParams<Time>) => {
+      if (!param || param.time === undefined || typeof param.time !== 'number') {
+        setLockedBar(null);
+        return;
+      }
+      const bar = barByTimeRef.current.get(param.time);
+      if (!bar) {
+        setLockedBar(null);
+        return;
+      }
+      const prev = lockedBarRef.current;
+      if (prev && prev.tick === bar.bucket_tick) {
+        setLockedBar(null);
+      } else {
+        setLockedBar(toReadout(bar));
+      }
+    };
+    chart.subscribeClick(onChartClick);
+
+    let prefetchTimer: number | null = null;
     const onVisibleLogicalRangeChange = (range: LogicalRange | null) => {
       if (!range || isUpdatingChartRef.current || loadingMoreRef.current) return;
       const slice = historySliceRef.current;
       if (!slice || !slice.apiSupported || slice.loadedFromBucket <= 0) return;
-      if (range.from < 35) {
-        const nextFrom = Math.max(0, slice.loadedFromBucket - PAGE_BUCKETS * slice.period);
-        void loadOlderRange(nextFrom);
+      if (range.from < 80) {
+        if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
+        prefetchTimer = window.setTimeout(() => {
+          prefetchTimer = null;
+          if (loadingMoreRef.current) return;
+          const latestSlice = historySliceRef.current;
+          if (!latestSlice || !latestSlice.apiSupported || latestSlice.loadedFromBucket <= 0) return;
+          const nextFrom = Math.max(0, latestSlice.loadedFromBucket - PAGE_BUCKETS * latestSlice.period);
+          void loadOlderRange(nextFrom);
+        }, 150);
       }
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(onVisibleLogicalRangeChange);
@@ -774,7 +816,9 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
 
     return () => {
       ro.disconnect();
+      if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
       chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.unsubscribeClick(onChartClick);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onVisibleLogicalRangeChange);
       priceLinesRef.current = [];
       barByTimeRef.current.clear();
@@ -1055,7 +1099,16 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
     }
   }, [latestTradeTick, period, bars, loadOlderRange]);
 
+  const handleZoomChart = useCallback((factor: number) => {
+    const ts = chartRef.current?.timeScale();
+    if (!ts) return;
+    const cur = ts.options().barSpacing ?? 9;
+    const next = Math.max(2, Math.min(32, cur * factor));
+    ts.applyOptions({ barSpacing: next });
+  }, []);
+
   const handleScrollLatest = useCallback(() => {
+    setLockedBar(null);
     const ts = chartRef.current?.timeScale();
     if (!ts) return;
     if (bars.length > DEFAULT_VISIBLE_BARS) {
@@ -1071,6 +1124,7 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
 
   const latest = bars[bars.length - 1];
   const shown: HoverReadout | null =
+    lockedBar ??
     hoverBar ??
     (latest
       ? {
@@ -1095,7 +1149,7 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
 
   return (
     <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
-      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap">
+      <div className="px-2.5 py-1.5 border-b border-sky-500/10 bg-[#232a36] flex items-center justify-between gap-2 shrink-0 flex-wrap select-none">
         <div className="flex items-center gap-1.5">
           <SearchSelect
             options={stationOptions}
@@ -1119,7 +1173,7 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
           />
         </div>
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
           {PERIOD_OPTIONS.map((p) => (
             <button
               key={p}
@@ -1129,6 +1183,20 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
               {p}回合
             </button>
           ))}
+          <button
+            onClick={() => handleZoomChart(1.25)}
+            className="pill-btn py-0 px-1.5 text-[11px]"
+            title="放大 K 线"
+          >
+            +
+          </button>
+          <button
+            onClick={() => handleZoomChart(0.8)}
+            className="pill-btn py-0 px-1.5 text-[11px]"
+            title="缩小 K 线"
+          >
+            −
+          </button>
           <button
             onClick={handleFitAllHistory}
             className="pill-btn py-0 text-[10px]"
@@ -1153,10 +1221,20 @@ export const ChartPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
       </div>
 
       {/* OHLCV Readout */}
-      <div className="px-3 py-1 bg-[#1f2630] border-b border-slate-800/70 flex items-center justify-between gap-2 text-[11px] mono shrink-0 flex-wrap">
+      <div className="px-3 py-1 bg-[#1f2630] border-b border-slate-800/70 flex items-center justify-between gap-2 text-[11px] mono shrink-0 flex-wrap select-none">
         {shown ? (
-          <span className="text-slate-300">
-            <span className="text-slate-400 mr-1.5">T{shown.tick}</span>
+          <span className="text-slate-300 flex items-center flex-wrap gap-x-1">
+            {lockedBar && (
+              <button
+                type="button"
+                onClick={() => setLockedBar(null)}
+                className="mr-1 px-1.5 py-0 rounded bg-sky-500/20 border border-sky-400/50 text-sky-200 text-[9px]"
+                title="点击解锁并跟随最新回合"
+              >
+                锁定 ×
+              </button>
+            )}
+            <span className="text-slate-400 mr-1">T{shown.tick}</span>
             开 {shown.open.toFixed(priceDigits)} · 高{' '}
             <span className={shown.isReal ? 'text-[#3fb950]' : 'text-slate-300'}>
               {shown.high.toFixed(priceDigits)}

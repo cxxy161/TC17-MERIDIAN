@@ -4,9 +4,10 @@ import type { PaneProps } from '../layout/paneRegistry';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SearchSelect, type PickerFacet, type PickerOption } from '../components/SearchSelect';
 import { VirtualList } from '../components/VirtualList';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 /** Shared column template so the sticky header and every virtualized row stay pixel-aligned. */
-const COLS = 'grid-cols-[minmax(0,1fr)_58px_72px_70px_86px]';
+const COLS = 'grid-cols-[minmax(96px,1fr)_58px_72px_70px_86px]';
 const ROW_HEIGHT = 26;
 
 interface StockRow {
@@ -247,48 +248,54 @@ export const CargoPanel: React.FC<PaneProps> = ({ params, setParams, openTemp })
         </div>
       ) : (
         <>
-          <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${COLS} gap-1 text-[9px] text-slate-500 shrink-0`}>
-            <span>物品</span>
-            <span className="text-right">数量</span>
-            <span className="text-right">类别</span>
-            <span className="text-right">枢纽最新</span>
-            <span className="text-right">估值</span>
-          </div>
-
-          <VirtualList
-            className="flex-1 min-h-0 overflow-y-auto"
-            count={visible.length}
-            rowHeight={ROW_HEIGHT}
-            emptyState={
-              <div className="px-3 py-6 text-center text-[11px] text-slate-500">
-                {totals.items === 0 ? '当前仓库暂无存货' : '没有匹配的物品。清空搜索或关闭筛选试试。'}
+          <div className="flex-1 min-h-0 flex flex-col overflow-x-auto">
+            <div className="min-w-[400px] flex-1 min-h-0 flex flex-col">
+              <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${COLS} gap-1 text-[10px] text-slate-400 shrink-0`}>
+                <span>物品</span>
+                <span className="text-right">数量</span>
+                <span className="text-right">类别</span>
+                <span className="text-right">枢纽最新</span>
+                <span className="text-right">估值</span>
               </div>
-            }
-            renderRow={(idx) => {
-              const r = visible[idx];
-              return (
-                <div
-                  onClick={() => openTemp('item', { itemId: r.id })}
-                  className={`h-[26px] grid ${COLS} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40 ${
-                    r.qty > 0 ? '' : 'opacity-60'
-                  }`}
-                  title="在新窗口打开物品详情"
-                >
-                  <span className="truncate text-slate-100">{r.name}</span>
-                  <span className={`text-right mono ${r.qty > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
-                    {r.qty}
-                  </span>
-                  <span className="text-right text-slate-400 truncate">{r.categoryLabel}</span>
-                  <span className="text-right mono text-sky-300">
-                    {r.hubLast !== null ? r.hubLast.toFixed(2) : '--'}
-                  </span>
-                  <span className="text-right mono text-slate-300">
-                    {r.value > 0 ? fmtNum(r.value) : '--'}
-                  </span>
-                </div>
-              );
-            }}
-          />
+
+              <VirtualList
+                className="flex-1 min-h-0 overflow-y-auto"
+                count={visible.length}
+                rowHeight={isCoarsePointer() ? 40 : ROW_HEIGHT}
+                emptyState={
+                  <div className="px-3 py-6 text-center text-[11px] text-slate-500">
+                    {totals.items === 0 ? '当前仓库暂无存货' : '没有匹配的物品。清空搜索或关闭筛选试试。'}
+                  </div>
+                }
+                renderRow={(idx) => {
+                  const r = visible[idx];
+                  return (
+                    <div
+                      onClick={() => openTemp('item', { itemId: r.id })}
+                      className={`${
+                        isCoarsePointer() ? 'h-[40px]' : 'h-[26px]'
+                      } grid ${COLS} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40 ${
+                        r.qty > 0 ? '' : 'opacity-60'
+                      }`}
+                      title="在新窗口打开物品详情"
+                    >
+                      <span className="truncate text-slate-100">{r.name}</span>
+                      <span className={`text-right mono ${r.qty > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
+                        {r.qty}
+                      </span>
+                      <span className="text-right text-slate-400 truncate">{r.categoryLabel}</span>
+                      <span className="text-right mono text-sky-300">
+                        {r.hubLast !== null ? r.hubLast.toFixed(2) : '--'}
+                      </span>
+                      <span className="text-right mono text-slate-300">
+                        {r.value > 0 ? fmtNum(r.value) : '--'}
+                      </span>
+                    </div>
+                  );
+                }}
+              />
+            </div>
+          </div>
 
           <div className="px-2 py-1 border-t border-slate-800 text-[9px] text-slate-500 flex items-center justify-between gap-2 shrink-0">
             <span className="truncate">

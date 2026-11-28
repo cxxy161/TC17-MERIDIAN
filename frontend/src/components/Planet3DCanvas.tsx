@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PlanetSummary, VisibleFlight } from '../types/meridian';
 import { SmoothTickClock } from '../utils/smoothClock';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 interface Vec3 {
   x: number;
@@ -580,6 +581,8 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const userYawOffsetRef = useRef<number>(0.6);
   const pitchRef = useRef<number>(0.28);
+  const zoomRef = useRef<number>(1.0);
+  const visibleRef = useRef<boolean>(true);
   const flightsRef = useRef<VisibleFlight[]>(flights);
   flightsRef.current = flights;
   const planetIdRef = useRef<string>(planetId);
@@ -589,8 +592,18 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   const ticksPerDayRef = useRef<number>(Math.max(1, ticksPerDay || 24));
   ticksPerDayRef.current = Math.max(1, ticksPerDay || 24);
 
-  const draggingRef = useRef<{ active: boolean; x: number; y: number; moved: number }>({
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchPrevDistRef = useRef<number | null>(null);
+  const dragSnapshotRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0.6, pitch: 0.28 });
+  const draggingRef = useRef<{
+    active: boolean;
+    pointerId: number | null;
+    x: number;
+    y: number;
+    moved: number;
+  }>({
     active: false,
+    pointerId: null,
     x: 0,
     y: 0,
     moved: 0,
@@ -600,10 +613,13 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
     Array<{ facet: GoldbergFacet; pts: Array<[number, number]> }>
   >([]);
   const [selectedInfo, setSelectedInfo] = useState<string | null>(null);
+  const [tapHint, setTapHint] = useState<string | null>(null);
+  const coarse = isCoarsePointer();
 
   useEffect(() => {
     selectedIdRef.current = null;
     setSelectedInfo(null);
+    setTapHint(null);
   }, [planetId]);
 
   useEffect(() => {
@@ -611,29 +627,38 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
     if (!canvas) return;
     let raf = 0;
 
+    let io: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver((entries) => {
+        visibleRef.current = entries.some((e) => e.isIntersecting);
+      });
+      io.observe(canvas);
+    }
+
     const renderFrame = () => {
       const parent = canvas.parentElement;
-      if (parent) {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const w = Math.max(180, parent.clientWidth);
-        const h = Math.max(160, parent.clientHeight);
-        if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-          canvas.width = Math.floor(w * dpr);
-          canvas.height = Math.floor(h * dpr);
-        }
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx.clearRect(0, 0, w, h);
+      if (parent && !document.hidden && visibleRef.current) {
+        const w = parent.clientWidth;
+        const h = parent.clientHeight;
+        if (w >= 16 && h >= 16) {
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+            canvas.width = Math.floor(w * dpr);
+            canvas.height = Math.floor(h * dpr);
+          }
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, w, h);
 
-          // Sync rotation angle & flights to monotonic SmoothTickClock (no per-tick stutter)
-          const simTime = clockRef.current.advance();
-          const rotTicks = Math.max(1, ticksPerDayRef.current * profile.rotDays);
-          const spinYaw = ((simTime / rotTicks) * Math.PI * 2) % (Math.PI * 2);
+            // Sync rotation angle & flights to monotonic SmoothTickClock (no per-tick stutter)
+            const simTime = clockRef.current.advance();
+            const rotTicks = Math.max(1, ticksPerDayRef.current * profile.rotDays);
+            const spinYaw = ((simTime / rotTicks) * Math.PI * 2) % (Math.PI * 2);
 
-          const cx = w / 2;
-          const cy = h / 2 + 2;
-          const radius = Math.min(w, h) * 0.36;
+            const cx = w / 2;
+            const cy = h / 2 + 2;
+            const radius = Math.min(w, h) * 0.36 * zoomRef.current;
           const tiltRad = (profile.tiltDeg * Math.PI) / 180;
           const camYaw = userYawOffsetRef.current;
           const camPitch = pitchRef.current;
@@ -895,12 +920,12 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
             ctx.fillStyle = isSel ? 'rgba(56, 189, 248, 0.92)' : `rgb(${r},${g},${b})`;
             ctx.fill();
 
-            if (facet.isPentagon) {
+            if (isSel) {
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2.4;
+            } else if (facet.isPentagon) {
               ctx.strokeStyle = 'rgba(242, 204, 96, 0.72)';
               ctx.lineWidth = 1.1;
-            } else if (isSel) {
-              ctx.strokeStyle = '#ffffff';
-              ctx.lineWidth = 1.4;
             } else {
               ctx.strokeStyle = 'rgba(13, 17, 23, 0.45)';
               ctx.lineWidth = 0.75;
@@ -910,13 +935,17 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
 
           // Front-half orbit ring, front ships & station (in front of globe)
           drawOrbitLayer(true);
+          }
         }
       }
       raf = window.requestAnimationFrame(renderFrame);
     };
 
     raf = window.requestAnimationFrame(renderFrame);
-    return () => window.cancelAnimationFrame(raf);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      io?.disconnect();
+    };
   }, [facets, profile]);
 
   const pointInPoly = (x: number, y: number, pts: Array<[number, number]>) => {
@@ -932,8 +961,62 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
     return inside;
   };
 
+  const resetCamera = () => {
+    userYawOffsetRef.current = 0.6;
+    pitchRef.current = 0.28;
+    zoomRef.current = 1.0;
+  };
+
+  const adjustZoom = (factor: number) => {
+    zoomRef.current = Math.max(0.6, Math.min(2.5, zoomRef.current * factor));
+  };
+
+  const pickFacetAt = (lx: number, ly: number, isTouch: boolean) => {
+    const polys = lastScreenPolysRef.current;
+    for (let i = polys.length - 1; i >= 0; i--) {
+      if (pointInPoly(lx, ly, polys[i].pts)) {
+        const f = polys[i].facet;
+        selectedIdRef.current = f.id;
+        setTapHint(null);
+        setSelectedInfo(
+          `#${f.id}${f.isPentagon ? ' ★' : ''} · ${f.biomeName} · 海拔 ${f.elev >= 0 ? '+' : ''}${f.elev}`,
+        );
+        return;
+      }
+    }
+    // Nearest-center tolerance fallback for small facets on touch
+    const maxDist = isTouch ? 16 : 8;
+    let bestFacet: GoldbergFacet | null = null;
+    let bestDist = maxDist;
+    for (let i = polys.length - 1; i >= 0; i--) {
+      const pts = polys[i].pts;
+      if (pts.length === 0) continue;
+      let sx = 0;
+      let sy = 0;
+      for (const [px, py] of pts) {
+        sx += px;
+        sy += py;
+      }
+      const dist = Math.hypot(lx - sx / pts.length, ly - sy / pts.length);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        bestFacet = polys[i].facet;
+      }
+    }
+    if (bestFacet) {
+      selectedIdRef.current = bestFacet.id;
+      setTapHint(null);
+      setSelectedInfo(
+        `#${bestFacet.id}${bestFacet.isPentagon ? ' ★' : ''} · ${bestFacet.biomeName} · 海拔 ${bestFacet.elev >= 0 ? '+' : ''}${bestFacet.elev}`,
+      );
+      return;
+    }
+    setTapHint('未点中地格，请点按星球表面');
+    window.setTimeout(() => setTapHint(null), 1800);
+  };
+
   return (
-    <div className="relative w-full h-full bg-[#191f27] select-none overflow-hidden">
+    <div className="relative w-full h-full bg-[#191f27] select-none overflow-hidden overscroll-contain">
       {onOpenLand && (
         <button
           onClick={onOpenLand}
@@ -942,32 +1025,104 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           查看公开地块
         </button>
       )}
-      <div className="absolute top-1.5 right-2.5 z-10 pointer-events-none text-[10px] text-slate-400">
-        提示：左/右键拖动以旋转
+      <div className="absolute top-1.5 right-2.5 z-10 flex items-center gap-1.5">
+        <span className="pointer-events-none text-[10px] text-slate-400 hidden sm:inline">
+          {coarse ? '单指旋转 · 双指缩放 · 点按选地格' : '拖动旋转 · 滚轮缩放 · 点按选地格'}
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => adjustZoom(1.2)}
+            className="pill-btn px-1.5 py-0 text-[11px] bg-[#202732]/90"
+            title="放大星球"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => adjustZoom(1 / 1.2)}
+            className="pill-btn px-1.5 py-0 text-[11px] bg-[#202732]/90"
+            title="缩小星球"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onClick={resetCamera}
+            className="pill-btn px-1.5 py-0 text-[10px] bg-[#202732]/90"
+            title="重置视角"
+          >
+            复位
+          </button>
+        </div>
       </div>
+      {tapHint && !selectedInfo && (
+        <div className="absolute bottom-2 left-2.5 z-10 px-2 py-0.5 rounded bg-[#202732]/90 border border-slate-700 text-[10px] text-slate-300 pointer-events-none">
+          {tapHint}
+        </div>
+      )}
       {selectedInfo && (
-        <div className="absolute bottom-2 left-2.5 z-10 flex items-center gap-2 px-2 py-0.5 rounded bg-[#202732]/90 border border-sky-500/30 text-[10px] text-sky-200 mono">
+        <div className="absolute bottom-2 left-2.5 z-10 flex items-center gap-2 px-2 py-1 rounded bg-[#202732]/90 border border-sky-500/30 text-[10px] text-sky-200 mono">
           <span>{selectedInfo}</span>
           {onOpenLand && (
             <button
               onClick={onOpenLand}
-              className="text-emerald-300 hover:underline pointer-events-auto"
+              className="pill-btn py-0 px-1.5 text-[10px] text-emerald-300 border-emerald-500/40 pointer-events-auto"
             >
-              打开地块窗口 →
+              打开地块 →
             </button>
           )}
         </div>
       )}
       <canvas
         ref={canvasRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing block"
+        style={{ touchAction: 'none' }}
+        className="w-full h-full cursor-grab active:cursor-grabbing block touch-none"
         onContextMenu={(e) => e.preventDefault()}
+        onWheel={(e) => {
+          e.preventDefault();
+          adjustZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12);
+        }}
         onPointerDown={(e) => {
-          (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
-          draggingRef.current = { active: true, x: e.clientX, y: e.clientY, moved: 0 };
+          try {
+            (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
+          activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (activePointersRef.current.size === 1) {
+            dragSnapshotRef.current = { yaw: userYawOffsetRef.current, pitch: pitchRef.current };
+            draggingRef.current = {
+              active: true,
+              pointerId: e.pointerId,
+              x: e.clientX,
+              y: e.clientY,
+              moved: 0,
+            };
+            pinchPrevDistRef.current = null;
+          } else {
+            draggingRef.current.active = false;
+            const pts = Array.from(activePointersRef.current.values());
+            if (pts.length >= 2) {
+              pinchPrevDistRef.current = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+            }
+          }
         }}
         onPointerMove={(e) => {
-          if (!draggingRef.current.active) return;
+          if (activePointersRef.current.has(e.pointerId)) {
+            activePointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          }
+          if (activePointersRef.current.size >= 2) {
+            const pts = Array.from(activePointersRef.current.values());
+            const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+            const prev = pinchPrevDistRef.current;
+            if (prev && prev > 4) {
+              adjustZoom(dist / prev);
+            }
+            pinchPrevDistRef.current = dist;
+            return;
+          }
+          if (!draggingRef.current.active || draggingRef.current.pointerId !== e.pointerId) return;
           const dx = e.clientX - draggingRef.current.x;
           const dy = e.clientY - draggingRef.current.y;
           draggingRef.current.moved += Math.hypot(dx, dy);
@@ -977,27 +1132,35 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           pitchRef.current = Math.max(-1.25, Math.min(1.25, pitchRef.current + dy * 0.012));
         }}
         onPointerUp={(e) => {
+          activePointersRef.current.delete(e.pointerId);
+          if (activePointersRef.current.size < 2) {
+            pinchPrevDistRef.current = null;
+          }
+          const wasMyDrag = draggingRef.current.active && draggingRef.current.pointerId === e.pointerId;
           const moved = draggingRef.current.moved;
-          draggingRef.current.active = false;
-          if (moved < 5) {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const lx = e.clientX - rect.left;
-            const ly = e.clientY - rect.top;
-            const polys = lastScreenPolysRef.current;
-            for (let i = polys.length - 1; i >= 0; i--) {
-              if (pointInPoly(lx, ly, polys[i].pts)) {
-                const f = polys[i].facet;
-                selectedIdRef.current = f.id;
-                setSelectedInfo(
-                  `#${f.id}${f.isPentagon ? ' ★' : ''} · ${f.biomeName} · 海拔 ${f.elev >= 0 ? '+' : ''}${f.elev}`,
-                );
-                break;
-              }
+          if (wasMyDrag) {
+            draggingRef.current.active = false;
+            draggingRef.current.pointerId = null;
+            const tapTol = e.pointerType === 'touch' ? 12 : 5;
+            if (moved < tapTol) {
+              const rect = e.currentTarget.getBoundingClientRect();
+              pickFacetAt(e.clientX - rect.left, e.clientY - rect.top, e.pointerType === 'touch');
             }
           }
         }}
-        onPointerCancel={() => {
-          draggingRef.current.active = false;
+        onPointerCancel={(e) => {
+          activePointersRef.current.delete(e.pointerId);
+          if (activePointersRef.current.size < 2) {
+            pinchPrevDistRef.current = null;
+          }
+          if (draggingRef.current.pointerId === e.pointerId) {
+            if (draggingRef.current.moved < 12) {
+              userYawOffsetRef.current = dragSnapshotRef.current.yaw;
+              pitchRef.current = dragSnapshotRef.current.pitch;
+            }
+            draggingRef.current.active = false;
+            draggingRef.current.pointerId = null;
+          }
         }}
       />
     </div>

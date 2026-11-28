@@ -5,8 +5,9 @@ import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SearchSelect, type PickerFacet, type PickerOption } from '../components/SearchSelect';
 import { VirtualList } from '../components/VirtualList';
 import { stationIdForPlanet } from '../types/meridian';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
-const COLS = 'grid-cols-[minmax(0,1fr)_64px_100px_62px_54px_92px]';
+const COLS = 'grid-cols-[minmax(96px,1fr)_64px_100px_62px_54px_104px]';
 const ROW_HEIGHT = 26;
 
 type SortKey = 'qty' | 'name';
@@ -266,65 +267,71 @@ export const DemandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
         ))}
       </div>
 
-      <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${COLS} gap-1 text-[9px] text-slate-500 shrink-0`}>
-        <span>消费物资</span>
-        <span className="text-right">本回合需求</span>
-        <span className="text-right">本地买一 / 最新</span>
-        <span className="text-right">我的站内仓</span>
-        <span className="text-right">缺口</span>
-        <span className="text-right">操作</span>
-      </div>
-
-      <VirtualList
-        className="flex-1 min-h-0 overflow-y-auto"
-        count={visible.length}
-        rowHeight={ROW_HEIGHT}
-        emptyState={
-          <div className="px-3 py-6 text-center text-[11px] text-slate-500">
-            {rows.length === 0
-              ? `${planet.name} 当前暂无城市居民消费需求`
-              : '没有匹配的需求项。清空搜索或切换类别试试。'}
+      <div className="flex-1 min-h-0 flex flex-col overflow-x-auto">
+        <div className="min-w-[496px] flex-1 min-h-0 flex flex-col">
+          <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${COLS} gap-1 text-[10px] text-slate-400 shrink-0`}>
+            <span>消费物资</span>
+            <span className="text-right">本回合需求</span>
+            <span className="text-right">本地买一 / 最新</span>
+            <span className="text-right">我的站内仓</span>
+            <span className="text-right">缺口</span>
+            <span className="text-right">操作</span>
           </div>
-        }
-        renderRow={(idx) => {
-          const r = visible[idx];
-          return (
-            <div
-              className={`h-[26px] grid ${COLS} gap-1 items-center px-2 text-[11px] border-b border-slate-800/40 hover:bg-sky-500/10`}
-            >
-              <span className="truncate text-slate-200 font-medium" title={r.itemId}>
-                {r.name}
-              </span>
-              <span className="text-right mono text-sky-300 font-semibold">{r.qty}</span>
-              <span className="text-right mono text-slate-300 whitespace-nowrap">
-                <span className="text-emerald-400">{r.bid !== null ? r.bid.toFixed(2) : '--'}</span>
-                <span className="text-slate-600 mx-1">/</span>
-                <span>{r.last !== null ? r.last.toFixed(2) : '--'}</span>
-              </span>
-              <span className="text-right mono">
-                {r.stock > 0 ? <span className="text-emerald-300">{r.stock}</span> : <span className="text-slate-600">0</span>}
-              </span>
-              <span className={`text-right mono ${r.gap > 0 ? 'text-amber-300' : 'text-emerald-400/80'}`}>
-                {r.gap > 0 ? r.gap : '—'}
-              </span>
-              <span className="text-right whitespace-nowrap space-x-1">
-                <button
-                  onClick={() => openTemp('orderbook', { stationId: stationId ?? undefined, itemId: r.itemId })}
-                  className="pill-btn py-0 px-1.5 text-[10px]"
+
+          <VirtualList
+            className="flex-1 min-h-0 overflow-y-auto"
+            count={visible.length}
+            rowHeight={isCoarsePointer() ? 40 : ROW_HEIGHT}
+            emptyState={
+              <div className="px-3 py-6 text-center text-[11px] text-slate-500">
+                {rows.length === 0
+                  ? `${planet.name} 当前暂无城市居民消费需求`
+                  : '没有匹配的需求项。清空搜索或切换类别试试。'}
+              </div>
+            }
+            renderRow={(idx) => {
+              const r = visible[idx];
+              return (
+                <div
+                  className={`${
+                    isCoarsePointer() ? 'h-[40px]' : 'h-[26px]'
+                  } grid ${COLS} gap-1 items-center px-2 text-[11px] border-b border-slate-800/40 hover:bg-sky-500/10`}
                 >
-                  盘口
-                </button>
-                <button
-                  onClick={() => openTemp('chart', { stationId: stationId ?? undefined, itemId: r.itemId })}
-                  className="pill-btn py-0 px-1.5 text-[10px]"
-                >
-                  K线
-                </button>
-              </span>
-            </div>
-          );
-        }}
-      />
+                  <span className="truncate text-slate-200 font-medium" title={r.itemId}>
+                    {r.name}
+                  </span>
+                  <span className="text-right mono text-sky-300 font-semibold">{r.qty}</span>
+                  <span className="text-right mono text-slate-300 whitespace-nowrap">
+                    <span className="text-emerald-400">{r.bid !== null ? r.bid.toFixed(2) : '--'}</span>
+                    <span className="text-slate-600 mx-1">/</span>
+                    <span>{r.last !== null ? r.last.toFixed(2) : '--'}</span>
+                  </span>
+                  <span className="text-right mono">
+                    {r.stock > 0 ? <span className="text-emerald-300">{r.stock}</span> : <span className="text-slate-600">0</span>}
+                  </span>
+                  <span className={`text-right mono ${r.gap > 0 ? 'text-amber-300' : 'text-emerald-400/80'}`}>
+                    {r.gap > 0 ? r.gap : '—'}
+                  </span>
+                  <span className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                    <button
+                      onClick={() => openTemp('orderbook', { stationId: stationId ?? undefined, itemId: r.itemId })}
+                      className="pill-btn py-0 px-1.5 text-[10px]"
+                    >
+                      盘口
+                    </button>
+                    <button
+                      onClick={() => openTemp('chart', { stationId: stationId ?? undefined, itemId: r.itemId })}
+                      className="pill-btn py-0 px-1.5 text-[10px]"
+                    >
+                      K线
+                    </button>
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      </div>
     </div>
   );
 };

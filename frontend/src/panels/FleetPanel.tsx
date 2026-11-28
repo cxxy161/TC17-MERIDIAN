@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import type { ShipView } from '../types/meridian';
 import { READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
@@ -26,7 +26,6 @@ const REPAIR_UNITS: Record<ShipView['size'], number> = {
 };
 
 const SHIP_ROW_HEIGHT = 58;
-const CARGO_ROW_HEIGHT = 30;
 
 const shipLabel = (ship: ShipView): string => `${SHIP_SIZE_NAMES[ship.size] ?? ship.size}-${ship.id}`;
 
@@ -237,12 +236,24 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
     });
   }, [ships, shipQuery, world]);
 
-  /** Two hull cards per virtual row, so a large fleet stays windowed instead of rendering every card. */
+  const [isNarrow, setIsNarrow] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 639px)').matches : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)');
+    const sync = () => setIsNarrow(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
+  /** Two hull cards per virtual row on sm+, one per row on narrow viewports to avoid card overlap. */
   const shipRows = useMemo(() => {
+    const step = isNarrow ? 1 : 2;
     const rows: ShipView[][] = [];
-    for (let i = 0; i < filteredShips.length; i += 2) rows.push(filteredShips.slice(i, i + 2));
+    for (let i = 0; i < filteredShips.length; i += step) rows.push(filteredShips.slice(i, i + step));
     return rows;
-  }, [filteredShips]);
+  }, [filteredShips, isNarrow]);
 
   const dispatchIssue = useMemo<string | null>(() => {
     if (!activeShip) return '未选择飞船';
@@ -500,64 +511,62 @@ export const FleetPanel: React.FC<PaneProps> = ({ openTemp }) => {
                     </span>
                   </div>
 
-                  <VirtualList
-                    className="h-[160px] overflow-y-auto border border-slate-800/70 rounded-sm"
-                    count={cargoRows.length}
-                    rowHeight={CARGO_ROW_HEIGHT}
-                    emptyState={
-                      <div className="px-3 py-4 text-center text-[11px] text-slate-500">
-                        {cargoPlan.length === 0
-                          ? '起点没有可装船货物（瞬时货物不可装船）'
-                          : '没有匹配的可装船货物'}
-                      </div>
-                    }
-                    renderRow={(idx) => {
-                      const r = cargoRows[idx];
-                      const def = catalog.item(r.id);
-                      const isFuel = r.id === fuelItemId;
-                      return (
-                        <div className="h-[30px] flex items-center gap-2 px-1.5 border-b border-slate-800/40 text-[11px]">
-                          <button
-                            onClick={() => openTemp('item', { itemId: r.id })}
-                            title="查看物品详情"
-                            className="flex-1 min-w-0 text-left truncate text-slate-200 hover:text-sky-300"
-                          >
-                            {catalog.itemName(r.id)}
-                            <span className="mono text-[10px] text-slate-500 ml-1">({r.have})</span>
-                            {isFuel && routeFuel > 0 && (
-                              <span className="text-[9px] text-amber-300/80 ml-1">
-                                含航线油耗 -{routeFuel}
-                              </span>
-                            )}
-                            {def && (
-                              <span className="text-[9px] text-slate-600 ml-1">
-                                {catalog.roleLabel(def.role)}
-                              </span>
-                            )}
-                          </button>
-                          <span className="mono text-[10px] text-slate-500 shrink-0 w-14 text-right">
-                            可装 {r.max}
-                          </span>
-                          <input
-                            type="number"
-                            min={0}
-                            max={r.max}
-                            value={r.qty}
-                            onChange={(e) => {
-                              const raw = Number(e.target.value);
-                              const v = Number.isFinite(raw)
-                                ? Math.max(0, Math.min(r.max, Math.floor(raw)))
-                                : 0;
-                              setCargoDraft((prev) => ({ ...prev, [r.id]: v }));
-                            }}
-                            className="w-16 shrink-0 bg-[#191f27] border border-slate-700 px-1 py-0.5 text-right mono rounded-sm"
-                          />
-                        </div>
-                      );
-                    }}
-                  />
+                  {cargoRows.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-[11px] text-slate-500 border border-slate-800/70 rounded-sm">
+                      {cargoPlan.length === 0
+                        ? '起点没有可装船货物（瞬时货物不可装船）'
+                        : '没有匹配的可装船货物'}
+                    </div>
+                  ) : (
+                    <div className="border border-slate-800/70 rounded-sm divide-y divide-slate-800/40">
+                      {cargoRows.map((r) => {
+                        const def = catalog.item(r.id);
+                        const isFuel = r.id === fuelItemId;
+                        return (
+                          <div key={r.id} className="min-h-[34px] touch-row flex items-center gap-2 px-2 py-1 text-[11px]">
+                            <button
+                              onClick={() => openTemp('item', { itemId: r.id })}
+                              title="查看物品详情"
+                              className="flex-1 min-w-0 text-left truncate text-slate-200 hover:text-sky-300"
+                            >
+                              {catalog.itemName(r.id)}
+                              <span className="mono text-[10px] text-slate-500 ml-1">({r.have})</span>
+                              {isFuel && routeFuel > 0 && (
+                                <span className="text-[9px] text-amber-300/80 ml-1">
+                                  含航线油耗 -{routeFuel}
+                                </span>
+                              )}
+                              {def && (
+                                <span className="text-[9px] text-slate-600 ml-1">
+                                  {catalog.roleLabel(def.role)}
+                                </span>
+                              )}
+                            </button>
+                            <span className="mono text-[10px] text-slate-500 shrink-0 w-14 text-right">
+                              可装 {r.max}
+                            </span>
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              max={r.max}
+                              value={r.qty}
+                              onChange={(e) => {
+                                const raw = Number(e.target.value);
+                                const v = Number.isFinite(raw)
+                                  ? Math.max(0, Math.min(r.max, Math.floor(raw)))
+                                  : 0;
+                                setCargoDraft((prev) => ({ ...prev, [r.id]: v }));
+                              }}
+                              className="w-16 shrink-0 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-right mono rounded-sm"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800">
+                  <div className="sticky bottom-0 bg-[#1b212b]/95 backdrop-blur-sm flex flex-wrap items-center justify-between gap-2 pt-2 pb-1 border-t border-slate-800">
                     <div className="text-[10px] text-slate-500 mono">
                       已选 {selectedKinds} 类 / {totalSelected} 件
                       {cargoRows.length !== cargoPlan.length && '（搜索只过滤显示，已填数量保留）'}

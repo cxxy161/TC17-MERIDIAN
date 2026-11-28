@@ -57,6 +57,16 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
       ? '存贷已禁用：见上方母星提示'
       : null;
 
+  const bankDisabledHints = useMemo(() => {
+    const hints: string[] = [];
+    if (!amountValid || !bankReady) return hints;
+    if (!canDeposit) hints.push(`不可存入（需现金 ${amount}）`);
+    if (!canWithdraw) hints.push(savings < amount ? '不可取出（储蓄不足）' : '不可取出（央行准备金不足）');
+    if (!canBorrow) hints.push('不可借款（央行准备金不足）');
+    if (!canRepay) hints.push(debt <= 0 ? '无需还款（无负债）' : '不可还款（现金不足）');
+    return hints;
+  }, [amountValid, bankReady, canDeposit, canWithdraw, canBorrow, canRepay, amount, savings, debt]);
+
   const execBank = (op: 'deposit' | 'withdraw' | 'borrow' | 'repay') => {
     if (!bankIntentPlanetId) return;
     if (!amountValid) return;
@@ -165,6 +175,7 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
                 <input
                   id="treasury-amount"
                   type="number"
+                  inputMode="decimal"
                   min={1}
                   value={amountStr}
                   onChange={(e) => setAmountStr(e.target.value)}
@@ -210,6 +221,13 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
                 <span>负债 {debt.toFixed(2)}</span>
                 {amountIssue && <span className="text-amber-300/90">{amountIssue}</span>}
               </div>
+              {bankDisabledHints.length > 0 && (
+                <div className="text-[10px] text-slate-400 flex flex-wrap gap-x-2.5 gap-y-0.5">
+                  {bankDisabledHints.map((h) => (
+                    <span key={h}>{h}</span>
+                  ))}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -231,46 +249,50 @@ export const TreasuryPanel: React.FC<PaneProps> = ({ params, setParams }) => {
             </div>
           </div>
 
-          <div className="grid grid-cols-[1fr_90px_90px_52px] gap-1 px-2 py-0.5 text-[9px] text-slate-500 border-b border-slate-800/80 shrink-0">
-            <span>行星</span>
-            <span className="text-right">金库</span>
-            <span className="text-right">准备金</span>
-            <span className="text-right">年化</span>
-          </div>
-
-          <VirtualList
-            className="flex-1 min-h-0 overflow-y-auto"
-            count={vaultRows.length}
-            rowHeight={VAULT_ROW_HEIGHT}
-            emptyState={
-              <div className="px-3 py-6 text-center text-[11px] text-slate-500">
-                {world.planets.length === 0 ? '世界数据尚未就绪' : '没有匹配的行星'}
+          <div className="flex-1 min-h-0 flex flex-col overflow-x-auto">
+            <div className="min-w-[330px] flex-1 min-h-0 flex flex-col">
+              <div className="grid grid-cols-[minmax(96px,1fr)_90px_90px_52px] gap-1 px-2 py-0.5 text-[10px] text-slate-500 border-b border-slate-800/80 shrink-0">
+                <span>行星</span>
+                <span className="text-right">金库</span>
+                <span className="text-right">准备金</span>
+                <span className="text-right">年化</span>
               </div>
-            }
-            renderRow={(idx) => {
-              const r = vaultRows[idx];
-              return (
-                <div
-                  className={`h-[24px] grid grid-cols-[1fr_90px_90px_52px] gap-1 items-center px-2 text-[11px] border-b border-slate-800/40 ${
-                    r.isHome ? 'bg-sky-500/5' : ''
-                  }`}
-                >
-                  <span className="truncate text-slate-200 flex items-center gap-1" title={r.id}>
-                    <span className="truncate">{r.name}</span>
-                    {r.isHome && (
-                      <span className="text-[8px] px-1 bg-sky-500/20 text-sky-300 rounded-[2px] shrink-0">
-                        母星
+
+              <VirtualList
+                className="flex-1 min-h-0 overflow-y-auto"
+                count={vaultRows.length}
+                rowHeight={VAULT_ROW_HEIGHT}
+                emptyState={
+                  <div className="px-3 py-6 text-center text-[11px] text-slate-500">
+                    {world.planets.length === 0 ? '世界数据尚未就绪' : '没有匹配的行星'}
+                  </div>
+                }
+                renderRow={(idx) => {
+                  const r = vaultRows[idx];
+                  return (
+                    <div
+                      className={`h-[24px] touch-row grid grid-cols-[minmax(96px,1fr)_90px_90px_52px] gap-1 items-center px-2 text-[11px] border-b border-slate-800/40 ${
+                        r.isHome ? 'bg-sky-500/5' : ''
+                      }`}
+                    >
+                      <span className="truncate text-slate-200 flex items-center gap-1" title={r.id}>
+                        <span className="truncate">{r.name}</span>
+                        {r.isHome && (
+                          <span className="text-[8px] px-1 bg-sky-500/20 text-sky-300 rounded-[2px] shrink-0">
+                            母星
+                          </span>
+                        )}
+                        <span className="text-[9px] text-slate-600 mono shrink-0">{r.id}</span>
                       </span>
-                    )}
-                    <span className="text-[9px] text-slate-600 mono shrink-0">{r.id}</span>
-                  </span>
-                  <span className="text-right mono text-sky-300">{fmtCredits(r.treasury)}</span>
-                  <span className="text-right mono text-emerald-400">{fmtCredits(r.reserves)}</span>
-                  <span className="text-right mono text-slate-400">{r.rate.toFixed(1)}%</span>
-                </div>
-              );
-            }}
-          />
+                      <span className="text-right mono text-sky-300">{fmtCredits(r.treasury)}</span>
+                      <span className="text-right mono text-emerald-400">{fmtCredits(r.reserves)}</span>
+                      <span className="text-right mono text-slate-400">{r.rate.toFixed(1)}%</span>
+                    </div>
+                  );
+                }}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>

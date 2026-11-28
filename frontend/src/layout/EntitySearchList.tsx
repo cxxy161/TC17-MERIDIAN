@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { VirtualList } from '../components/VirtualList';
 import type { EntityOption } from './entitySearch';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 const ROW_HEIGHT = 34;
 
@@ -30,6 +31,8 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
   showGroupFilter = true,
   defaultGroup = '全部',
 }) => {
+  const coarse = isCoarsePointer();
+  const rowHeight = coarse ? 42 : ROW_HEIGHT;
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState<string>(defaultGroup);
   const [active, setActive] = useState(0);
@@ -76,7 +79,7 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
       <div className="flex items-center gap-2 px-2.5 py-1.5 bg-[#242c38] border border-sky-500/30 rounded-sm shrink-0 mx-2 mt-2">
         <Search className="w-3.5 h-3.5 text-sky-400 shrink-0" />
         <input
-          autoFocus={autoFocus}
+          autoFocus={Boolean(autoFocus) && !coarse}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -97,7 +100,7 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
                 setGroup(g);
                 setActive(0);
               }}
-              className={`text-[10px] px-1.5 py-[1px] rounded-[2px] border ${
+              className={`text-[10px] px-2 py-1 rounded-[2px] border touch-row ${
                 group === g
                   ? 'bg-sky-500/25 border-sky-400/60 text-sky-100'
                   : 'bg-[#1b212b] border-slate-700/70 text-slate-400 hover:text-slate-200'
@@ -111,9 +114,9 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
       )}
 
       <VirtualList
-        className="flex-1 min-h-0 overflow-y-auto px-2 py-1.5"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-1.5"
         count={filtered.length}
-        rowHeight={ROW_HEIGHT}
+        rowHeight={rowHeight}
         emptyState={
           <div className="px-3 py-6 text-center text-[11px] text-slate-500">
             没有匹配的实体。试试物品名、行星名、站点名或面板名；也可以切换上方分组。
@@ -124,22 +127,23 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
           return (
             <button
               onMouseEnter={() => setActive(idx)}
+              onPointerDown={() => setActive(idx)}
               onClick={() => onPick(opt)}
-              className={`w-full h-[32px] text-left px-2 rounded-sm flex items-center justify-between gap-2 ${
+              className={`w-full ${coarse ? 'h-[40px]' : 'h-[32px]'} text-left px-2 rounded-sm flex items-center justify-between gap-2 active:bg-sky-500/25 ${
                 idx === activeSafe ? 'bg-sky-500/20' : 'hover:bg-sky-500/10'
               }`}
             >
               <span className="min-w-0 flex flex-col">
                 <span className="text-[11px] text-sky-200 truncate">{opt.label}</span>
-                {opt.sub && <span className="text-[9px] text-slate-500 truncate">{opt.sub}</span>}
+                {opt.sub && <span className="text-[10px] text-slate-500 truncate">{opt.sub}</span>}
               </span>
               <span className="flex items-center gap-1.5 shrink-0">
                 {opt.badge && (
-                  <span className="text-[9px] px-1 bg-slate-700/60 text-slate-300 rounded-[2px]">
+                  <span className="text-[10px] px-1 bg-slate-700/60 text-slate-300 rounded-[2px]">
                     {opt.badge}
                   </span>
                 )}
-                <span className="text-[9px] text-slate-600">{opt.group}</span>
+                <span className="text-[10px] text-slate-600">{opt.group}</span>
               </span>
             </button>
           );

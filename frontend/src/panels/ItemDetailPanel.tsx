@@ -141,12 +141,12 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openTe
                 {holding?.inTransit ? '全部在途' : '没有任何地点持有该物品'}
               </div>
             ) : (
-              <div className="space-y-0.5 max-h-40 overflow-y-auto">
+              <div className="space-y-0.5 md:max-h-40 md:overflow-y-auto overscroll-contain">
                 {holding.byLocation.map((s) => (
                   <button
                     key={s.location}
                     onClick={() => setParams({ locationId: s.location })}
-                    className="w-full flex items-center justify-between text-[10px] hover:bg-sky-500/10 px-1 rounded-sm"
+                    className="w-full touch-row flex items-center justify-between text-[10px] hover:bg-sky-500/10 px-1 rounded-sm"
                     title="记录为该地点焦点（仓库面板会用它作为默认）"
                   >
                     <span className="truncate text-slate-300">{s.label}</span>
@@ -167,7 +167,7 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openTe
             {myOrders.length === 0 ? (
               <div className="text-[10px] text-slate-600 py-2">该物品没有挂单</div>
             ) : (
-              <div className="space-y-0.5 max-h-40 overflow-y-auto">
+              <div className="space-y-0.5 md:max-h-40 md:overflow-y-auto overscroll-contain">
                 {myOrders.map((o) => (
                   <div key={o.order_id} className="flex items-center justify-between text-[10px] px-1">
                     <span className={o.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>
@@ -189,42 +189,46 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openTe
             <span>全站行情（{sortedQuotes.length} 个站点报价）</span>
             <span className="text-slate-600">点击站点行 → 新开该站点行情</span>
           </div>
-          <div className="px-2 py-1 grid grid-cols-[1fr_56px_56px_56px_50px] gap-1 text-[9px] text-slate-500 border-b border-slate-800/60">
-            <span>站点</span>
-            <span className="text-right">买一</span>
-            <span className="text-right">卖一</span>
-            <span className="text-right">最新</span>
-            <span className="text-right">50回合量</span>
-          </div>
-          <VirtualList
-            className="flex-1 min-h-0 overflow-y-auto"
-            count={sortedQuotes.length}
-            rowHeight={22}
-            emptyState={
-              <div className="px-2 py-4 text-[10px] text-slate-600">
-                当前没有任何站点为它报过价（新物品或无人交易时是正常的）。
+          <div className="overflow-x-auto flex-1 min-h-0 flex flex-col">
+            <div className="min-w-[330px] flex-1 min-h-0 flex flex-col">
+              <div className="px-2 py-1 grid grid-cols-[minmax(96px,1fr)_56px_56px_56px_50px] gap-1 text-[10px] text-slate-400 border-b border-slate-800/60">
+                <span>站点</span>
+                <span className="text-right">买一</span>
+                <span className="text-right">卖一</span>
+                <span className="text-right">最新</span>
+                <span className="text-right">50回合量</span>
               </div>
-            }
-            renderRow={(idx) => {
-              const q = sortedQuotes[idx];
-              return (
-                <div
-                  onClick={() => openTemp('ticker', { stationId: q.stationId })}
-                  className="h-[22px] grid grid-cols-[1fr_56px_56px_56px_50px] gap-1 items-center px-2 text-[10px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/30"
-                >
-                  <span className="truncate text-slate-300">{world.stationLabel(q.stationId)}</span>
-                  <span className="text-right mono text-emerald-400/90">
-                    {q.row.best_bid !== null ? q.row.best_bid.toFixed(2) : '--'}
-                  </span>
-                  <span className="text-right mono text-rose-400/90">
-                    {q.row.best_ask !== null ? q.row.best_ask.toFixed(2) : '--'}
-                  </span>
-                  <span className="text-right mono text-sky-300">{q.row.last_price.toFixed(2)}</span>
-                  <span className="text-right mono text-slate-400">{q.row.vol_50t || ''}</span>
-                </div>
-              );
-            }}
-          />
+              <VirtualList
+                className="flex-1 min-h-0 overflow-y-auto"
+                count={sortedQuotes.length}
+                rowHeight={26}
+                emptyState={
+                  <div className="px-2 py-4 text-[10px] text-slate-600">
+                    当前没有任何站点为它报过价（新物品或无人交易时是正常的）。
+                  </div>
+                }
+                renderRow={(idx) => {
+                  const q = sortedQuotes[idx];
+                  return (
+                    <div
+                      onClick={() => openTemp('ticker', { stationId: q.stationId })}
+                      className="h-[26px] grid grid-cols-[minmax(96px,1fr)_56px_56px_56px_50px] gap-1 items-center px-2 text-[10px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/30"
+                    >
+                      <span className="truncate text-slate-300">{world.stationLabel(q.stationId)}</span>
+                      <span className="text-right mono text-emerald-400/90">
+                        {q.row.best_bid !== null ? q.row.best_bid.toFixed(2) : '--'}
+                      </span>
+                      <span className="text-right mono text-rose-400/90">
+                        {q.row.best_ask !== null ? q.row.best_ask.toFixed(2) : '--'}
+                      </span>
+                      <span className="text-right mono text-sky-300">{q.row.last_price.toFixed(2)}</span>
+                      <span className="text-right mono text-slate-400">{q.row.vol_50t || ''}</span>
+                    </div>
+                  );
+                }}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </div>

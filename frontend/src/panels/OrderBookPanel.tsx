@@ -42,6 +42,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
   const [priceStr, setPriceStr] = useState('');
   const [qtyStr, setQtyStr] = useState('');
   const [dealQtyStr, setDealQtyStr] = useState('10');
+  const [confirmOrder, setConfirmOrder] = useState(false);
 
   useEffect(() => {
     if (!stationId || !itemId || !itemExists) return undefined;
@@ -375,10 +376,14 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
               <div className="text-slate-600 text-[10px]">暂无买单</div>
             ) : (
               bids.map((l, idx) => (
-                <div
+                <button
+                  type="button"
                   key={idx}
-                  onClick={() => setPriceStr(String(l.price))}
-                  className="relative flex justify-between cursor-pointer hover:bg-emerald-500/10 px-1 overflow-hidden"
+                  onClick={() => {
+                    setPriceStr(String(l.price));
+                    setConfirmOrder(false);
+                  }}
+                  className="w-full relative flex items-center justify-between cursor-pointer hover:bg-emerald-500/10 active:bg-emerald-500/20 px-1.5 py-1 touch-row rounded-[2px] overflow-hidden text-left"
                   title="点击填入下单价格"
                 >
                   <span
@@ -387,7 +392,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
                   />
                   <span className="relative text-emerald-300">{fmtPrice(l.price)}</span>
                   <span className="relative text-slate-400">{l.qty}</span>
-                </div>
+                </button>
               ))
             )}
           </div>
@@ -400,10 +405,14 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
               <div className="text-slate-600 text-[10px]">暂无卖单</div>
             ) : (
               asks.map((l, idx) => (
-                <div
+                <button
+                  type="button"
                   key={idx}
-                  onClick={() => setPriceStr(String(l.price))}
-                  className="relative flex justify-between cursor-pointer hover:bg-rose-500/10 px-1 overflow-hidden"
+                  onClick={() => {
+                    setPriceStr(String(l.price));
+                    setConfirmOrder(false);
+                  }}
+                  className="w-full relative flex items-center justify-between cursor-pointer hover:bg-rose-500/10 active:bg-rose-500/20 px-1.5 py-1 touch-row rounded-[2px] overflow-hidden text-left"
                   title="点击填入下单价格"
                 >
                   <span
@@ -412,7 +421,7 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
                   />
                   <span className="relative text-rose-300">{fmtPrice(l.price)}</span>
                   <span className="relative text-slate-400">{l.qty}</span>
-                </div>
+                </button>
               ))
             )}
           </div>
@@ -421,35 +430,88 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTem
 
       {/* Manual order form (hidden in code-only observation mode) */}
       {!READ_ONLY_OBSERVATION_MODE && (
-        <div className="p-2 border-b border-slate-800/80 bg-[#1a2029] flex items-center gap-1.5 shrink-0 flex-wrap">
-          <select
-            value={side}
-            onChange={(e) => setSide(e.target.value as 'buy' | 'sell')}
-            className="bg-[#27303e] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
-          >
-            <option value="buy">买入</option>
-            <option value="sell">卖出</option>
-          </select>
-          <input
-            type="number"
-            step="0.05"
-            value={priceStr}
-            onChange={(e) => setPriceStr(e.target.value)}
-            placeholder="单价"
-            className="w-20 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
-          />
-          <input
-            type="number"
-            min="1"
-            value={qtyStr}
-            onChange={(e) => setQtyStr(e.target.value)}
-            placeholder="数量"
-            className="w-16 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
-          />
-          <span className="text-[9px] text-slate-500">点击深度行可填入价格</span>
-          <button onClick={handleSubmit} className={side === 'buy' ? 'cta-green ml-auto' : 'cta-blue ml-auto'}>
-            提交限价单
-          </button>
+        <div className="p-2 border-b border-slate-800/80 bg-[#1a2029] space-y-1.5 shrink-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={side}
+              onChange={(e) => {
+                setSide(e.target.value as 'buy' | 'sell');
+                setConfirmOrder(false);
+              }}
+              className="bg-[#27303e] border border-slate-700 px-1.5 py-1 text-[11px] rounded-sm"
+            >
+              <option value="buy">买入</option>
+              <option value="sell">卖出</option>
+            </select>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.05"
+              value={priceStr}
+              onChange={(e) => {
+                setPriceStr(e.target.value);
+                setConfirmOrder(false);
+              }}
+              placeholder="单价"
+              className="w-24 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+            />
+            <input
+              type="number"
+              inputMode="numeric"
+              min="1"
+              value={qtyStr}
+              onChange={(e) => {
+                setQtyStr(e.target.value);
+                setConfirmOrder(false);
+              }}
+              placeholder="数量"
+              className="w-20 bg-[#191f27] border border-slate-700 px-1.5 py-1 text-[11px] mono text-right rounded-sm"
+            />
+            <span className="text-[10px] text-slate-400">点按深度档位填入价格</span>
+            {!confirmOrder && (
+              <button
+                type="button"
+                onClick={() => {
+                  const p = Number(priceStr);
+                  const q = Math.floor(Number(qtyStr));
+                  if (Number.isFinite(p) && p > 0 && Number.isFinite(q) && q > 0) {
+                    setConfirmOrder(true);
+                  } else {
+                    handleSubmit();
+                  }
+                }}
+                className={side === 'buy' ? 'cta-green ml-auto' : 'cta-blue ml-auto'}
+              >
+                提交限价单
+              </button>
+            )}
+          </div>
+          {confirmOrder && (
+            <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[#232b37] border border-amber-400/50 text-[11px]">
+              <span className="text-amber-200 mono">
+                确认{side === 'buy' ? '买入' : '卖出'}：单价 {priceStr} × {Math.floor(Number(qtyStr))} 件？
+              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmOrder(false);
+                    handleSubmit();
+                  }}
+                  className={side === 'buy' ? 'cta-green' : 'cta-blue'}
+                >
+                  确认下单
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmOrder(false)}
+                  className="pill-btn"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -317,7 +317,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
         }}
       />
 
-      <div className="relative z-10 flex h-full items-center justify-center px-6 py-8">
+      <div className="relative z-10 flex h-full items-start sm:items-center justify-center overflow-y-auto overscroll-contain px-4 sm:px-6 py-6 pb-[max(24px,env(safe-area-inset-bottom))]">
         <div className="grid w-full max-w-[860px] items-center gap-12 md:grid-cols-[1fr_360px]">
           {/* 品牌栏：只放名称与标语，不暴露任何运行时/环境信息 */}
           <div className="hidden select-none md:flex items-center gap-4">
@@ -424,10 +424,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
                     type="button"
                     tabIndex={-1}
                     onClick={() => setShowPwd((v) => !v)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-600 transition-colors hover:text-sky-400"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2 p-2.5 touch-target flex items-center justify-center text-slate-600 transition-colors hover:text-sky-400"
                     aria-label={showPwd ? '隐藏密码' : '显示密码'}
                   >
-                    {showPwd ? <EyeOff size={13} /> : <Eye size={13} />}
+                    {showPwd ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
                 {isRegister && password.length > 0 && (
@@ -487,13 +487,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ authImplemented, onDevBy
                   resetSignal={ttReset}
                 />
               ) : (
-                <label className="flex cursor-pointer select-none items-center gap-2 text-[11px] text-slate-500 hover:text-slate-400">
+                <label className="flex min-h-[40px] cursor-pointer select-none items-center gap-2.5 py-1.5 text-[11px] text-slate-400 hover:text-slate-300">
                   <span
-                    className={`flex h-3 w-3 items-center justify-center border ${
+                    className={`flex h-4 w-4 items-center justify-center border ${
                       remember ? 'border-sky-400/70 bg-sky-400/20' : 'border-slate-600'
                     }`}
                   >
-                    {remember && <span className="h-1.5 w-1.5 bg-sky-300" />}
+                    {remember && <span className="h-2 w-2 bg-sky-300" />}
                   </span>
                   <input
                     type="checkbox"

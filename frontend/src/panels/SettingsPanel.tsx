@@ -35,10 +35,10 @@ function inputClass(invalid: boolean): string {
 }
 
 const SMALL_BTN =
-  'inline-flex shrink-0 items-center gap-1 rounded-sm border border-sky-500/35 bg-[#232a36] px-2 py-1 text-[10px] text-sky-200 transition-colors hover:border-sky-400/60 hover:bg-sky-500/15 hover:text-sky-100 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
+  'inline-flex shrink-0 touch-row items-center gap-1 rounded-sm border border-sky-500/35 bg-[#232a36] px-2.5 py-1.5 text-[10px] text-sky-200 transition-colors hover:border-sky-400/60 hover:bg-sky-500/15 hover:text-sky-100 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
 
 const SMALL_BTN_DANGER =
-  'inline-flex shrink-0 items-center gap-1 rounded-sm border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
+  'inline-flex shrink-0 touch-row items-center gap-1 rounded-sm border border-rose-500/40 bg-rose-500/10 px-2.5 py-1.5 text-[10px] text-rose-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
 
 /* ----------------------------------------------------------------- helpers */
 
@@ -233,7 +233,9 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
   const [pwdError, setPwdError] = useState<string | null>(null);
 
   const [revoking, setRevoking] = useState<string | number | null>(null);
+  const [confirmRevokeId, setConfirmRevokeId] = useState<string | number | null>(null);
   const [revokeAllBusy, setRevokeAllBusy] = useState(false);
+  const [confirmRevokeAll, setConfirmRevokeAll] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
 
   const [nickSaved, flashNickSaved] = useSavedFlag();
@@ -653,19 +655,42 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
                   <div className="mono mt-0.5 break-all text-[9px] text-slate-500">{s.id}</div>
                 </div>
                 {!s.current && (
-                  <button
-                    type="button"
-                    onClick={() => void revokeSession(s.id)}
-                    disabled={revoking !== null || revokeAllBusy}
-                    className={SMALL_BTN_DANGER}
-                  >
-                    {revoking === s.id ? (
-                      <Loader2 size={11} className="animate-spin" />
-                    ) : (
-                      <LogOut size={11} />
-                    )}
-                    吊销
-                  </button>
+                  confirmRevokeId === s.id ? (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConfirmRevokeId(null);
+                          void revokeSession(s.id);
+                        }}
+                        disabled={revoking !== null || revokeAllBusy}
+                        className={SMALL_BTN_DANGER}
+                      >
+                        确认吊销
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmRevokeId(null)}
+                        className={SMALL_BTN}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmRevokeId(s.id)}
+                      disabled={revoking !== null || revokeAllBusy}
+                      className={SMALL_BTN_DANGER}
+                    >
+                      {revoking === s.id ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <LogOut size={11} />
+                      )}
+                      吊销
+                    </button>
+                  )
                 )}
               </div>
             </div>
@@ -673,16 +698,36 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
         </div>
       )}
 
-      <div className="border-t border-slate-700/60 pt-2.5">
-        <button
-          type="button"
-          onClick={() => void revokeAllSessions()}
-          disabled={otherSessions.length === 0 || revokeAllBusy || revoking !== null}
-          className={SMALL_BTN_DANGER}
-        >
-          {revokeAllBusy ? <Loader2 size={11} className="animate-spin" /> : <LogOut size={11} />}
-          登出其他所有设备
-        </button>
+      <div className="border-t border-slate-700/60 pt-3 mt-1">
+        {confirmRevokeAll ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-rose-300">确认登出全部其他 {otherSessions.length} 台设备？</span>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmRevokeAll(false);
+                void revokeAllSessions();
+              }}
+              disabled={revokeAllBusy || revoking !== null}
+              className={SMALL_BTN_DANGER}
+            >
+              确认全部登出
+            </button>
+            <button type="button" onClick={() => setConfirmRevokeAll(false)} className={SMALL_BTN}>
+              取消
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmRevokeAll(true)}
+            disabled={otherSessions.length === 0 || revokeAllBusy || revoking !== null}
+            className={SMALL_BTN_DANGER}
+          >
+            {revokeAllBusy ? <Loader2 size={11} className="animate-spin" /> : <LogOut size={11} />}
+            登出其他所有设备
+          </button>
+        )}
         <div className="mono mt-1.5 text-[9px] leading-relaxed text-slate-500">
           被吊销的设备需要重新登录；本设备（CURRENT）不受影响。
         </div>
@@ -693,8 +738,8 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
   const gateError = loadError !== null && account === null;
 
   return (
-    <div className="flex h-full min-h-0 w-full bg-[#202732] text-slate-200">
-      <nav className="flex w-[92px] shrink-0 flex-col border-r border-sky-500/15 bg-[#1b212b] py-1">
+    <div className="flex flex-col sm:flex-row h-full min-h-0 w-full bg-[#202732] text-slate-200">
+      <nav className="flex flex-row sm:flex-col w-full sm:w-[96px] shrink-0 border-b sm:border-b-0 sm:border-r border-sky-500/15 bg-[#1b212b] py-1 px-1 sm:px-0 gap-1 sm:gap-0 overflow-x-auto">
         {TABS.map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
@@ -703,13 +748,15 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`relative flex items-center gap-1.5 px-2.5 py-[7px] text-left text-[11px] transition-colors ${
+              className={`relative touch-row flex items-center justify-center sm:justify-start gap-1.5 px-3 sm:px-2.5 py-2 text-left text-[11px] transition-colors shrink-0 ${
                 active
                   ? 'bg-[#242c38] text-sky-300'
                   : 'text-slate-400 hover:bg-[#232a36]/70 hover:text-slate-200'
               }`}
             >
-              {active && <span className="absolute inset-y-0 left-0 w-[2px] bg-sky-400/80" />}
+              {active && (
+                <span className="absolute inset-x-0 bottom-0 h-[2px] sm:h-auto sm:inset-x-auto sm:inset-y-0 sm:left-0 sm:w-[2px] bg-sky-400/80" />
+              )}
               <Icon size={12} className="shrink-0" />
               <span className="mono truncate tracking-[0.06em]">{t.label}</span>
             </button>

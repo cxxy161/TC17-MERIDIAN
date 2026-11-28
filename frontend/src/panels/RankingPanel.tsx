@@ -40,8 +40,8 @@ export const RankingPanel: React.FC<PaneProps> = ({ openTemp }) => {
         <span className="text-[10px] text-slate-400 shrink-0">点击查看公司详情</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-[11px] mono text-left">
+      <div className="flex-1 overflow-auto overscroll-contain">
+        <table className="w-full min-w-[460px] text-[11px] mono text-left">
           <thead className="bg-[#252e3b] text-slate-500 text-[10px] sticky top-0">
             <tr>
               <th className="px-3 py-1.5 font-normal">#</th>
@@ -60,7 +60,7 @@ export const RankingPanel: React.FC<PaneProps> = ({ openTemp }) => {
                 key={r.id}
                 onClick={() => openTemp('company', { companyId: r.id })}
                 title="点击打开公司详情"
-                className={`cursor-pointer ${r.is_player ? 'bg-emerald-500/10 hover:bg-emerald-500/15' : 'hover:bg-sky-500/10'}`}
+                className={`cursor-pointer touch-row ${r.is_player ? 'bg-emerald-500/10 hover:bg-emerald-500/15' : 'hover:bg-sky-500/10'}`}
               >
                 <td className="px-3 py-1.5 text-slate-500">{rank}</td>
                 <td className="px-2 py-1.5 font-sans">

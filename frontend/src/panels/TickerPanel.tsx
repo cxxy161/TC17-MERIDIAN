@@ -5,6 +5,7 @@ import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SearchSelect, type PickerOption } from '../components/SearchSelect';
 import { VirtualList } from '../components/VirtualList';
 import { useGameStore } from '../store/useGameStore';
+import { isCoarsePointer } from '../utils/useDragPointer';
 
 type SortKey = 'name' | 'bid' | 'ask' | 'last' | 'vol' | 'held';
 
@@ -22,9 +23,9 @@ interface TickerRow {
   hasOrder: boolean;
 }
 
-const ROW_HEIGHT = 22;
+const ROW_HEIGHT = 24;
 /** 物品 / 买一 / 卖一 / 最新 / 50回合量 / 站内持仓 / 窗口 */
-const GRID = 'grid-cols-[1fr_50px_50px_50px_42px_44px_84px]';
+const GRID = 'grid-cols-[minmax(96px,1fr)_50px_50px_50px_42px_44px_98px]';
 
 /**
  * Whole-station quote board.
@@ -189,14 +190,23 @@ export const TickerPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
     );
   }
 
+  const coarse = isCoarsePointer();
+  const effectiveRowHeight = coarse ? 40 : ROW_HEIGHT;
+
   const SortHead: React.FC<{ k: SortKey; label: string; className?: string }> = ({ k, label, className }) => (
     <button
       onClick={() => toggleSort(k)}
-      className={`flex items-center justify-end gap-0.5 hover:text-sky-300 ${className ?? ''}`}
+      className={`flex items-center justify-end gap-0.5 hover:text-sky-300 ${
+        sortKey === k ? 'text-sky-300' : ''
+      } ${className ?? ''}`}
       title="点击按此列排序"
     >
       {label}
-      {sortKey === k && (sortDir === 1 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />)}
+      {sortKey === k ? (
+        sortDir === 1 ? <ArrowUp className="w-2.5 h-2.5" /> : <ArrowDown className="w-2.5 h-2.5" />
+      ) : (
+        <span className="opacity-35 text-[8px]">↕</span>
+      )}
     </button>
   );
 
@@ -240,78 +250,84 @@ export const TickerPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }
         <span className="text-[9px] text-slate-500">● 我有挂单 · 点击行看物品详情</span>
       </div>
 
-      <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${GRID} gap-1 text-[9px] text-slate-500 shrink-0`}>
-        <SortHead k="name" label="物品" className="justify-start" />
-        <SortHead k="bid" label="买一" />
-        <SortHead k="ask" label="卖一" />
-        <SortHead k="last" label="最新" />
-        <SortHead k="vol" label="50量" />
-        <SortHead k="held" label="站内持仓" />
-        <span className="text-right pr-0.5">窗口</span>
-      </div>
-
-      <VirtualList
-        className="flex-1 min-h-0 overflow-y-auto"
-        count={filtered.length}
-        rowHeight={ROW_HEIGHT}
-        emptyState={
-          <div className="px-3 py-6 text-center text-[11px] text-slate-500 flex flex-col items-center gap-1.5">
-            <span>
-              {rows.length === 0
-                ? `「${world.stationLabel(stationId)}」当前没有任何物品报价（新站点或尚无成交时正常）。`
-                : '没有匹配的报价。清空搜索或关闭筛选试试。'}
-            </span>
-            <span className="text-[10px] text-slate-600">
-              {rows.length === 0 ? '换个站点，或等市场产生第一笔报价。' : `该站点共 ${rows.length} 条报价`}
-            </span>
+      <div className="flex-1 min-h-0 flex flex-col overflow-x-auto">
+        <div className="min-w-[440px] flex-1 min-h-0 flex flex-col">
+          <div className={`px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 grid ${GRID} gap-1 text-[10px] text-slate-400 shrink-0`}>
+            <SortHead k="name" label="物品" className="justify-start" />
+            <SortHead k="bid" label="买一" />
+            <SortHead k="ask" label="卖一" />
+            <SortHead k="last" label="最新" />
+            <SortHead k="vol" label="50量" />
+            <SortHead k="held" label="站内持仓" />
+            <span className="text-right pr-0.5">窗口</span>
           </div>
-        }
-        renderRow={(idx) => {
-          const r = filtered[idx];
-          return (
-            <div
-              onClick={() => openTemp('item', { itemId: r.id })}
-              className={`h-[22px] grid ${GRID} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40`}
-              title={`${r.name}（${r.id}）· ${r.category}`}
-            >
-              <span className="flex items-center gap-1 min-w-0">
-                {r.hasOrder && <span className="text-[8px] text-amber-300 shrink-0" title="我有该物品的挂单">●</span>}
-                <span className="truncate text-slate-100">{r.name}</span>
-                <span className="text-[8px] text-slate-500 truncate shrink-0 max-w-[70px]">{r.category}</span>
-              </span>
-              <span className="text-right mono text-emerald-400/90">{r.bid !== null ? r.bid.toFixed(2) : '--'}</span>
-              <span className="text-right mono text-rose-400/90">{r.ask !== null ? r.ask.toFixed(2) : '--'}</span>
-              <span className="text-right mono text-sky-300">{r.last.toFixed(2)}</span>
-              <span className="text-right mono text-slate-400">{r.vol || ''}</span>
-              <span className={`text-right mono ${r.held > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
-                {r.held || ''}
-              </span>
-              <span className="flex items-center justify-end gap-1">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openTemp('chart', { stationId, itemId: r.id });
-                  }}
-                  className="pill-btn py-0 text-[9px]"
-                  title="在浮动窗口打开 K 线（可并排盯多个）"
+
+          <VirtualList
+            className="flex-1 min-h-0 overflow-y-auto"
+            count={filtered.length}
+            rowHeight={effectiveRowHeight}
+            emptyState={
+              <div className="px-3 py-6 text-center text-[11px] text-slate-500 flex flex-col items-center gap-1.5">
+                <span>
+                  {rows.length === 0
+                    ? `「${world.stationLabel(stationId)}」当前没有任何物品报价（新站点或尚无成交时正常）。`
+                    : '没有匹配的报价。清空搜索或关闭筛选试试。'}
+                </span>
+                <span className="text-[10px] text-slate-600">
+                  {rows.length === 0 ? '换个站点，或等市场产生第一笔报价。' : `该站点共 ${rows.length} 条报价`}
+                </span>
+              </div>
+            }
+            renderRow={(idx) => {
+              const r = filtered[idx];
+              return (
+                <div
+                  onClick={() => openTemp('item', { itemId: r.id })}
+                  className={`${
+                    coarse ? 'h-[40px]' : 'h-[24px]'
+                  } grid ${GRID} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40`}
+                  title={`${r.name}（${r.id}）· ${r.category}`}
                 >
-                  K线
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openTemp('orderbook', { stationId, itemId: r.id });
-                  }}
-                  className="pill-btn py-0 text-[9px] text-emerald-300"
-                  title="在浮动窗口打开盘口"
-                >
-                  盘口
-                </button>
-              </span>
-            </div>
-          );
-        }}
-      />
+                  <span className="flex items-center gap-1 min-w-0">
+                    {r.hasOrder && <span className="text-[8px] text-amber-300 shrink-0" title="我有该物品的挂单">●</span>}
+                    <span className="truncate text-slate-100">{r.name}</span>
+                    <span className="text-[9px] text-slate-500 truncate shrink-0 max-w-[70px]">{r.category}</span>
+                  </span>
+                  <span className="text-right mono text-emerald-400/90">{r.bid !== null ? r.bid.toFixed(2) : '--'}</span>
+                  <span className="text-right mono text-rose-400/90">{r.ask !== null ? r.ask.toFixed(2) : '--'}</span>
+                  <span className="text-right mono text-sky-300">{r.last.toFixed(2)}</span>
+                  <span className="text-right mono text-slate-400">{r.vol || ''}</span>
+                  <span className={`text-right mono ${r.held > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>
+                    {r.held || ''}
+                  </span>
+                  <span className="flex items-center justify-end gap-1.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openTemp('chart', { stationId, itemId: r.id });
+                      }}
+                      className="pill-btn py-0 px-1.5 text-[10px]"
+                      title="在浮动窗口打开 K 线（可并排盯多个）"
+                    >
+                      K线
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openTemp('orderbook', { stationId, itemId: r.id });
+                      }}
+                      className="pill-btn py-0 px-1.5 text-[10px] text-emerald-300"
+                      title="在浮动窗口打开盘口"
+                    >
+                      盘口
+                    </button>
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </div>
+      </div>
 
       <div className="px-2 py-1 border-t border-slate-800 text-[9px] text-slate-500 flex items-center justify-between shrink-0 gap-2">
         <span>

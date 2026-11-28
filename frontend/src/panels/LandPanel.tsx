@@ -251,7 +251,7 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
         ) : err ? (
           <div className="p-4 text-[11px] text-rose-400">加载地块失败：{err}</div>
         ) : (
-          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-slate-800/80 text-[10.5px]">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain divide-y divide-slate-800/80 text-[10.5px]">
             {filtered.map((t) => {
               const st = statusLabel(t);
               const isSel = selectedTile?.slot_id === t.slot_id;
@@ -266,7 +266,7 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                     setSelectedSlotId(t.slot_id);
                     setParams({ planetId: activePlanetId, slotId: t.slot_id });
                   }}
-                  className={`px-2.5 py-1 flex items-center gap-2 cursor-pointer transition-colors ${
+                  className={`px-2.5 py-1.5 touch-row flex items-center gap-2 cursor-pointer transition-colors ${
                     isSel ? 'bg-sky-500/15' : 'hover:bg-slate-800/50'
                   }`}
                 >
@@ -434,6 +434,9 @@ export const LandPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) 
                     <div className="px-2.5 py-1.5 bg-[#1a2029] flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[10px] mono text-slate-400">
                         可用现金 <b className="text-emerald-300">{cash.toFixed(1)} Cr</b>
+                        {selectedTile.price !== null && cash < selectedTile.price && (selectedTile.status === 'unclaimed' || (selectedTile.status === 'listed' && !selectedTile.is_mine)) && (
+                          <span className="ml-2 text-amber-300">· 可用现金不足</span>
+                        )}
                       </span>
                       <div className="flex items-center gap-1.5">
                         {selectedTile.status === 'unclaimed' && (
