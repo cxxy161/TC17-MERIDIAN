@@ -3380,6 +3380,29 @@ impl World {
                 }
             }
         }
+        // Direct same-system interplanetary orbital routes (ST:P* <-> ST:P*)
+        for (pid_a, pa) in &self.planets {
+            for (pid_b, pb) in &self.planets {
+                if pid_a == pid_b || pa.system_id != pb.system_id {
+                    continue;
+                }
+                if let Some(r) = compute_route_in_systems(
+                    &pa.station_id,
+                    &pb.station_id,
+                    ShipSize::Small,
+                    100.0,
+                    &self.planets,
+                    &self.systems,
+                    self.hub_orbit_radius,
+                    self.hub_orbit_angle,
+                ) {
+                    routes
+                        .entry(pa.station_id.clone())
+                        .or_default()
+                        .insert(pb.station_id.clone(), (r.ticks, r.fuel));
+                }
+            }
+        }
         // Precompute Hub-to-Hub routes when multiple systems exist
         let hubs: Vec<String> = systems_view
             .values()

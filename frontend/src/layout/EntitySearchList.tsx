@@ -13,6 +13,8 @@ export interface EntitySearchListProps {
   className?: string;
   /** Show the group facet chips (功能窗口 / 物品 / 行星 / 地点). */
   showGroupFilter?: boolean;
+  /** Initial active group tab (defaults to '全部'). */
+  defaultGroup?: string;
 }
 
 /**
@@ -26,9 +28,10 @@ export const EntitySearchList: React.FC<EntitySearchListProps> = ({
   autoFocus,
   className,
   showGroupFilter = true,
+  defaultGroup = '全部',
 }) => {
   const [query, setQuery] = useState('');
-  const [group, setGroup] = useState<string>('全部');
+  const [group, setGroup] = useState<string>(defaultGroup);
   const [active, setActive] = useState(0);
 
   const groups = useMemo(() => {

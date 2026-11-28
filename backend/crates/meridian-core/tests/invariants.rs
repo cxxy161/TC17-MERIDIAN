@@ -383,11 +383,39 @@ fn test_manufacturing_recipe_switch_recycling_and_interplanetary_logistics() {
     assert!(world.companies["ind"].station_qty("ST:P1", "steel") > 0);
     assert!(world.companies["ind"].station_qty("ST:P1", "disposal_cert") > 0);
 
-    // Verify snapshot_for produces complete script-ready data
+    // Verify snapshot_for produces complete script-ready data and direct same-system orbital route ST:P1 -> ST:P2
     let snap = world.snapshot_for("ind").expect("snapshot for ind");
     assert_eq!(snap.company.id, "ind");
     assert!(snap.quotes.contains_key("ST:P1"));
     assert!(snap.quotes.contains_key("ST:HUB"));
+    let direct_p2 = snap.route_cost("ST:P1", "ST:P2");
+    assert!(direct_p2.is_some(), "same-system direct ST:P1 -> ST:P2 route should exist");
+
+    // Supply fuel at ST:P1 and dispatch directly ST:P1 -> ST:P2 with steel (no ST:HUB detour needed)
+    let (_, req_fuel) = direct_p2.unwrap();
+    world
+        .companies
+        .get_mut("ind")
+        .unwrap()
+        .add_station_qty("ST:P1", "fuel", req_fuel as i64);
+    let rep_p2 = world.step_tick(vec![(
+        "ind".to_string(),
+        vec![Intent::DispatchShip {
+            ship_id,
+            from: "ST:P1".to_string(),
+            to: "ST:P2".to_string(),
+            cargo: vec![("steel".to_string(), 1)],
+        }],
+    )]);
+    assert_eq!(rep_p2.rejected_intents, 0, "direct ST:P1 -> ST:P2 dispatch must succeed");
+    for _ in 0..30 {
+        world.step_tick(vec![]);
+        if !world.companies["ind"].ships[0].is_busy(world.tick) {
+            break;
+        }
+    }
+    assert_eq!(world.companies["ind"].ships[0].location, "ST:P2");
+    assert!(world.companies["ind"].station_qty("ST:P2", "steel") >= 1);
 }
 
 #[test]

@@ -5,19 +5,19 @@ import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { useGameStore } from '../store/useGameStore';
 import { SearchSelect, type PickerOption } from '../components/SearchSelect';
 import { VirtualList } from '../components/VirtualList';
-import type { BuildingDef, BuildingView, PlotView, RecipeDef } from '../types/meridian';
+import type { BuildingDef, BuildingView, PlotView, RecipeDef, SiteView } from '../types/meridian';
 import { READ_ONLY_OBSERVATION_MODE } from '../types/meridian';
 
 /**
  * Virtualization note: a plot card holds a variable number of buildings, so "one row per plot"
- * cannot have a fixed height. Instead the list is flattened to *building rows* plus one *buildable
- * slot row* per plot with free capacity — both have the same fixed height (92px), so the whole
- * production screen stays windowed even with hundreds of buildings.
+ * cannot have a fixed height. Instead the list is flattened to *building rows*, *construction site
+ * rows*, plus one *buildable slot row* per plot with free capacity — all sharing ROW_HEIGHT.
  */
 const ROW_HEIGHT = 92;
 
 type FactoryRow =
   | { kind: 'building'; plot: PlotView; building: BuildingView }
+  | { kind: 'site'; plot: PlotView; site: SiteView }
   | { kind: 'slot'; plot: PlotView };
 
 /**
@@ -131,25 +131,42 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
     return map;
   }, [state, planetId]);
 
+  const sitesByPlot = useMemo(() => {
+    const map = new Map<number, SiteView[]>();
+    for (const s of state?.player_snapshot?.company.sites ?? []) {
+      if (s.planet_id !== planetId) continue;
+      const list = map.get(s.plot_id);
+      if (list) list.push(s);
+      else map.set(s.plot_id, [s]);
+    }
+    return map;
+  }, [state, planetId]);
+
   const rows = useMemo<FactoryRow[]>(() => {
     const out: FactoryRow[] = [];
     for (const plot of plots) {
       const list = buildingsByPlot.get(plot.id) ?? [];
       for (const building of list) out.push({ kind: 'building', plot, building });
+      const sites = sitesByPlot.get(plot.id) ?? [];
+      for (const site of sites) out.push({ kind: 'site', plot, site });
       if (plot.used_slots < plot.capacity) out.push({ kind: 'slot', plot });
     }
     return out;
-  }, [plots, buildingsByPlot]);
+  }, [plots, buildingsByPlot, sitesByPlot]);
 
   const stats = useMemo(() => {
     let buildingCount = 0;
     let activeCount = 0;
+    let siteCount = 0;
     for (const list of buildingsByPlot.values()) {
       buildingCount += list.length;
       activeCount += list.filter((b) => b.active).length;
     }
-    return { buildingCount, activeCount };
-  }, [buildingsByPlot]);
+    for (const sites of sitesByPlot.values()) {
+      siteCount += sites.length;
+    }
+    return { buildingCount, activeCount, siteCount };
+  }, [buildingsByPlot, sitesByPlot]);
 
   const costText = (def: BuildingDef): string =>
     def.build_cost.map((c) => `${catalog.itemName(c.item)}×${c.qty}`).join(' + ') || '免费';
@@ -268,6 +285,50 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
     );
   };
 
+  const renderSite = (plot: PlotView, site: SiteView) => {
+    const def = catalog.building(site.building_type);
+    const totalTicks = def?.build_ticks ?? Math.max(1, site.ticks_remaining);
+    const doneTicks = Math.max(0, totalTicks - site.ticks_remaining);
+    const pct = totalTicks > 0 ? Math.min(100, Math.round((doneTicks / totalTicks) * 100)) : 0;
+    const eff = plot.building_mods[site.building_type] ?? 1;
+
+    return (
+      <div className="h-full border border-amber-500/35 bg-[#1b212b] rounded-sm px-2 py-1 flex flex-col justify-center gap-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-1 h-4 shrink-0 bg-amber-400" />
+          <span className="text-[11px] font-medium text-amber-200 truncate">
+            建造中 · {catalog.buildingName(site.building_type)}{' '}
+            <span className="text-[9px] mono text-slate-500">工地 #{site.id}</span>
+          </span>
+          <span className="text-[9px] mono text-slate-500 truncate">
+            地块 #{plot.id} · {plot.terrain_name}
+          </span>
+          <span className="ml-auto text-[10px] mono px-1.5 py-0.5 rounded-sm border border-amber-500/35 bg-amber-500/10 text-amber-200 shrink-0">
+            预计 T#{site.finish_tick} 完工
+          </span>
+        </div>
+
+        <div className="flex justify-between gap-2 text-[10px] text-slate-300 mono min-w-0">
+          <span className="truncate">
+            施工进度：{doneTicks}/{totalTicks} 回合 ({pct}%) · 还剩 {site.ticks_remaining} 回合
+          </span>
+          <span className="shrink-0 text-slate-400">地形效率 {eff.toFixed(2)}x</span>
+        </div>
+
+        <div className="text-[9px] text-slate-500 truncate">
+          已占用 {def?.slots_used ?? 1} 槽位 · 完工后自动切换为运行中设施
+        </div>
+
+        <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-amber-400 to-sky-400 transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+    );
+  };
+
   const renderSlot = (plot: PlotView) => (
     <div className="h-full border border-dashed border-slate-700/80 bg-[#1b212b]/60 rounded-sm px-2 py-1 flex flex-col justify-center gap-1">
       <div className="flex items-center gap-2 min-w-0">
@@ -333,11 +394,12 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
         )}
         <span className="ml-auto text-[10px] mono text-slate-400 whitespace-nowrap">
           地块 {plots.length} · 建筑 {stats.buildingCount} · 运行 {stats.activeCount}/{stats.buildingCount}
+          {stats.siteCount > 0 ? ` · 在建 ${stats.siteCount}` : ''}
         </span>
       </div>
 
       <div className="px-2 py-1 bg-[#252e3b] border-b border-slate-800/80 flex items-center justify-between text-[9px] text-slate-500 shrink-0">
-        <span>每行一栋建筑；虚线行为该地块的剩余槽位，可直接建造所选类型</span>
+        <span>每行一栋设施或建造中工地；虚线行为该地块的剩余槽位，可直接建造所选类型</span>
         <span>回合 {world.tick} · {planet.population > 0 ? `人口 ${Math.round(planet.population).toLocaleString()}` : '无人'}</span>
       </div>
 
@@ -361,7 +423,11 @@ export const FactoryPanel: React.FC<PaneProps> = ({ params, setParams, openTemp 
           // The row wrapper owns the gutter; absolute rows must not receive flow margins.
           return (
             <div className="h-full px-2 pt-1">
-              {row.kind === 'building' ? renderBuilding(row.plot, row.building) : renderSlot(row.plot)}
+              {row.kind === 'building'
+                ? renderBuilding(row.plot, row.building)
+                : row.kind === 'site'
+                  ? renderSite(row.plot, row.site)
+                  : renderSlot(row.plot)}
             </div>
           );
         }}

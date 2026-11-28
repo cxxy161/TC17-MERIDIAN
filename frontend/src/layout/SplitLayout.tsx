@@ -3,6 +3,7 @@ import { MoreVertical, Settings, X } from 'lucide-react';
 import { paneTitle, type PaneKind, type PaneParams, type TileContent } from './paneRegistry';
 import { EmptyTilePane, PaneRenderer } from './paneComponents';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
+import { useGameStore } from '../store/useGameStore';
 import type { SplitDirection, SplitNode } from './splitTree';
 
 interface SplitLayoutProps {
@@ -41,6 +42,8 @@ const TileFrame: React.FC<{
   const [actionsHover, setActionsHover] = useState(false);
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
+  const tutorialHighlight = useGameStore((s) => s.tutorialHighlight);
+  const isTutorialTarget = !!content && tutorialHighlight === `pane:${content.kind}`;
 
   // Always derived from params; never a stored copy (a stored title could keep naming a different
   // entity than the pane was actually showing).
@@ -52,10 +55,12 @@ const TileFrame: React.FC<{
     <div
       data-tile-id={tileId}
       data-empty-tile={content === null ? 'true' : 'false'}
-      className={`relative w-full h-full flex flex-col bg-[#1e242d] border rounded-[2px] overflow-hidden min-w-0 min-h-0 ${
+      className={`relative w-full h-full flex flex-col bg-[#1e242d] border rounded-[2px] overflow-hidden min-w-0 min-h-0 transition-shadow ${
         isDropTarget
           ? 'border-sky-400 ring-1 ring-sky-400/60'
-          : 'border-sky-500/15'
+          : isTutorialTarget
+            ? 'border-cyan-400/80 ring-1 ring-cyan-400/80 shadow-[0_0_16px_rgba(34,211,238,0.22)]'
+            : 'border-sky-500/15'
       }`}
     >
       {/* Single-Pane Header (NO tabs inside tile!) */}

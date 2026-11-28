@@ -1164,8 +1164,32 @@ pub fn decide_npc_intents_with_memory(
                                 && ob_f * avail_q > trip_f * 2.2 + local_bid_f * avail_q
                         })
                 });
+                let is_cons = catalog
+                    .items
+                    .get(*item_id)
+                    .is_some_and(|i| i.role == ItemRole::PlanetSupply);
+                let hub_seed_reserve = sid == &home_sid
+                    && !is_cons
+                    && genome.style.trade_focus >= 0.40
+                    && (raw_st_qty - self_keep) >= 8
+                    && snap
+                        .quotes
+                        .get(&home_hub)
+                        .and_then(|m| m.get(*item_id))
+                        .and_then(|hq| hq.best_ask)
+                        .is_none()
+                    && snap
+                        .company
+                        .station_stores
+                        .get(&home_hub)
+                        .and_then(|m| m.get(*item_id))
+                        .copied()
+                        .unwrap_or(0)
+                        < 12;
                 if has_better_export {
                     (raw_st_qty - self_keep).min(ship_cap_here)
+                } else if hub_seed_reserve {
+                    (raw_st_qty - self_keep).min(ship_cap_here).min(12)
                 } else {
                     0
                 }
@@ -1272,7 +1296,7 @@ pub fn decide_npc_intents_with_memory(
                     .and_then(|m| m.get(*item_id))
                     .and_then(|lq| lq.best_ask)
                     .is_none()
-                && q.best_ask.is_some();
+                && (q.best_ask.is_some() || q.best_bid.is_none());
 
             // Merchants with strong trade_focus may opportunistically buy underpriced physical goods to export
             // (never buy ships via arbitrage since bought ships turn into Fleet vessels rather than cargo).
@@ -1800,18 +1824,32 @@ pub fn decide_npc_intents_with_memory(
                         continue;
                     }
                 } else if dest == &home_hub && loc_is_st {
-                    // NEVER dump zero-bid consumer goods onto ST:HUB!
+                    // NEVER dump zero-bid consumer goods onto ST:HUB; only seed non-consumer items in small lots when HUB lacks asks.
                     if is_needed_home {
                         continue;
                     }
-                    let hub_bid_ok = dst_bid.is_some_and(|hb| hb >= p_src * 1.12);
-                    if is_consumer_good && !hub_bid_ok {
+                    let hub_bid_ok = dst_bid.is_some_and(|hb| hb >= p_src * 1.08);
+                    let dst_ask = snap
+                        .quotes
+                        .get(&dst_sid)
+                        .and_then(|m| m.get(item_id))
+                        .and_then(|q| q.best_ask);
+                    let hub_own_qty = snap
+                        .company
+                        .station_stores
+                        .get(&home_hub)
+                        .and_then(|m| m.get(item_id))
+                        .copied()
+                        .unwrap_or(0);
+                    let can_seed_hub = !is_consumer_good
+                        && genome.style.trade_focus >= 0.40
+                        && dst_ask.is_none()
+                        && hub_own_qty < 12
+                        && avail_take >= 8;
+                    if !hub_bid_ok && !can_seed_hub {
                         continue;
                     }
-                    if !hub_bid_ok {
-                        continue;
-                    }
-                    price_diff = price_diff.max(0.70);
+                    price_diff = if hub_bid_ok { price_diff.max(0.70) } else { 0.40 };
                 } else if dst_is_st && dest != &home_sid {
                     // Direct interplanetary sale only when destination planet station actually bids above cost+fuel!
                     if is_needed_home && ship.location == home_sid {
@@ -1837,6 +1875,16 @@ pub fn decide_npc_intents_with_memory(
                         } else {
                             avail_take
                         }
+                    } else if dest == &home_hub && loc_is_st && dst_bid.is_none() {
+                        // Limit cold-start seed lots sent to empty ST:HUB books to bound storage rent.
+                        let hub_own_qty = snap
+                            .company
+                            .station_stores
+                            .get(&home_hub)
+                            .and_then(|m| m.get(item_id))
+                            .copied()
+                            .unwrap_or(0);
+                        avail_take.min(12u32.saturating_sub(hub_own_qty))
                     } else {
                         avail_take
                     };

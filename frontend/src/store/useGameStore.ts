@@ -191,6 +191,10 @@ interface GameStore {
   wsStatus: 'connecting' | 'connected' | 'disconnected';
   consoleHistory: LogHistoryLine[];
   actionNotices: ActionNotice[];
+  tutorialOpen: boolean;
+  tutorialStep: number;
+  tutorialHighlight: string | null;
+  tutorialTraded: boolean;
   lastError: string | null;
 
   init: () => Promise<void>;
@@ -201,6 +205,10 @@ interface GameStore {
   sendIntent: (intent: IntentPayload) => Promise<void>;
   dismissActionNotice: (id: number) => void;
   clearActionNotices: () => void;
+  openTutorial: () => void;
+  closeTutorial: (markDone?: boolean) => void;
+  setTutorialStep: (step: number) => void;
+  setTutorialHighlight: (target: string | null) => void;
   simControl: (action: 'pause' | 'resume' | 'step' | 'speed' | 'reset', tickMs?: number) => Promise<void>;
   saveScripts: (modules: Record<string, string>, enabled?: boolean) => Promise<void>;
   saveDraftScripts: () => Promise<void>;
@@ -228,6 +236,13 @@ let bookSeqCounter = 0;
 let bookRotation = 0;
 let actionNoticeSeq = 1;
 const actionNoticeTimers: Record<number, number> = {};
+interface PendingUiIntent {
+  id: number;
+  targetTick: number;
+  actionNorm: string;
+  label: string;
+}
+let pendingUiIntents: PendingUiIntent[] = [];
 /** Upper bound of book refreshes started in a single tick. */
 const MAX_BOOK_FETCH_PER_TICK = 6;
 const latestBookSeq: Record<string, number> = {};
@@ -265,6 +280,26 @@ function describeIntent(intent: IntentPayload): string {
   return '执行动作';
 }
 
+const TUTORIAL_DONE_PREFIX = 'meridian.tutorial.done.v1:';
+
+function isTutorialDone(companyId: string): boolean {
+  try {
+    return window.localStorage.getItem(`${TUTORIAL_DONE_PREFIX}${companyId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setTutorialDone(companyId: string, done: boolean): void {
+  try {
+    const key = `${TUTORIAL_DONE_PREFIX}${companyId}`;
+    if (done) window.localStorage.setItem(key, '1');
+    else window.localStorage.removeItem(key);
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   catalog: null,
   state: null,
@@ -281,17 +316,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
   wsStatus: 'connecting',
   consoleHistory: [],
   actionNotices: [],
+  tutorialOpen: false,
+  tutorialStep: 0,
+  tutorialHighlight: null,
+  tutorialTraded: false,
   lastError: null,
 
   init: async () => {
     try {
+      const cid = get().companyId;
       const [catalog, state, scripts] = await Promise.all([
         api.getCatalog(),
-        api.getState(get().companyId),
-        api.getScripts(get().companyId).catch(() => null),
+        api.getState(cid),
+        api.getScripts(cid).catch(() => null),
       ]);
       const mods = scripts?.modules ?? {};
+      const comp = state.player_snapshot?.company;
+      const isFreshStarter =
+        !!comp &&
+        comp.buildings.length === 0 &&
+        comp.open_orders.length === 0 &&
+        !comp.plots.some((p) => p.used_slots > 0);
+      const shouldAutoTutorial = isFreshStarter && !isTutorialDone(cid);
       set((prev) => {
+        const tutorialPatch = shouldAutoTutorial
+          ? { tutorialOpen: true, tutorialStep: 0 }
+          : {};
         if (prev.scriptDirty) {
           return {
             catalog,
@@ -299,6 +349,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
             scripts,
             quoteHistory: mergeQuoteHistory(prev.quoteHistory, state, prev.watchedBooks),
             lastError: null,
+            ...tutorialPatch,
           };
         }
         const resolved = resolveInitialDraftState(prev.companyId, mods, prev.activeScriptModule);
@@ -311,6 +362,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           scriptDirty: resolved.scriptDirty,
           activeScriptModule: resolved.activeScriptModule,
           lastError: null,
+          ...tutorialPatch,
         };
       });
     } catch (e) {
@@ -363,15 +415,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
               additions.push({ tick: msg.tick, level: 'error', message: playerOut.error });
             }
 
+            const manualRejections = (
+              (msg.company_rejections?.[cid] as RejectedIntent[] | undefined) ?? []
+            ).filter((r) => r.action.startsWith('manual:'));
+
+            // Match queued UI actions that were scheduled for <= msg.tick against rejections
+            if (pendingUiIntents.length > 0 || manualRejections.length > 0) {
+              const due = pendingUiIntents.filter((p) => p.targetTick <= msg.tick);
+              pendingUiIntents = pendingUiIntents.filter((p) => p.targetTick > msg.tick);
+              const unmatchedRejNorms = manualRejections.map((r) =>
+                r.action.replace(/^manual:/, '').replace(/[^a-z0-9]/gi, '').toLowerCase(),
+              );
+              for (const p of due) {
+                const hitIdx = unmatchedRejNorms.findIndex(
+                  (norm) => norm === p.actionNorm || norm.includes(p.actionNorm) || p.actionNorm.includes(norm),
+                );
+                if (hitIdx >= 0) {
+                  unmatchedRejNorms.splice(hitIdx, 1);
+                } else {
+                  additions.push({
+                    tick: msg.tick,
+                    level: 'result',
+                    message: `[UI] 已结算生效：${p.label}`,
+                  });
+                }
+              }
+              for (const r of manualRejections) {
+                const act = r.action.replace(/^manual:/, '');
+                additions.push({
+                  tick: msg.tick,
+                  level: 'error',
+                  message: `[UI] 结算拒绝 [${r.code}]：${act}(${r.target}) — ${r.reason}`,
+                });
+              }
+            }
+
             if (additions.length > 0) {
               set((prev) => ({
                 consoleHistory: [...prev.consoleHistory, ...additions].slice(-500),
               }));
             }
 
-            const manualRejections = (
-              (msg.company_rejections?.[cid] as RejectedIntent[] | undefined) ?? []
-            ).filter((r) => r.action.startsWith('manual:'));
             if (manualRejections.length > 0) {
               const newNotices: ActionNotice[] = manualRejections.map((r) => {
                 const id = actionNoticeSeq++;
@@ -558,6 +642,19 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
+  openTutorial: () => set({ tutorialOpen: true, tutorialStep: 0 }),
+
+  closeTutorial: (markDone = true) => {
+    if (markDone) {
+      setTutorialDone(get().companyId, true);
+    }
+    set({ tutorialOpen: false, tutorialHighlight: null });
+  },
+
+  setTutorialStep: (step) => set({ tutorialStep: Math.max(0, step) }),
+
+  setTutorialHighlight: (target) => set({ tutorialHighlight: target }),
+
   dismissActionNotice: (id) => {
     const timer = actionNoticeTimers[id];
     if (timer !== undefined) {
@@ -580,6 +677,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   sendIntent: async (intent) => {
     const label = describeIntent(intent);
+    const actionNorm = (Object.keys(intent)[0] ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
     try {
       const resp = await api.sendIntent(get().companyId, intent);
       const id = actionNoticeSeq++;
@@ -587,10 +685,25 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const suffix = resp.paused
         ? '（当前仿真已暂停，恢复或单步后生效）'
         : `（等待 T#${curTick + 1} 结算）`;
+      pendingUiIntents.push({
+        id,
+        targetTick: curTick + 1,
+        actionNorm,
+        label,
+      });
+      if (pendingUiIntents.length > 64) pendingUiIntents = pendingUiIntents.slice(-64);
       actionNoticeTimers[id] = window.setTimeout(() => {
         get().dismissActionNotice(id);
       }, 4000);
+      const traded = 'CreateOrder' in intent || 'DealOrder' in intent;
+      const uiLine: LogHistoryLine = {
+        tick: curTick,
+        level: 'system',
+        message: `[UI] 已提交：${label}${suffix}`,
+      };
       set((prev) => ({
+        tutorialTraded: prev.tutorialTraded || traded,
+        consoleHistory: [...prev.consoleHistory, uiLine].slice(-500),
         actionNotices: [
           ...prev.actionNotices,
           { id, level: 'info' as const, tick: curTick, message: `已提交：${label}${suffix}` },
@@ -603,8 +716,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       actionNoticeTimers[id] = window.setTimeout(() => {
         get().dismissActionNotice(id);
       }, 12_000);
+      const uiErrLine: LogHistoryLine = {
+        tick: curTick,
+        level: 'error',
+        message: `[UI] 提交失败：${label} — ${msg}`,
+      };
       set((prev) => ({
         lastError: msg,
+        consoleHistory: [...prev.consoleHistory, uiErrLine].slice(-500),
         actionNotices: [
           ...prev.actionNotices,
           { id, level: 'error' as const, tick: curTick, message: `提交失败：${label} — ${msg}` },
@@ -618,8 +737,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       await api.simControl(action, tickMs);
       if (action === 'reset') {
         for (const k of Object.keys(latestBookSeq)) delete latestBookSeq[k];
+        pendingUiIntents = [];
         get().clearActionNotices();
-        set({ scriptDirty: false, consoleHistory: [], books: {}, quoteHistory: {} });
+        setTutorialDone(get().companyId, false);
+        set({
+          scriptDirty: false,
+          consoleHistory: [],
+          books: {},
+          quoteHistory: {},
+          tutorialTraded: false,
+        });
         await get().refreshState();
         await get().refreshScripts();
       } else {

@@ -14,6 +14,11 @@ export interface EntityOption {
 
 export const GROUP_ALL = '全部';
 
+export interface UseEntitySearchOptions {
+  /** Whether to include individual company entries (mostly NPCs). True for ⌘K global search, false for empty-tile picker. */
+  includeCompanies?: boolean;
+}
+
 /**
  * One search index for every entity in the game plus every pane type.
  *
@@ -21,7 +26,8 @@ export const GROUP_ALL = '全部';
  * it (14/16 rows and "first 10 items"), and neither could be reached by name. This is the single
  * source both use, with a group facet and no cap.
  */
-export function useEntitySearch(): EntityOption[] {
+export function useEntitySearch(opts: UseEntitySearchOptions = {}): EntityOption[] {
+  const { includeCompanies = true } = opts;
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
 
@@ -113,20 +119,22 @@ export function useEntitySearch(): EntityOption[] {
       });
     }
 
-    for (let i = 0; i < world.companies.length; i += 1) {
-      const c = world.companies[i];
-      const homeName = world.planetName(c.home_planet_id);
-      list.push({
-        key: `company-${c.id}`,
-        group: '公司',
-        label: c.name,
-        sub: `#${i + 1} · ${homeName} · 净流动 ${c.net_liquid.toLocaleString(undefined, { maximumFractionDigits: 1 })} · 地块 ${c.plots_count} · 飞船 ${c.ships_count}`,
-        keywords: `${c.id} ${c.name} ${c.home_planet_id} ${homeName} 公司 企业 ${c.is_player ? '玩家 player' : 'npc'}`,
-        badge: c.is_player ? '玩家' : 'NPC',
-        content: { kind: 'company', params: { companyId: c.id } },
-      });
+    if (includeCompanies) {
+      for (let i = 0; i < world.companies.length; i += 1) {
+        const c = world.companies[i];
+        const homeName = world.planetName(c.home_planet_id);
+        list.push({
+          key: `company-${c.id}`,
+          group: '公司',
+          label: c.name,
+          sub: `#${i + 1} · ${homeName} · 净流动 ${c.net_liquid.toLocaleString(undefined, { maximumFractionDigits: 1 })} · 地块 ${c.plots_count} · 飞船 ${c.ships_count}`,
+          keywords: `${c.id} ${c.name} ${c.home_planet_id} ${homeName} 公司 企业 ${c.is_player ? '玩家 player' : 'npc'}`,
+          badge: c.is_player ? '玩家' : 'NPC',
+          content: { kind: 'company', params: { companyId: c.id } },
+        });
+      }
     }
 
     return list;
-  }, [catalog, world.planets, world.locations, world.stations, world.companies]);
+  }, [catalog, includeCompanies, world.planets, world.locations, world.stations, world.companies]);
 }

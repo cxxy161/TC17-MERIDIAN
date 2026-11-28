@@ -66,15 +66,17 @@ export const PaneRenderer: React.FC<{
 };
 
 export const EmptyTilePane: React.FC<{ onSelect: (content: TileContent) => void }> = ({ onSelect }) => {
-  const options = useEntitySearch();
+  const options = useEntitySearch({ includeCompanies: false });
   return (
     <div className="h-full flex flex-col bg-[#1b212b] overflow-hidden">
       <div className="px-2.5 pt-2 text-[10px] text-slate-500 shrink-0">
-        空窗口 · 搜索并选择要显示的内容，或把任意临时悬浮窗拖进来覆盖。
+        空窗口 · 选择功能面板或搜索物品 / 行星 / 站点，也可以把临时悬浮窗拖进来嵌入。
       </div>
       <EntitySearchList
         options={options}
         onPick={(opt) => onSelect(opt.content)}
+        placeholder="搜索功能面板 / 物品 / 行星 / 站点…"
+        defaultGroup="功能窗口"
         autoFocus
         className="flex-1 min-h-0"
       />

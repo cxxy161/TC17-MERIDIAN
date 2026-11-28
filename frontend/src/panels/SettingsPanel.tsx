@@ -24,21 +24,21 @@ const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
 /* ------------------------------------------------------------------ styles */
 
 const INPUT_BASE =
-  'w-full rounded-[2px] border bg-[#080d13] px-2 py-1.5 text-[12px] text-slate-100 outline-none transition-colors placeholder:text-slate-600 disabled:opacity-60';
+  'w-full rounded-sm border bg-[#191f27] px-2 py-1.5 text-[12px] text-slate-100 outline-none transition-colors placeholder:text-slate-500 disabled:opacity-60';
 
 function inputClass(invalid: boolean): string {
   return `${INPUT_BASE} ${
     invalid
       ? 'border-rose-500/60 focus:border-rose-400'
-      : 'border-[rgba(56,189,248,0.18)] focus:border-sky-400/70 focus:bg-[#0a1119]'
+      : 'border-slate-700 focus:border-sky-400/70 focus:bg-[#141a22]'
   }`;
 }
 
 const SMALL_BTN =
-  'inline-flex shrink-0 items-center gap-1 rounded-[2px] border border-[rgba(56,189,248,0.28)] bg-[rgba(56,189,248,0.06)] px-1.5 py-1 text-[10px] text-sky-200/90 transition-colors hover:border-sky-400/60 hover:bg-sky-500/15 hover:text-sky-100 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-transparent disabled:text-slate-600';
+  'inline-flex shrink-0 items-center gap-1 rounded-sm border border-sky-500/35 bg-[#232a36] px-2 py-1 text-[10px] text-sky-200 transition-colors hover:border-sky-400/60 hover:bg-sky-500/15 hover:text-sky-100 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
 
 const SMALL_BTN_DANGER =
-  'inline-flex shrink-0 items-center gap-1 rounded-[2px] border border-rose-500/35 bg-rose-500/[0.06] px-1.5 py-1 text-[10px] text-rose-300/90 transition-colors hover:border-rose-400/60 hover:bg-rose-500/15 hover:text-rose-200 disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-transparent disabled:text-slate-600';
+  'inline-flex shrink-0 items-center gap-1 rounded-sm border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-[10px] text-rose-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:cursor-not-allowed disabled:border-slate-700/70 disabled:bg-transparent disabled:text-slate-500';
 
 /* ----------------------------------------------------------------- helpers */
 
@@ -184,7 +184,7 @@ const FieldLabel: React.FC<{ children: React.ReactNode; right?: React.ReactNode 
   right,
 }) => (
   <div className="flex items-center justify-between gap-2">
-    <span className="mono text-[10px] tracking-[0.14em] text-slate-500">{children}</span>
+    <span className="mono text-[10px] tracking-[0.14em] text-slate-400">{children}</span>
     {right}
   </div>
 );
@@ -424,14 +424,14 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
 
   const renderAccount = () => (
     <div className="space-y-3">
-      <div className="flex items-start justify-between gap-2 border-b border-[rgba(56,189,248,0.18)] pb-2">
+      <div className="flex items-start justify-between gap-2 border-b border-sky-500/15 pb-2">
         <div className="min-w-0">
-          <div className="mono text-[10px] tracking-[0.22em] text-slate-500">ACCOUNT</div>
+          <div className="mono text-[10px] tracking-[0.22em] text-slate-400">ACCOUNT</div>
           <div className="mt-0.5 truncate text-[13px] text-slate-100">
             {account?.nickname ?? user?.nickname ?? '—'}
           </div>
         </div>
-        <span className="mono shrink-0 border border-[rgba(56,189,248,0.25)] px-1.5 py-0.5 text-[9px] text-sky-300/80">
+        <span className="mono shrink-0 border border-sky-500/30 bg-[#1b212b] px-1.5 py-0.5 text-[9px] text-sky-300 rounded-sm">
           {roleLabel(account?.role ?? user?.role)}
         </span>
       </div>
@@ -439,7 +439,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       <div>
         <FieldLabel
           right={
-            <span className="mono border border-amber-400/25 px-1 py-px text-[9px] text-amber-300/70">
+            <span className="mono border border-amber-400/30 bg-amber-500/10 px-1 py-px text-[9px] text-amber-300/80 rounded-sm">
               未验证
             </span>
           }
@@ -454,7 +454,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       <div>
         <FieldLabel
           right={
-            <span className="mono text-[9px] text-slate-600">{nickTrimmed.length}/16</span>
+            <span className="mono text-[9px] text-slate-500">{nickTrimmed.length}/16</span>
           }
         >
           昵称
@@ -496,9 +496,9 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
           )}
         </div>
         <FieldErrorLine text={nickError} />
-        <div className="mono mt-1 flex items-center justify-between gap-2 text-[9px] text-slate-600">
+        <div className="mono mt-1 flex items-center justify-between gap-2 text-[9px] text-slate-500">
           <span>上次修改：{fmtTime(account?.nickname_changed_at)}</span>
-          <span className="text-amber-400/70">
+          <span className="text-amber-400/80">
             {cooldownLeft > 0
               ? `冷却中 · ${humanizeCooldown(cooldownLeft)}`
               : nickDirty
@@ -508,23 +508,23 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-2 rounded-sm border border-slate-700/60 bg-[#1b212b] px-2.5 py-2">
         <div className="min-w-0">
           <FieldLabel>COMPANY_ID</FieldLabel>
-          <div className="mono mt-1 break-all text-[11px] text-sky-200/85">
+          <div className="mono mt-1 break-all text-[11px] text-sky-200/90">
             {account?.company_id ?? user?.company_id ?? '—'}
           </div>
         </div>
         <div className="min-w-0">
           <FieldLabel>注册时间</FieldLabel>
-          <div className="mono mt-1 text-[11px] text-slate-400">{fmtTime(account?.created_at)}</div>
+          <div className="mono mt-1 text-[11px] text-slate-300">{fmtTime(account?.created_at)}</div>
         </div>
       </div>
 
-      <div className="border-t border-[rgba(56,189,248,0.14)] pt-3">
+      <div className="border-t border-sky-500/15 pt-3">
         <div className="flex items-center gap-1.5">
-          <KeyRound size={12} className="shrink-0 text-slate-500" />
-          <span className="mono text-[10px] tracking-[0.18em] text-slate-500">修改密码</span>
+          <KeyRound size={12} className="shrink-0 text-slate-400" />
+          <span className="mono text-[10px] tracking-[0.18em] text-slate-400">修改密码</span>
           <span className="ml-auto">
             <SavedTag show={pwdSaved} />
           </span>
@@ -578,17 +578,17 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
               {pwdBusy ? <Loader2 size={11} className="animate-spin" /> : <KeyRound size={11} />}
               更新密码
             </button>
-            <span className="mono text-[9px] text-slate-600">建议混合大小写与数字</span>
+            <span className="mono text-[9px] text-slate-500">建议混合大小写与数字</span>
           </div>
         </form>
       </div>
 
-      <div className="border-t border-white/[0.05] pt-3">
+      <div className="border-t border-slate-700/60 pt-3">
         <button type="button" onClick={() => void logout()} className={SMALL_BTN_DANGER}>
           <LogOut size={11} />
           退出登录
         </button>
-        <div className="mono mt-1.5 text-[9px] leading-relaxed text-slate-600">
+        <div className="mono mt-1.5 text-[9px] leading-relaxed text-slate-500">
           退出后回到登录页，本设备的会话 cookie 会被清除。
         </div>
       </div>
@@ -597,8 +597,8 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
 
   const renderSessions = () => (
     <div className="space-y-2.5">
-      <div className="flex items-center justify-between gap-2 border-b border-[rgba(56,189,248,0.18)] pb-2">
-        <span className="mono text-[10px] tracking-[0.22em] text-slate-500">
+      <div className="flex items-center justify-between gap-2 border-b border-sky-500/15 pb-2">
+        <span className="mono text-[10px] tracking-[0.22em] text-slate-400">
           SESSIONS · {sessions.length}
         </span>
         <div className="flex items-center gap-2">
@@ -617,7 +617,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       {sessionsError && <ErrorBox text={sessionsError} />}
 
       {sessions.length === 0 ? (
-        <div className="border border-dashed border-[rgba(56,189,248,0.18)] px-2.5 py-3 text-[10px] text-slate-500">
+        <div className="rounded-sm border border-dashed border-slate-700/80 bg-[#1b212b]/60 px-2.5 py-3 text-[10px] text-slate-400">
           没有活跃会话记录。
         </div>
       ) : (
@@ -625,10 +625,10 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
           {sessions.map((s) => (
             <div
               key={s.id}
-              className={`border px-2.5 py-2 ${
+              className={`rounded-sm border px-2.5 py-2 ${
                 s.current
-                  ? 'border-emerald-500/30 bg-emerald-500/[0.05]'
-                  : 'border-[rgba(56,189,248,0.18)] bg-[#0d141c]'
+                  ? 'border-emerald-500/35 bg-emerald-500/[0.08]'
+                  : 'border-slate-700/80 bg-[#1b212b]'
               }`}
             >
               <div className="flex items-start justify-between gap-2">
@@ -636,21 +636,21 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
                   <div className="flex items-center gap-1.5">
                     <Monitor
                       size={11}
-                      className={`shrink-0 ${s.current ? 'text-emerald-300' : 'text-slate-500'}`}
+                      className={`shrink-0 ${s.current ? 'text-emerald-300' : 'text-slate-400'}`}
                     />
                     <span className="truncate text-[11px] text-slate-200">
                       {uaLabel(s.user_agent)}
                     </span>
                     {s.current && (
-                      <span className="mono shrink-0 border border-emerald-500/40 bg-emerald-500/10 px-1 py-px text-[8px] tracking-[0.12em] text-emerald-300">
+                      <span className="mono shrink-0 border border-emerald-500/40 bg-emerald-500/15 px-1 py-px text-[8px] tracking-[0.12em] text-emerald-300 rounded-sm">
                         CURRENT
                       </span>
                     )}
                   </div>
-                  <div className="mono mt-1 text-[9px] text-slate-500">
+                  <div className="mono mt-1 text-[9px] text-slate-400">
                     最近活跃 {fmtTime(s.last_seen_at)} · 登录于 {fmtTime(s.created_at)}
                   </div>
-                  <div className="mono mt-0.5 break-all text-[9px] text-slate-600">{s.id}</div>
+                  <div className="mono mt-0.5 break-all text-[9px] text-slate-500">{s.id}</div>
                 </div>
                 {!s.current && (
                   <button
@@ -673,7 +673,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
         </div>
       )}
 
-      <div className="border-t border-white/[0.05] pt-2.5">
+      <div className="border-t border-slate-700/60 pt-2.5">
         <button
           type="button"
           onClick={() => void revokeAllSessions()}
@@ -683,7 +683,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
           {revokeAllBusy ? <Loader2 size={11} className="animate-spin" /> : <LogOut size={11} />}
           登出其他所有设备
         </button>
-        <div className="mono mt-1.5 text-[9px] leading-relaxed text-slate-600">
+        <div className="mono mt-1.5 text-[9px] leading-relaxed text-slate-500">
           被吊销的设备需要重新登录；本设备（CURRENT）不受影响。
         </div>
       </div>
@@ -693,8 +693,8 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
   const gateError = loadError !== null && account === null;
 
   return (
-    <div className="flex h-full min-h-0 w-full bg-[#0b1017] text-slate-200">
-      <nav className="flex w-[88px] shrink-0 flex-col border-r border-[rgba(56,189,248,0.18)] bg-[#0e141c] py-1">
+    <div className="flex h-full min-h-0 w-full bg-[#202732] text-slate-200">
+      <nav className="flex w-[92px] shrink-0 flex-col border-r border-sky-500/15 bg-[#1b212b] py-1">
         {TABS.map((t) => {
           const Icon = t.icon;
           const active = tab === t.id;
@@ -705,8 +705,8 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
               onClick={() => setTab(t.id)}
               className={`relative flex items-center gap-1.5 px-2.5 py-[7px] text-left text-[11px] transition-colors ${
                 active
-                  ? 'bg-[#151d28] text-sky-300'
-                  : 'text-slate-500 hover:bg-white/[0.02] hover:text-slate-300'
+                  ? 'bg-[#242c38] text-sky-300'
+                  : 'text-slate-400 hover:bg-[#232a36]/70 hover:text-slate-200'
               }`}
             >
               {active && <span className="absolute inset-y-0 left-0 w-[2px] bg-sky-400/80" />}
@@ -733,7 +733,7 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
             </div>
           </div>
         ) : loading && account === null ? (
-          <div className="mono flex items-center justify-center gap-2 py-10 text-[11px] text-slate-500">
+          <div className="mono flex items-center justify-center gap-2 py-10 text-[11px] text-slate-400">
             <Loader2 size={13} className="animate-spin text-sky-400/70" />
             正在读取账号信息
           </div>

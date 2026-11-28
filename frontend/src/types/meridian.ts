@@ -209,6 +209,15 @@ export interface BuildingView {
   cycle_ticks: number;
 }
 
+export interface SiteView {
+  id: number;
+  plot_id: number;
+  planet_id: string;
+  building_type: string;
+  finish_tick: number;
+  ticks_remaining: number;
+}
+
 export interface PlotView {
   id: number;
   slot_id: number;
@@ -327,6 +336,7 @@ export interface WorldSnapshot {
     debt: number;
     plots: PlotView[];
     buildings: BuildingView[];
+    sites?: SiteView[];
     ships: ShipView[];
     station_stores: Record<string, Record<string, number>>;
     open_orders: OrderSnapshot[];

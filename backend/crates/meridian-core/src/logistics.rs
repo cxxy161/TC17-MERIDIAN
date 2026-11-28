@@ -239,17 +239,27 @@ pub fn compute_route_in_systems(
         });
     }
 
-    // 3. Same-system station <-> system Hub
-    let (hub_sid, planet_pid) = if let Some(sf) = sys_from {
-        (sf.hub_station_id.as_str(), to.strip_prefix("ST:")?)
-    } else if let Some(st) = sys_to {
-        (st.hub_station_id.as_str(), from.strip_prefix("ST:")?)
+    // 3. Same-system station <-> system Hub, or direct same-system planet station <-> planet station
+    let same_system_route = if let (Some(sf), Some(to_pid)) = (sys_from, to.strip_prefix("ST:")) {
+        planets
+            .get(to_pid)
+            .and_then(|p| systems.get(&p.system_id))
+            .is_some_and(|s| s.hub_station_id == sf.hub_station_id)
+    } else if let (Some(st), Some(from_pid)) = (sys_to, from.strip_prefix("ST:")) {
+        planets
+            .get(from_pid)
+            .and_then(|p| systems.get(&p.system_id))
+            .is_some_and(|s| s.hub_station_id == st.hub_station_id)
+    } else if let (Some(from_pid), Some(to_pid)) = (from.strip_prefix("ST:"), to.strip_prefix("ST:"))
+    {
+        match (planets.get(from_pid), planets.get(to_pid)) {
+            (Some(pf), Some(pt)) => pf.system_id == pt.system_id,
+            _ => false,
+        }
     } else {
-        return None;
+        false
     };
-    let p = planets.get(planet_pid)?;
-    let p_sys = systems.get(&p.system_id)?;
-    if p_sys.hub_station_id != hub_sid {
+    if !same_system_route {
         return None;
     }
     let (x1, y1) = station_coords_in_systems(from, planets, systems)?;
@@ -269,7 +279,7 @@ pub fn compute_route_in_systems(
 
 /// Computes physical transit time and fuel cost for valid legs:
 /// - Planet ground (`P2`) <-> its local orbit station (`ST:P2`)
-/// - Planet orbit station (`ST:P*`) <-> central Hub (`ST:HUB`)
+/// - Same-system orbital stations (`ST:P*` <-> `ST:P*`) and central Hub (`ST:P*` <-> `ST:HUB`)
 pub fn compute_route(
     from: &str,
     to: &str,
@@ -315,10 +325,9 @@ pub fn compute_route(
         }
     }
 
-    // Interplanetary Hub-and-Spoke (ST:P* <-> ST:HUB)
-    let is_valid_hub_leg = (from == "ST:HUB" && to.starts_with("ST:"))
-        || (to == "ST:HUB" && from.starts_with("ST:"));
-    if !is_valid_hub_leg {
+    // Interplanetary orbital routes (ST:P* <-> ST:P* and ST:P* <-> ST:HUB)
+    let is_valid_orbital_leg = from.starts_with("ST:") && to.starts_with("ST:");
+    if !is_valid_orbital_leg {
         return None;
     }
     let (x1, y1) = station_coords(from, planets, hub_radius, hub_angle)?;

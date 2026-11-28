@@ -7,14 +7,17 @@ import {
   Compass,
   Factory,
   Globe2,
+  HelpCircle,
   Landmark,
   Layers,
   PackageSearch,
   Plus,
   Rocket,
+  Search,
   ShoppingBag,
   Terminal,
   Trophy,
+  User,
   Workflow,
   X,
 } from 'lucide-react';
@@ -51,6 +54,7 @@ import { SplitLayout } from './SplitLayout';
 import { FloatingWindowsLayer } from './FloatingWindowsLayer';
 import { CommandPalette } from './CommandPalette';
 import { MeridianLogo } from '../components/MeridianLogo';
+import { TutorialOverlay } from '../components/TutorialOverlay';
 
 /**
  * Rail entries carry no entity ids: what they open is resolved from the player's last focused
@@ -144,13 +148,14 @@ export const DesktopShell: React.FC = () => {
   const clearError = useGameStore((s) => s.clearError);
   const actionNotices = useGameStore((s) => s.actionNotices);
   const dismissActionNotice = useGameStore((s) => s.dismissActionNotice);
+  const tutorialHighlight = useGameStore((s) => s.tutorialHighlight);
+  const openTutorial = useGameStore((s) => s.openTutorial);
   const touchFocus = useGameStore((s) => s.touchFocus);
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   // 玩家 chip 的数据源是会话 store：设置页改昵称后这里立即跟着变
   const sessionUser = useSessionStore((s) => s.user);
   const playerName = sessionUser?.nickname ?? '本地预览';
-  const playerInitial = Array.from(playerName)[0] ?? '?';
 
   const initialWs = useRef(loadSavedWorkspaces());
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>(initialWs.current.list);
@@ -171,6 +176,10 @@ export const DesktopShell: React.FC = () => {
 
   const topZRef = useRef(40);
   const floatSeqRef = useRef(1);
+  const [tutorialZ, setTutorialZ] = useState(60);
+  const bringTutorialToFront = useCallback(() => {
+    setTutorialZ(++topZRef.current);
+  }, []);
 
   useEffect(() => {
     void init();
@@ -374,15 +383,20 @@ export const DesktopShell: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1 overflow-x-auto">
-            {workspaces.map((w) => (
-              <button
-                key={w.id}
-                onClick={() => switchWorkspace(w.id)}
-                className={`pill-btn shrink-0 whitespace-nowrap ${w.id === activeWsId ? 'active' : ''}`}
-              >
-                {w.name}
-              </button>
-            ))}
+            {workspaces.map((w) => {
+              const isTutTarget = tutorialHighlight === `ws:${w.id}`;
+              return (
+                <button
+                  key={w.id}
+                  onClick={() => switchWorkspace(w.id)}
+                  className={`pill-btn shrink-0 whitespace-nowrap ${w.id === activeWsId ? 'active' : ''} ${
+                    isTutTarget ? 'ring-1 ring-cyan-400 border-cyan-400/80 text-cyan-200 animate-pulse' : ''
+                  }`}
+                >
+                  {w.name}
+                </button>
+              );
+            })}
             {addingWs ? (
               <div className="flex items-center gap-1 shrink-0 bg-[#1b212b] border border-sky-500/40 rounded px-1.5 py-0.5">
                 <input
@@ -433,44 +447,66 @@ export const DesktopShell: React.FC = () => {
             <span className="whitespace-nowrap">
               现金 <strong className="text-emerald-400">{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
             </span>
-            <span className="flex items-center gap-1.5 text-[10px] whitespace-nowrap text-slate-400">
+            <span
+              className="flex items-center gap-1 text-[10px] whitespace-nowrap text-slate-400"
+              title={
+                paused
+                  ? '仿真已暂停'
+                  : wsStatus === 'connected'
+                    ? 'WebSocket 在线同步中'
+                    : '连接同步中'
+              }
+            >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
-                  wsStatus === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
+                  paused
+                    ? 'bg-amber-400'
+                    : wsStatus === 'connected'
+                      ? 'bg-emerald-400'
+                      : 'bg-amber-400 animate-pulse'
                 }`}
               />
-              {paused ? <span className="text-amber-300">服务器已暂停</span> : '在线同步'}
+              {paused ? <span className="text-amber-300">已暂停</span> : null}
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5 pl-2 border-l border-slate-800">
+          <div className="flex items-center gap-2 pl-2.5 border-l border-slate-700/60">
+            {floatingWindows.length > 0 && (
+              <button
+                onClick={() => setWindowListOpen((v) => !v)}
+                className="h-7 px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                title="列出/切换已打开的临时窗口"
+              >
+                <span>悬浮窗</span>
+                <span className="text-sky-300">{floatingWindows.length}</span>
+              </button>
+            )}
             <button
-              onClick={() => setWindowListOpen((v) => !v)}
-              className="pill-btn whitespace-nowrap"
-              title="列出/切换已打开的临时窗口"
+              onClick={() => setPaletteOpen(true)}
+              title="全局搜索 (Ctrl / ⌘ + K)"
+              className="h-7 px-3 rounded-[2px] border border-slate-700/80 bg-[#181e26] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-slate-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
             >
-              {floatingWindows.length} 个窗口
+              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="font-sans">搜索</span>
             </button>
-            <button onClick={() => setPaletteOpen(true)} className="cta-blue whitespace-nowrap">
-              ⌘K 搜索
+            <button
+              onClick={() => {
+                bringTutorialToFront();
+                openTutorial();
+              }}
+              className="h-7 px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              title="打开新手引导教程"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
+              <span className="font-sans">引导</span>
             </button>
-
-            {/* 玩家 chip：点击打开个人设置面板（不做下拉菜单） */}
             <button
               onClick={() => openTemp('settings')}
               title="个人设置"
-              className="ml-1 flex items-center gap-1.5 border-l border-slate-800 pl-2 pr-0.5 text-[11px] text-slate-300 transition-colors hover:text-sky-200"
+              className="h-7 px-2.5 rounded-[2px] border border-slate-700/70 bg-[#232a36]/80 text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
             >
-              <span className="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sky-400/45 bg-sky-500/15 font-mono text-[10px] uppercase leading-none text-sky-200">
-                {playerInitial}
-                <span
-                  className={`absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-[#1f2630] ${
-                    wsStatus === 'connected' ? 'bg-emerald-400' : 'bg-amber-400'
-                  }`}
-                  title={wsStatus === 'connected' ? '在线' : '同步中'}
-                />
-              </span>
-              <span className="max-w-[84px] truncate">{playerName}</span>
+              <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="max-w-[96px] truncate font-sans">{playerName}</span>
             </button>
           </div>
         </div>
@@ -489,17 +525,24 @@ export const DesktopShell: React.FC = () => {
       <div className="flex-1 flex min-h-0 relative">
         <aside className="w-12 bg-[#1a2029] border-r border-sky-500/15 py-2 flex flex-col items-center justify-between shrink-0 overflow-y-auto">
           <div className="flex flex-col gap-1">
-            {RAIL_BUTTONS.map((btn) => (
-              <button
-                key={btn.kind}
-                onClick={() => openTemp(btn.kind)}
-                className="w-9 h-9 rounded-[3px] flex flex-col items-center justify-center text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/30 transition-colors"
-                title={`打开临时悬浮窗：${btn.label}`}
-              >
-                {btn.icon}
-                <span className="text-[9px] mt-0.5">{btn.label}</span>
-              </button>
-            ))}
+            {RAIL_BUTTONS.map((btn) => {
+              const isTutTarget = tutorialHighlight === `rail:${btn.kind}`;
+              return (
+                <button
+                  key={btn.kind}
+                  onClick={() => openTemp(btn.kind)}
+                  className={`w-10 min-h-[38px] py-1 px-0.5 rounded-[3px] flex flex-col items-center justify-center transition-colors border ${
+                    isTutTarget
+                      ? 'text-cyan-200 bg-cyan-500/20 border-cyan-400 ring-1 ring-cyan-400/70 animate-pulse'
+                      : 'text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 border-transparent hover:border-sky-500/30'
+                  }`}
+                  title={`打开临时悬浮窗：${btn.label}`}
+                >
+                  <span className="shrink-0 flex items-center justify-center">{btn.icon}</span>
+                  <span className="text-[9px] mt-0.5 whitespace-nowrap leading-none">{btn.label}</span>
+                </button>
+              );
+            })}
           </div>
         </aside>
 
@@ -555,6 +598,14 @@ export const DesktopShell: React.FC = () => {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         openTemp={openTemp}
+      />
+
+      <TutorialOverlay
+        activeWorkspaceId={activeWorkspace?.id ?? activeWsId}
+        zIndex={tutorialZ}
+        onBringToFront={bringTutorialToFront}
+        onSwitchWorkspace={switchWorkspace}
+        onOpenTemp={openTemp}
       />
 
       {actionNotices.length > 0 && (
