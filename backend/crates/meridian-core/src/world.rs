@@ -2458,6 +2458,7 @@ impl World {
                     from,
                     to,
                     cargo: clean_cargo.into_iter().collect(),
+                    launch_tick: tick,
                     arrival_tick: tick + route.ticks as u64,
                 });
                 Ok(())

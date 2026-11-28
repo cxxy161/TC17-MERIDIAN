@@ -94,6 +94,8 @@ pub struct ShipInFlight {
     pub from: LocationId,
     pub to: LocationId,
     pub cargo: Vec<(ItemId, u32)>,
+    #[serde(default)]
+    pub launch_tick: u64,
     pub arrival_tick: u64,
 }
 

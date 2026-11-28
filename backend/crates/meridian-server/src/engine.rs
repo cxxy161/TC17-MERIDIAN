@@ -4,12 +4,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use meridian_core::{
-    from_money, snapshot::StarSystemView, Intent, ProductionCatalog, RejectedIntent, TickReport,
-    World, WorldSnapshot,
+    from_money, snapshot::StarSystemView, Intent, ProductionCatalog, RejectedIntent, ShipSize,
+    TickReport, World, WorldSnapshot,
 };
 use meridian_sandbox::{
     NpcGenome, PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle, SimulationRunner,
@@ -92,6 +92,21 @@ pub struct MarketTickerRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisibleFlight {
+    /// Opaque boot-salted animation key (never leaks foreign `ship_id` or `owner_id`).
+    pub key: u64,
+    pub is_mine: bool,
+    /// Only populated (`Some(ship_id)`) for the viewer's own ships.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ship_id: Option<u64>,
+    pub size: ShipSize,
+    pub from: String,
+    pub to: String,
+    pub launch_tick: u64,
+    pub arrival_tick: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateResponse {
     pub tick: u64,
     pub cpi: f64,
@@ -111,6 +126,8 @@ pub struct StateResponse {
     pub last_player_output: Option<PlayerRunOutput>,
     #[serde(default)]
     pub last_rejected: Vec<RejectedIntent>,
+    #[serde(default)]
+    pub visible_flights: Vec<VisibleFlight>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1783,6 +1800,42 @@ impl GameEngine {
         })
     }
 
+    fn visible_flights(&self, viewer_company_id: &str) -> Vec<VisibleFlight> {
+        static FLIGHT_SALT: OnceLock<u64> = OnceLock::new();
+        let salt = *FLIGHT_SALT.get_or_init(generate_world_seed);
+
+        self.world
+            .in_flight
+            .iter()
+            .map(|f| {
+                let is_mine = f.owner_id == viewer_company_id;
+                let size = self
+                    .world
+                    .companies
+                    .get(&f.owner_id)
+                    .and_then(|c| c.ships.iter().find(|s| s.id == f.ship_id))
+                    .map(|s| s.size)
+                    .unwrap_or(ShipSize::Small);
+                // SplitMix64 keyed by boot salt, truncated to 53 bits for exact JS `number` representation.
+                let mut z = f.ship_id ^ salt ^ f.arrival_tick.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                let key = (z ^ (z >> 31)) & ((1u64 << 53) - 1);
+
+                VisibleFlight {
+                    key,
+                    is_mine,
+                    ship_id: if is_mine { Some(f.ship_id) } else { None },
+                    size,
+                    from: f.from.clone(),
+                    to: f.to.clone(),
+                    launch_tick: f.launch_tick,
+                    arrival_tick: f.arrival_tick,
+                }
+            })
+            .collect()
+    }
+
     pub fn state_response(&self, company_id: &str) -> StateResponse {
         StateResponse {
             tick: self.world.tick,
@@ -1806,6 +1859,7 @@ impl GameEngine {
                 .get(company_id)
                 .map(|f| f.rejected.clone())
                 .unwrap_or_default(),
+            visible_flights: self.visible_flights(company_id),
         }
     }
 

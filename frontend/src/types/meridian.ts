@@ -359,6 +359,17 @@ export interface RejectedIntent {
   reason: string;
 }
 
+export interface VisibleFlight {
+  key: number;
+  is_mine: boolean;
+  ship_id?: number;
+  size: 'small' | 'medium' | 'large';
+  from: string;
+  to: string;
+  launch_tick: number;
+  arrival_tick: number;
+}
+
 export interface StateResponse {
   tick: number;
   cpi: number;
@@ -376,6 +387,7 @@ export interface StateResponse {
   player_snapshot: WorldSnapshot | null;
   last_player_output: PlayerRunOutput | null;
   last_rejected?: RejectedIntent[];
+  visible_flights?: VisibleFlight[];
 }
 
 export interface CandleRow {

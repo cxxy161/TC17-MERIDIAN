@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { PlanetSummary } from '../types/meridian';
+import type { PlanetSummary, VisibleFlight } from '../types/meridian';
+import { SmoothTickClock } from '../utils/smoothClock';
 
 interface Vec3 {
   x: number;
@@ -461,7 +462,95 @@ export interface Planet3DCanvasProps {
   paused: boolean;
   tickMs: number;
   ticksPerDay: number;
+  flights?: VisibleFlight[];
   onOpenLand?: () => void;
+}
+
+function isOccludedBySphere(p: Vec3): boolean {
+  return p.z < 0 && p.x * p.x + p.y * p.y < 1.0;
+}
+
+function drawGeometricShip(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  angleRad: number,
+  size: VisibleFlight['size'],
+  isMine: boolean,
+  scale = 1,
+) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angleRad);
+  ctx.scale(scale, scale);
+
+  if (!isMine) {
+    ctx.beginPath();
+    ctx.moveTo(2.8, 0);
+    ctx.lineTo(0, -1.4);
+    ctx.lineTo(-2.2, 0);
+    ctx.lineTo(0, 1.4);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.72)';
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  ctx.beginPath();
+  ctx.arc(0, 0, size === 'large' ? 7 : 5.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.14)';
+  ctx.fill();
+
+  ctx.beginPath();
+  if (size === 'small') {
+    ctx.moveTo(4.4, 0);
+    ctx.lineTo(-3.2, -2.2);
+    ctx.lineTo(-1.8, 0);
+    ctx.lineTo(-3.2, 2.2);
+  } else if (size === 'medium') {
+    ctx.moveTo(5.4, 0);
+    ctx.lineTo(-3.6, -2.8);
+    ctx.lineTo(-2.0, 0);
+    ctx.lineTo(-3.6, 2.8);
+  } else {
+    ctx.moveTo(6.5, 0);
+    ctx.lineTo(-4.0, -3.4);
+    ctx.lineTo(-2.2, 0);
+    ctx.lineTo(-4.0, 3.4);
+  }
+  ctx.closePath();
+
+  ctx.fillStyle = '#22d3ee';
+  ctx.fill();
+  ctx.strokeStyle = '#cffafe';
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawOrbitalStation(ctx: CanvasRenderingContext2D, sx: number, sy: number, label: string) {
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.beginPath();
+  ctx.moveTo(0, -6);
+  ctx.lineTo(6, 0);
+  ctx.lineTo(0, 6);
+  ctx.lineTo(-6, 0);
+  ctx.closePath();
+  ctx.fillStyle = '#0f172a';
+  ctx.fill();
+  ctx.strokeStyle = '#38bdf8';
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(-1.8, -1.8, 3.6, 3.6);
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(125, 211, 252, 0.82)';
+  ctx.font = '9.5px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.fillText(label, sx + 8, sy + 3);
 }
 
 export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
@@ -471,6 +560,7 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   paused,
   tickMs,
   ticksPerDay,
+  flights = [],
   onOpenLand,
 }) => {
   const profile = useMemo(
@@ -490,29 +580,14 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const userYawOffsetRef = useRef<number>(0.6);
   const pitchRef = useRef<number>(0.28);
-  const simRef = useRef<{
-    tick: number;
-    paused: boolean;
-    tickMs: number;
-    ticksPerDay: number;
-    tickAtMs: number;
-  }>({
-    tick,
-    paused,
-    tickMs: Math.max(100, tickMs || 2000),
-    ticksPerDay: Math.max(1, ticksPerDay || 24),
-    tickAtMs: performance.now(),
-  });
-
-  useEffect(() => {
-    simRef.current = {
-      tick,
-      paused,
-      tickMs: Math.max(100, tickMs || 2000),
-      ticksPerDay: Math.max(1, ticksPerDay || 24),
-      tickAtMs: performance.now(),
-    };
-  }, [tick, paused, tickMs, ticksPerDay]);
+  const flightsRef = useRef<VisibleFlight[]>(flights);
+  flightsRef.current = flights;
+  const planetIdRef = useRef<string>(planetId);
+  planetIdRef.current = planetId;
+  const clockRef = useRef<SmoothTickClock>(new SmoothTickClock());
+  clockRef.current.sync(tick, tickMs, paused);
+  const ticksPerDayRef = useRef<number>(Math.max(1, ticksPerDay || 24));
+  ticksPerDayRef.current = Math.max(1, ticksPerDay || 24);
 
   const draggingRef = useRef<{ active: boolean; x: number; y: number; moved: number }>({
     active: false,
@@ -551,13 +626,10 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           ctx.clearRect(0, 0, w, h);
 
-          // Sync rotation angle to planet rotation period, ticks_per_day, tick_ms, and paused state
-          const sim = simRef.current;
-          const frac = sim.paused
-            ? 0
-            : Math.min(1, Math.max(0, (performance.now() - sim.tickAtMs) / sim.tickMs));
-          const rotTicks = Math.max(1, sim.ticksPerDay * profile.rotDays);
-          const spinYaw = (((sim.tick + frac) / rotTicks) * Math.PI * 2) % (Math.PI * 2);
+          // Sync rotation angle & flights to monotonic SmoothTickClock (no per-tick stutter)
+          const simTime = clockRef.current.advance();
+          const rotTicks = Math.max(1, ticksPerDayRef.current * profile.rotDays);
+          const spinYaw = ((simTime / rotTicks) * Math.PI * 2) % (Math.PI * 2);
 
           const cx = w / 2;
           const cy = h / 2 + 2;
@@ -595,6 +667,192 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
           ctx.beginPath();
           ctx.arc(cx, cy, radius * 1.18, 0, Math.PI * 2);
           ctx.fill();
+
+          // Compute planetary orbit ring + station ST:<planetId> + local geometric ship flights
+          const pid = planetIdRef.current;
+          const stId = `ST:${pid}`;
+          const orbitR = 1.32;
+          const stationAngle = (simTime * 0.04) % (Math.PI * 2);
+          const stationLocal: Vec3 = {
+            x: orbitR * Math.cos(stationAngle),
+            y: 0,
+            z: orbitR * Math.sin(stationAngle),
+          };
+          const stationCam = rotatePlanetPoint(stationLocal, 0, tiltRad, camYaw, camPitch);
+          const stationScreenX = cx + stationCam.x * radius;
+          const stationScreenY = cy - stationCam.y * radius;
+
+          const RING_SEGS = 64;
+          const ringPts: Vec3[] = [];
+          for (let s = 0; s <= RING_SEGS; s++) {
+            const a = (s / RING_SEGS) * Math.PI * 2;
+            ringPts.push(
+              rotatePlanetPoint(
+                { x: orbitR * Math.cos(a), y: 0, z: orbitR * Math.sin(a) },
+                0,
+                tiltRad,
+                camYaw,
+                camPitch,
+              ),
+            );
+          }
+
+          interface RenderShip3D {
+            x: number;
+            y: number;
+            angle: number;
+            trailPts: Array<[number, number]>;
+            size: VisibleFlight['size'];
+            isMine: boolean;
+            back: boolean;
+            scale: number;
+          }
+          const renderShips: RenderShip3D[] = [];
+          for (const f of flightsRef.current) {
+            const touchesLocal =
+              f.from === pid || f.to === pid || f.from === stId || f.to === stId;
+            if (!touchesLocal) continue;
+            const span = Math.max(1, f.arrival_tick - f.launch_tick);
+            const tRaw = (simTime - f.launch_tick) / span;
+            const t = tRaw < 0 ? 0 : tRaw > 1 ? 1 : tRaw;
+            const isShuttle =
+              (f.from === pid && f.to === stId) || (f.from === stId && f.to === pid);
+
+            if (isShuttle) {
+              const isLaunch = f.to === stId;
+              const lon = ((f.key % 360) * Math.PI) / 180;
+              const lat = ((((f.key >> 9) % 90) - 45) * Math.PI) / 180;
+              const padLocal: Vec3 = {
+                x: Math.cos(lat) * Math.cos(lon),
+                y: Math.sin(lat),
+                z: Math.cos(lat) * Math.sin(lon),
+              };
+              const padCam = rotatePlanetPoint(padLocal, spinYaw, tiltRad, camYaw, camPitch);
+              const evalShuttle = (u: number): Vec3 => {
+                const s = isLaunch ? u : 1 - u;
+                const dir = norm3({
+                  x: padCam.x * (1 - s) + stationCam.x * s,
+                  y: padCam.y * (1 - s) + stationCam.y * s,
+                  z: padCam.z * (1 - s) + stationCam.z * s,
+                });
+                const r = 1.02 + (orbitR - 1.02) * s + Math.sin(Math.PI * s) * 0.12;
+                return { x: dir.x * r, y: dir.y * r, z: dir.z * r };
+              };
+              const pCur = evalShuttle(t);
+              if (isOccludedBySphere(pCur)) continue;
+              const pNext = evalShuttle(Math.min(1, t + 0.03));
+              const sx = cx + pCur.x * radius;
+              const sy = cy - pCur.y * radius;
+              const nx = cx + pNext.x * radius;
+              const ny = cy - pNext.y * radius;
+              const angle = Math.atan2(ny - sy, nx - sx);
+              const trailPts: Array<[number, number]> = [];
+              for (let k = 4; k >= 0; k--) {
+                const tk = Math.max(0, t - k * 0.045);
+                const pk = evalShuttle(tk);
+                if (!isOccludedBySphere(pk)) {
+                  trailPts.push([cx + pk.x * radius, cy - pk.y * radius]);
+                }
+              }
+              renderShips.push({
+                x: sx,
+                y: sy,
+                angle,
+                trailPts,
+                size: f.size,
+                isMine: f.is_mine,
+                back: pCur.z < 0,
+                scale: f.is_mine ? 0.95 : 0.78,
+              });
+            } else {
+              // Departing from or arriving at ST:<pid> along an orbital transfer leg
+              const isDepart = f.from === stId;
+              const windowProgress = isDepart
+                ? Math.min(1, t / 0.45)
+                : Math.max(0, (t - 0.55) / 0.45);
+              if (isDepart && t > 0.48) continue;
+              if (!isDepart && t < 0.52) continue;
+              const s = isDepart ? windowProgress : 1 - windowProgress;
+              const radial = norm3(stationCam);
+              const tangent = norm3({ x: -radial.z, y: radial.y * 0.25, z: radial.x });
+              const evalDeep = (u: number): Vec3 => ({
+                x: stationCam.x + (radial.x * 0.42 + tangent.x * 0.28) * u,
+                y: stationCam.y + (radial.y * 0.42 + tangent.y * 0.28) * u,
+                z: stationCam.z + (radial.z * 0.42 + tangent.z * 0.28) * u,
+              });
+              const pCur = evalDeep(s);
+              if (isOccludedBySphere(pCur)) continue;
+              const pAhead = evalDeep(isDepart ? Math.min(1, s + 0.04) : Math.max(0, s - 0.04));
+              const sx = cx + pCur.x * radius;
+              const sy = cy - pCur.y * radius;
+              const nx = cx + pAhead.x * radius;
+              const ny = cy - pAhead.y * radius;
+              const angle = Math.atan2(ny - sy, nx - sx);
+              const trailPts: Array<[number, number]> = [];
+              for (let k = 3; k >= 0; k--) {
+                const uk = isDepart
+                  ? Math.max(0, s - k * 0.06)
+                  : Math.min(1, s + k * 0.06);
+                const pk = evalDeep(uk);
+                if (!isOccludedBySphere(pk)) {
+                  trailPts.push([cx + pk.x * radius, cy - pk.y * radius]);
+                }
+              }
+              renderShips.push({
+                x: sx,
+                y: sy,
+                angle,
+                trailPts,
+                size: f.size,
+                isMine: f.is_mine,
+                back: pCur.z < 0,
+                scale: f.is_mine ? 0.9 : 0.72,
+              });
+            }
+          }
+
+          const drawOrbitLayer = (front: boolean) => {
+            ctx.save();
+            ctx.setLineDash([3, 4]);
+            ctx.strokeStyle = front ? 'rgba(56, 189, 248, 0.34)' : 'rgba(56, 189, 248, 0.14)';
+            ctx.lineWidth = 1;
+            for (let s = 0; s < RING_SEGS; s++) {
+              const p0 = ringPts[s];
+              const p1 = ringPts[s + 1];
+              const isFrontSeg = (p0.z + p1.z) * 0.5 >= 0;
+              if (isFrontSeg !== front) continue;
+              ctx.beginPath();
+              ctx.moveTo(cx + p0.x * radius, cy - p0.y * radius);
+              ctx.lineTo(cx + p1.x * radius, cy - p1.y * radius);
+              ctx.stroke();
+            }
+            ctx.restore();
+
+            for (const rs of renderShips) {
+              if (rs.back === front) continue;
+              if (rs.trailPts.length >= 2) {
+                ctx.beginPath();
+                ctx.moveTo(rs.trailPts[0][0], rs.trailPts[0][1]);
+                for (let k = 1; k < rs.trailPts.length; k++) {
+                  ctx.lineTo(rs.trailPts[k][0], rs.trailPts[k][1]);
+                }
+                ctx.strokeStyle = rs.isMine
+                  ? 'rgba(34, 211, 238, 0.58)'
+                  : 'rgba(148, 163, 184, 0.25)';
+                ctx.lineWidth = rs.isMine ? 1.5 : 0.9;
+                ctx.stroke();
+              }
+              drawGeometricShip(ctx, rs.x, rs.y, rs.angle, rs.size, rs.isMine, rs.scale);
+            }
+
+            const stationFront = stationCam.z >= 0;
+            if (stationFront === front && !isOccludedBySphere(stationCam)) {
+              drawOrbitalStation(ctx, stationScreenX, stationScreenY, stId);
+            }
+          };
+
+          // Back-half orbit ring, back ships & station (behind globe)
+          drawOrbitLayer(false);
 
           // Project visible Goldberg facets & sort back-to-front
           const visible: Array<{
@@ -649,6 +907,9 @@ export const Planet3DCanvas: React.FC<Planet3DCanvasProps> = ({
             }
             ctx.stroke();
           }
+
+          // Front-half orbit ring, front ships & station (in front of globe)
+          drawOrbitLayer(true);
         }
       }
       raf = window.requestAnimationFrame(renderFrame);

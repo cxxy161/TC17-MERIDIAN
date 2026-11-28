@@ -1384,3 +1384,68 @@ fn test_manual_intent_rejection_surfaces_in_broadcast_and_state() {
     assert_eq!(state.last_rejected[0].action, rejs[0].action);
     assert_eq!(state.last_rejected[0].code, rejs[0].code);
 }
+
+#[test]
+fn test_visible_flights_anonymizes_foreign_ships_and_marks_own() {
+    let _serial = serial_guard();
+    let store = SqliteStore::open_in_memory().expect("open in-memory sqlite");
+    let mut engine = GameEngine::bootstrap(data_json_path(), store, 1000).expect("bootstrap");
+
+    let home_pid = engine.world.companies["player1"].home_planet_id.clone();
+    let ship_id = engine.world.companies["player1"].ships[0].id;
+    let ship_loc = engine.world.companies["player1"].ships[0].location.clone();
+    let dest = if ship_loc == home_pid {
+        format!("ST:{home_pid}")
+    } else {
+        home_pid.clone()
+    };
+
+    engine
+        .world
+        .companies
+        .get_mut("player1")
+        .unwrap()
+        .add_ground_qty(&home_pid, "fuel", 10);
+    engine
+        .world
+        .companies
+        .get_mut("player1")
+        .unwrap()
+        .add_station_qty(&format!("ST:{home_pid}"), "fuel", 10);
+
+    // Also run NPCs alongside player1 dispatch
+    engine
+        .queue_manual_intent(
+            "player1".to_string(),
+            Intent::DispatchShip {
+                ship_id,
+                from: ship_loc,
+                to: dest,
+                cargo: Vec::new(),
+            },
+        )
+        .expect("queue player1 dispatch");
+
+    for _ in 0..8 {
+        engine.step_once().expect("step_once");
+        if !engine.world.in_flight.is_empty() {
+            break;
+        }
+    }
+
+    let state = engine.state_response("player1");
+    let json = serde_json::to_value(&state.visible_flights).expect("serialize visible_flights");
+    let arr = json.as_array().expect("visible_flights array");
+    let own = arr.iter().find(|f| f["is_mine"] == true);
+    if let Some(mine) = own {
+        assert_eq!(mine["ship_id"].as_u64(), Some(ship_id));
+        assert!(mine["launch_tick"].as_u64().unwrap_or(0) > 0);
+        assert!(mine["arrival_tick"].as_u64().unwrap_or(0) >= mine["launch_tick"].as_u64().unwrap());
+    }
+    for foreign in arr.iter().filter(|f| f["is_mine"] == false) {
+        assert!(foreign.get("ship_id").is_none(), "foreign flight must omit ship_id");
+        assert!(foreign.get("owner_id").is_none(), "foreign flight must omit owner_id");
+        assert!(foreign.get("cargo").is_none(), "foreign flight must omit cargo");
+        assert!(foreign["key"].as_u64().is_some());
+    }
+}
