@@ -67,6 +67,22 @@ export const VirtualList: React.FC<VirtualListProps> = ({
     }
   }, [scrollToIndex, scrollTrigger, rowHeight, viewport]);
 
+  useEffect(() => {
+    if (count === 0) {
+      setScrollTop(0);
+      return;
+    }
+    const el = hostRef.current;
+    if (!el) return;
+    const vh = height ?? (el.clientHeight || viewport);
+    const maxScroll = Math.max(0, count * rowHeight - vh);
+    if (el.scrollTop > maxScroll) {
+      el.scrollTop = maxScroll;
+    }
+    const clamped = el.scrollTop;
+    setScrollTop((prev) => (prev !== clamped ? clamped : prev));
+  }, [count, rowHeight, height, viewport]);
+
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);
   }, []);
@@ -76,8 +92,10 @@ export const VirtualList: React.FC<VirtualListProps> = ({
   }
 
   const total = count * rowHeight;
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const visible = Math.ceil(viewport / rowHeight) + overscan * 2;
+  const activeViewport = height ?? viewport;
+  const effectiveScrollTop = Math.min(scrollTop, Math.max(0, total - activeViewport));
+  const start = Math.max(0, Math.floor(effectiveScrollTop / rowHeight) - overscan);
+  const visible = Math.ceil(activeViewport / rowHeight) + overscan * 2;
   const end = Math.min(count, start + visible);
 
   const rows: React.ReactNode[] = [];

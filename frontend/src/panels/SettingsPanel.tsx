@@ -7,18 +7,29 @@ import {
   LogOut,
   Monitor,
   RefreshCw,
+  SlidersHorizontal,
   User,
   type LucideIcon,
 } from 'lucide-react';
 import { ApiError, accountApi, type AccountInfo } from '../api/client';
 import type { PaneProps } from '../layout/paneRegistry';
 import { useSessionStore } from '../store/useSessionStore';
+import {
+  UI_SCALE_DEFAULT,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_PRESETS,
+  UI_SCALE_STEP,
+  getStoredUiScale,
+  setUiScale as persistUiScale,
+} from '../utils/uiScale';
 
-type Tab = 'account' | 'sessions';
+type Tab = 'account' | 'sessions' | 'display';
 
 const TABS: Array<{ id: Tab; label: string; icon: LucideIcon }> = [
   { id: 'account', label: '账号', icon: User },
   { id: 'sessions', label: '会话', icon: Monitor },
+  { id: 'display', label: '显示', icon: SlidersHorizontal },
 ];
 
 /* ------------------------------------------------------------------ styles */
@@ -233,6 +244,11 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
   const [pwdError, setPwdError] = useState<string | null>(null);
 
   const [revoking, setRevoking] = useState<string | number | null>(null);
+  const [uiScale, setUiScaleState] = useState<number>(() => getStoredUiScale());
+
+  const updateScale = useCallback((nextScale: number) => {
+    setUiScaleState(persistUiScale(nextScale));
+  }, []);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | number | null>(null);
   const [revokeAllBusy, setRevokeAllBusy] = useState(false);
   const [confirmRevokeAll, setConfirmRevokeAll] = useState(false);
@@ -735,6 +751,93 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
     </div>
   );
 
+  const renderDisplay = () => {
+    const pct = Math.round(uiScale * 100);
+    return (
+      <div className="space-y-4">
+        <section className="space-y-2.5 border-b border-slate-700/50 pb-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-[12px] font-semibold text-slate-100">UI 界面缩放比例</h3>
+            <span className="mono text-[12px] font-semibold text-sky-300 tabular-nums">{pct}%</span>
+          </div>
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            按当前设备单独保存到本地浏览器（不会覆盖其他电脑或手机的显示比例），即时调整全局文字与控件尺寸。
+          </p>
+
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <button
+              type="button"
+              onClick={() => updateScale(uiScale - UI_SCALE_STEP)}
+              disabled={uiScale <= UI_SCALE_MIN + 0.001}
+              className={SMALL_BTN}
+              title="缩小 5%"
+            >
+              -5%
+            </button>
+            <input
+              type="range"
+              aria-label="UI 缩放比例"
+              min={UI_SCALE_MIN}
+              max={UI_SCALE_MAX}
+              step={UI_SCALE_STEP}
+              value={uiScale}
+              onChange={(e) => updateScale(Number(e.target.value))}
+              className="flex-1 min-w-[140px] accent-sky-400 cursor-pointer"
+            />
+            <button
+              type="button"
+              onClick={() => updateScale(uiScale + UI_SCALE_STEP)}
+              disabled={uiScale >= UI_SCALE_MAX - 0.001}
+              className={SMALL_BTN}
+              title="放大 5%"
+            >
+              +5%
+            </button>
+            <button
+              type="button"
+              onClick={() => updateScale(UI_SCALE_DEFAULT)}
+              disabled={Math.abs(uiScale - UI_SCALE_DEFAULT) < 0.001}
+              className={SMALL_BTN}
+            >
+              重置 100%
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            {UI_SCALE_PRESETS.map((preset) => {
+              const active = Math.abs(uiScale - preset) < 0.001;
+              return (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => updateScale(preset)}
+                  className={`rounded-sm border px-2 py-1 text-[10px] mono touch-row transition-colors ${
+                    active
+                      ? 'border-sky-400/70 bg-sky-500/25 text-sky-100 font-semibold'
+                      : 'border-slate-700 bg-[#191f27] text-slate-300 hover:border-sky-500/40 hover:text-white'
+                  }`}
+                >
+                  {Math.round(preset * 100)}%
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="space-y-1.5 rounded-sm border border-slate-700/60 bg-[#191f27]/70 p-2.5">
+          <div className="text-[11px] font-medium text-slate-200">效果预览</div>
+          <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <span>回合指标 · 12,075.37 Cr</span>
+            <span className="mono text-emerald-300">CPI 1.000x</span>
+          </div>
+          <div className="text-[10px] text-slate-500">
+            范围：{Math.round(UI_SCALE_MIN * 100)}% ~ {Math.round(UI_SCALE_MAX * 100)}%，默认 100%。
+          </div>
+        </section>
+      </div>
+    );
+  };
+
   const gateError = loadError !== null && account === null;
 
   return (
@@ -765,7 +868,9 @@ export const SettingsPanel: React.FC<PaneProps> = () => {
       </nav>
 
       <section className="min-h-0 min-w-0 flex-1 overflow-y-auto px-3 py-2.5">
-        {gateError ? (
+        {tab === 'display' ? (
+          renderDisplay()
+        ) : gateError ? (
           <div className="space-y-2">
             <ErrorBox text={loadError ?? ''} />
             <div className="flex items-center gap-2">

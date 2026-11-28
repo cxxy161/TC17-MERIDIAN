@@ -95,6 +95,10 @@ impl PlayerRunConfig {
         }
         cfg
     }
+
+    pub fn cpu_bucket_limit_ms(&self) -> f64 {
+        (self.cpu_limit_ms.max(1) as f64) * 5.0
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -103,6 +107,8 @@ pub struct PlayerRunOutput {
     pub memory_json: String,
     pub logs: Vec<ConsoleEntry>,
     pub cpu_used_ms: f64,
+    #[serde(default)]
+    pub cpu_bucket_ms: f64,
     pub error: Option<String>,
     pub timed_out: bool,
     pub oom: bool,

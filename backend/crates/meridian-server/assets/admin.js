@@ -982,7 +982,7 @@ function renderDetail(force = false) {
       `<button class="xs" data-action="clear-sandbox">返回企业体检</button>`;
     box.innerHTML = `
       <div class="kpi-grid">
-        <div class="kpi-box"><div class="kpi-label">脚本状态 / CPU</div><div class="kpi-val">${sb.enabled ? '<span class="green">运行中</span>' : '<span class="red">已停用</span>'} · ${Number(out.cpu_used_ms || 0).toFixed(2)} ms</div></div>
+        <div class="kpi-box"><div class="kpi-label">脚本状态 / CPU / 缓存桶</div><div class="kpi-val">${sb.enabled ? '<span class="green">运行中</span>' : '<span class="red">已停用</span>'} · ${Number(out.cpu_used_ms || 0).toFixed(2)} ms · 桶 ${Number(sb.cpu_bucket_ms || 0).toFixed(1)}/${Number(sb.cpu_bucket_limit_ms || 50).toFixed(0)}ms</div></div>
         <div class="kpi-box"><div class="kpi-label">Memory 占用</div><div class="kpi-val">${fmtBytes(sb.memory_bytes)} / ${fmtBytes(sb.memory_limit_bytes)}</div></div>
       </div>
       ${out.error ? `<div class="tag off mono" style="display:block;padding:4px 6px;margin-bottom:8px;">最近异常: ${esc(out.error)}</div>` : ''}
@@ -1033,7 +1033,7 @@ function renderDetail(force = false) {
       : '<span class="tag on">财务与产线运转正常</span>';
     const ps = comp.player_script;
     const psHtml = ps
-      ? `<div class="kv"><span>玩家脚本</span><b>${ps.enabled ? '<span class="green">启用</span>' : '<span class="red">停用</span>'} · 模块 ${ps.modules_count} · Memory ${fmtBytes(ps.memory_bytes)} · CPU ${Number(ps.cpu_used_ms || 0).toFixed(2)}ms</b></div>` +
+      ? `<div class="kv"><span>玩家脚本</span><b>${ps.enabled ? '<span class="green">启用</span>' : '<span class="red">停用</span>'} · 模块 ${ps.modules_count} · Memory ${fmtBytes(ps.memory_bytes)} · CPU ${Number(ps.cpu_used_ms || 0).toFixed(2)}ms · 缓存 ${Number(ps.cpu_bucket_ms || 0).toFixed(1)}/${Number(ps.cpu_bucket_limit_ms || 50).toFixed(0)}ms</b></div>` +
         (ps.error ? `<div class="kv"><span>脚本异常</span><b class="red">${esc(ps.error)}</b></div>` : '')
       : '';
     bodyHtml = `
@@ -1062,10 +1062,12 @@ function renderDetail(force = false) {
             const cyc = RECIPE_CYCLES[b.recipe_id] || 1;
             const pct = Math.min(100, Math.round((Number(b.progress || 0) / Math.max(1, cyc)) * 100));
             const stTag = !b.active
-              ? '<span class="tag off">手动停机</span>'
-              : b.idle_ticks > 0
-                ? `<span class="tag warn">缺料/电闲置 ${b.idle_ticks}t</span>`
-                : '<span class="tag on">运转中</span>';
+              ? `<span class="tag off">${esc(b.stall_reason || '手动停机')}</span>`
+              : b.stall_reason
+                ? `<span class="tag warn" title="${esc(b.stall_reason)}">${esc(b.stall_reason)}${b.idle_ticks > 0 ? ` (${b.idle_ticks}t)` : ''}</span>`
+                : b.idle_ticks > 0
+                  ? `<span class="tag warn">缺料/电闲置 ${b.idle_ticks}t</span>`
+                  : '<span class="tag on">运转中</span>';
             return `<tr>
               <td><b>${esc(bName)}</b><div class="mono muted" style="font-size:10px;">#${b.id}</div></td>
               <td class="mono">${esc(b.planet_id)}</td>
@@ -1119,7 +1121,7 @@ function renderDetail(force = false) {
     const psBox = ps
       ? `<div class="kv"><span>脚本状态</span><b>${ps.enabled ? '<span class="green">启用</span>' : '<span class="red">停用</span>'}</b></div>
          <div class="kv"><span>模块数 / 日志数</span><b class="mono">${ps.modules_count} 个 / ${ps.logs_count} 条</b></div>
-         <div class="kv"><span>CPU / Memory</span><b class="mono">${Number(ps.cpu_used_ms || 0).toFixed(2)} ms · ${fmtBytes(ps.memory_bytes)}</b></div>
+         <div class="kv"><span>CPU / 缓存桶 / Memory</span><b class="mono">${Number(ps.cpu_used_ms || 0).toFixed(2)} ms · 桶 ${Number(ps.cpu_bucket_ms || 0).toFixed(1)}/${Number(ps.cpu_bucket_limit_ms || 50).toFixed(0)} ms · ${fmtBytes(ps.memory_bytes)}</b></div>
          ${ps.error ? `<div class="tag off mono" style="display:block;margin-top:6px;">${esc(ps.error)}</div>` : ''}
          <div style="margin-top:8px;"><button class="xs" data-action="inspect-sandbox" data-company-id="${esc(comp.id)}">加载代码与实时控制台日志</button></div>`
       : comp.npc_genome

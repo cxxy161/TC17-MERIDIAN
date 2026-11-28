@@ -22,6 +22,14 @@ pub struct PlayerVmState {
     pub memory_json: String,
     pub enabled: bool,
     pub vm: Option<PlayerVmHandle>,
+    pub cpu_bucket_ms: Option<f64>,
+}
+
+impl PlayerVmState {
+    pub fn effective_cpu_bucket_ms(&self, config: &PlayerRunConfig) -> f64 {
+        let cap = config.cpu_bucket_limit_ms();
+        self.cpu_bucket_ms.unwrap_or(cap).clamp(0.0, cap)
+    }
 }
 
 impl fmt::Debug for PlayerVmState {
@@ -31,6 +39,7 @@ impl fmt::Debug for PlayerVmState {
             .field("memory_len", &self.memory_json.len())
             .field("enabled", &self.enabled)
             .field("has_vm", &self.vm.is_some())
+            .field("cpu_bucket_ms", &self.cpu_bucket_ms)
             .finish()
     }
 }
@@ -42,6 +51,7 @@ impl Default for PlayerVmState {
             memory_json: "{}".to_string(),
             enabled: true,
             vm: None,
+            cpu_bucket_ms: None,
         }
     }
 }
@@ -150,6 +160,7 @@ impl SimulationRunner {
             .players
             .entry(company_id.to_string())
             .or_default();
+        let cpu_bucket_ms = entry.effective_cpu_bucket_ms(&self.config);
         let bundle = Arc::new(entry.bundle.clone());
         let prev_mem = entry.memory_json.clone();
         let mut vm_opt = entry.vm.take();
@@ -169,6 +180,7 @@ impl SimulationRunner {
             bundle,
             &prev_mem,
             &self.config,
+            cpu_bucket_ms,
             feedback.as_ref(),
             code,
         );
@@ -194,6 +206,7 @@ impl SimulationRunner {
             bundle: Arc<PlayerScriptBundle>,
             memory_json: String,
             vm: Option<PlayerVmHandle>,
+            cpu_bucket_ms: f64,
             last_tick: Option<LastTickFeedback>,
         }
         struct NpcJob<'a> {
@@ -213,13 +226,16 @@ impl SimulationRunner {
             };
             if comp.is_player {
                 let last_tick = self.last_tick_feedback.get(&cid).cloned();
+                let cfg = &self.config;
                 if let Some(pvm) = self.players.get_mut(&cid) {
                     if pvm.enabled {
+                        let cpu_bucket_ms = pvm.effective_cpu_bucket_ms(cfg);
                         player_jobs.push(PlayerJob {
                             cid,
                             bundle: Arc::new(pvm.bundle.clone()),
                             memory_json: pvm.memory_json.clone(),
                             vm: pvm.vm.take(),
+                            cpu_bucket_ms,
                             last_tick,
                         });
                     } else {
@@ -280,6 +296,7 @@ impl SimulationRunner {
                                     job.bundle,
                                     &job.memory_json,
                                     config,
+                                    job.cpu_bucket_ms,
                                     job.last_tick.as_ref(),
                                 );
                                 (out, if keep { Some(vm) } else { None })
@@ -299,6 +316,7 @@ impl SimulationRunner {
                                             job.bundle,
                                             &job.memory_json,
                                             config,
+                                            job.cpu_bucket_ms,
                                             job.last_tick.as_ref(),
                                         );
                                         (out, if keep { Some(vm) } else { None })
@@ -308,6 +326,7 @@ impl SimulationRunner {
                                         (
                                             PlayerRunOutput {
                                                 memory_json: job.memory_json,
+                                                cpu_bucket_ms: job.cpu_bucket_ms,
                                                 error: Some(err),
                                                 oom,
                                                 ..Default::default()
@@ -343,9 +362,11 @@ impl SimulationRunner {
         }
         for (cid, pout, next_vm) in player_outcomes {
             let intents = pout.intents.clone();
+            let cap = self.config.cpu_bucket_limit_ms();
             if let Some(pvm) = self.players.get_mut(&cid) {
                 pvm.memory_json = pout.memory_json.clone();
                 pvm.vm = if pvm.enabled { next_vm } else { None };
+                pvm.cpu_bucket_ms = Some(pout.cpu_bucket_ms.clamp(0.0, cap));
             }
             self.last_player_outputs.insert(cid.clone(), pout);
             if !intents.is_empty() {

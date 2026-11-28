@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { GripHorizontal, Maximize2, Minimize2, X } from 'lucide-react';
 import { useDragPointer } from '../utils/useDragPointer';
+import { useIsPortrait } from '../utils/useViewportMode';
 
 export interface FloatingWindowFrameProps {
   x: number;
@@ -47,22 +48,24 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
   onDragEnd,
   children,
 }) => {
+  const isPortrait = useIsPortrait();
   const [maximized, setMaximized] = useState(false);
+  const effectiveMaximized = isPortrait && maximized;
   const startDragPointer = useDragPointer();
 
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
-  const effW = maximized
+  const effW = effectiveMaximized
     ? Math.max(240, vw - 12)
     : Math.max(Math.min(minW, vw - 12), Math.min(w, vw - 12));
-  const effH = maximized
+  const effH = effectiveMaximized
     ? Math.max(200, vh - 88)
     : Math.max(Math.min(minH, vh - 88), Math.min(h, vh - 88));
-  const effX = maximized ? 6 : Math.max(6, Math.min(x, Math.max(6, vw - effW - 6)));
-  const effY = maximized ? 38 : Math.max(38, Math.min(y, Math.max(38, vh - effH - 48)));
+  const effX = effectiveMaximized ? 6 : Math.max(6, Math.min(x, Math.max(6, vw - effW - 6)));
+  const effY = effectiveMaximized ? 38 : Math.max(38, Math.min(y, Math.max(38, vh - effH - 48)));
 
   const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (maximized) return;
+    if (effectiveMaximized) return;
     if ((e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     onFocus?.();
@@ -93,7 +96,7 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
   };
 
   const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (maximized) return;
+    if (effectiveMaximized) return;
     e.preventDefault();
     e.stopPropagation();
     onFocus?.();
@@ -133,8 +136,8 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
       <div
         onPointerDown={handleDragStart}
         onContextMenu={(e) => e.preventDefault()}
-        className={`h-8 bg-[#2a3545] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 touch-none select-none shrink-0 ${
-          maximized ? '' : 'cursor-move'
+        className={`${isPortrait ? 'h-8' : 'h-7'} bg-[#2a3545] border-b border-sky-400/25 px-2.5 flex items-center justify-between gap-2 touch-none select-none shrink-0 ${
+          effectiveMaximized ? '' : 'cursor-move'
         }`}
       >
         <div className="flex items-center gap-1.5 min-w-0">
@@ -142,21 +145,25 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
           <span className="text-[11px] font-medium text-sky-100 truncate">{title}</span>
           {badge}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0 pl-2">
+        <div className={`flex items-center shrink-0 ${isPortrait ? 'gap-1.5 pl-2' : 'gap-1'}`}>
           {headerExtra}
-          <button
-            type="button"
-            onClick={() => setMaximized((v) => !v)}
-            title={maximized ? '还原窗口大小' : '最大化窗口'}
-            className="w-6 h-6 touch-target flex items-center justify-center text-slate-400 hover:text-sky-200 hover:bg-sky-500/20 shrink-0 rounded-[2px]"
-          >
-            {maximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-          </button>
+          {isPortrait && (
+            <button
+              type="button"
+              onClick={() => setMaximized((v) => !v)}
+              title={maximized ? '还原窗口大小' : '最大化窗口'}
+              className="w-6 h-6 touch-target flex items-center justify-center text-slate-400 hover:text-sky-200 hover:bg-sky-500/20 shrink-0 rounded-[2px]"
+            >
+              {maximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
             title={closeTitle}
-            className="w-6 h-6 touch-target flex items-center justify-center text-slate-400 hover:text-rose-300 hover:bg-rose-500/20 shrink-0 rounded-[2px]"
+            className={`${
+              isPortrait ? 'w-6 h-6 touch-target' : 'w-5 h-5'
+            } flex items-center justify-center text-slate-400 hover:text-rose-300 hover:bg-rose-500/20 shrink-0 rounded-[2px]`}
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -166,7 +173,7 @@ export const FloatingWindowFrame: React.FC<FloatingWindowFrameProps> = ({
       <div className="flex-1 min-h-0 min-w-0 relative flex flex-col">{children}</div>
 
       {/* Bottom-right resize grip */}
-      {!maximized && (
+      {!effectiveMaximized && (
         <div
           onPointerDown={handleResizeStart}
           onContextMenu={(e) => e.preventDefault()}

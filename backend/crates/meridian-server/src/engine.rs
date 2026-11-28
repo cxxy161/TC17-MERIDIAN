@@ -1476,6 +1476,7 @@ impl GameEngine {
                             "progress": b.progress,
                             "idle_ticks": b.idle_ticks,
                             "efficiency": b.efficiency,
+                            "stall_reason": self.world.building_stall_reason(c, b),
                         })
                     })
                     .collect();
@@ -1540,6 +1541,8 @@ impl GameEngine {
                             "memory_bytes": pvm.memory_json.len(),
                             "logs_count": out.map(|o| o.logs.len()).unwrap_or(0),
                             "cpu_used_ms": out.map(|o| o.cpu_used_ms).unwrap_or(0.0),
+                            "cpu_bucket_ms": pvm.effective_cpu_bucket_ms(&self.runner.config),
+                            "cpu_bucket_limit_ms": self.runner.config.cpu_bucket_limit_ms(),
                             "error": out.and_then(|o| o.error.clone()),
                             "timed_out": out.map(|o| o.timed_out).unwrap_or(false),
                             "oom": out.map(|o| o.oom).unwrap_or(false),

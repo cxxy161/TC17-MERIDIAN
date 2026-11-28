@@ -82,11 +82,18 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     seq: 0,
   });
   const [facetSel, setFacetSel] = useState<Record<string, string | undefined>>({});
-  const [rect, setRect] = useState<{ top: number; left: number; width: number; maxHeight: number }>({
+  const [rect, setRect] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+    listHeight: number;
+  }>({
     top: 0,
     left: 0,
     width: 320,
     maxHeight: 360,
+    listHeight: 240,
   });
 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -152,26 +159,32 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       Math.max(vvLeft + margin, vvLeft + vw - width - margin),
     );
     const pop = popRef.current;
-    let naturalHeight = 320;
+    let nonListChromeH = 2; // 1px top + 1px bottom border
     if (pop) {
-      let chromeH = 2; // 1px top + 1px bottom border
       for (const child of Array.from(pop.children) as HTMLElement[]) {
-        chromeH += child === listBoxRef.current ? listDesiredHeight : child.offsetHeight;
+        if (child !== listBoxRef.current) {
+          nonListChromeH += child.offsetHeight;
+        }
       }
-      naturalHeight = Math.max(140, chromeH);
     }
+    const naturalHeight = Math.max(140, nonListChromeH + listDesiredHeight);
     const spaceBelow = vvTop + vh - r.bottom - gap - margin;
     const spaceAbove = r.top - vvTop - gap - margin;
     const openUp = spaceBelow < naturalHeight && spaceAbove > spaceBelow;
     const available = Math.max(110, openUp ? spaceAbove : spaceBelow);
     const maxHeight = Math.max(110, Math.min(naturalHeight, available));
+    const listHeight = Math.max(64, Math.min(listDesiredHeight, maxHeight - nonListChromeH));
     const top = openUp
       ? Math.max(vvTop + margin, r.top - maxHeight - gap)
       : Math.min(r.bottom + gap, vvTop + vh - margin - maxHeight);
     setRect((prev) =>
-      prev.top === top && prev.left === left && prev.width === width && prev.maxHeight === maxHeight
+      prev.top === top &&
+      prev.left === left &&
+      prev.width === width &&
+      prev.maxHeight === maxHeight &&
+      prev.listHeight === listHeight
         ? prev
-        : { top, left, width, maxHeight },
+        : { top, left, width, maxHeight, listHeight },
     );
   }, [listDesiredHeight]);
 
@@ -370,16 +383,17 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
 
           <div
             ref={listBoxRef}
-            className="flex-1 min-h-0"
+            className="shrink-0 min-h-0"
             style={{
-              height: listDesiredHeight,
+              height: rect.listHeight,
               minHeight: 0,
             }}
           >
             <VirtualList
               count={measured.length}
               rowHeight={rowHeight}
-              className="h-full overflow-y-auto overscroll-contain"
+              height={rect.listHeight}
+              className="overflow-y-auto overscroll-contain"
               scrollToIndex={scrollTarget.index}
               scrollTrigger={scrollTarget.seq}
               emptyState={

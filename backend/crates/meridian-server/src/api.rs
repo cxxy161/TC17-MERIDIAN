@@ -358,9 +358,14 @@ async fn admin_player_sandbox_handler(
         return Err((StatusCode::NOT_FOUND, format!("No player sandbox for '{company_id}'")));
     };
     let out = eng.runner.last_player_outputs.get(&company_id);
+    let cpu_bucket_ms = pvm.effective_cpu_bucket_ms(&eng.runner.config);
+    let cpu_bucket_limit_ms = eng.runner.config.cpu_bucket_limit_ms();
     Ok(Json(serde_json::json!({
         "company_id": company_id,
         "enabled": pvm.enabled,
+        "cpu_limit_ms": eng.runner.config.cpu_limit_ms,
+        "cpu_bucket_ms": cpu_bucket_ms,
+        "cpu_bucket_limit_ms": cpu_bucket_limit_ms,
         "memory_json": pvm.memory_json,
         "memory_bytes": pvm.memory_json.len(),
         "memory_limit_bytes": 131_072,
@@ -848,6 +853,8 @@ struct ScriptsResp {
     company_id: String,
     enabled: bool,
     cpu_limit_ms: u64,
+    cpu_bucket_ms: f64,
+    cpu_bucket_limit_ms: f64,
     modules: BTreeMap<String, String>,
     memory_json: String,
     last_output: Option<meridian_sandbox::PlayerRunOutput>,
@@ -870,6 +877,8 @@ async fn get_scripts_handler(
         company_id: company_id.clone(),
         enabled: pvm.enabled,
         cpu_limit_ms: eng.runner.config.cpu_limit_ms,
+        cpu_bucket_ms: pvm.effective_cpu_bucket_ms(&eng.runner.config),
+        cpu_bucket_limit_ms: eng.runner.config.cpu_bucket_limit_ms(),
         modules: pvm.bundle.modules.clone(),
         memory_json: pvm.memory_json.clone(),
         last_output: eng.runner.last_player_outputs.get(&company_id).cloned(),
@@ -1058,6 +1067,13 @@ async fn post_console_eval_handler(
         "intents_queued": intents_queued,
         "cpu_used_ms": out.cpu_used_ms,
         "cpu_limit_ms": cpu_limit_ms,
+        "cpu_bucket_ms": eng
+            .runner
+            .players
+            .get(&company_id)
+            .map(|p| p.effective_cpu_bucket_ms(&eng.runner.config))
+            .unwrap_or_else(|| eng.runner.config.cpu_bucket_limit_ms()),
+        "cpu_bucket_limit_ms": eng.runner.config.cpu_bucket_limit_ms(),
         "error": out.error,
         "timed_out": out.timed_out,
         "oom": out.oom,

@@ -644,8 +644,17 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
           >
             API 参考
           </button>
-          <span className="mono text-[10px] text-emerald-400 whitespace-nowrap">
-            耗时 {cpuMs.toFixed(2)} / {(scripts?.cpu_limit_ms ?? 10).toFixed(2)} ms
+          <span
+            className="mono text-[10px] text-emerald-400 whitespace-nowrap"
+            title="每回合基础配额与可透支 CPU 缓存桶（上限为每 tick 配额的 5 倍）"
+          >
+            耗时 {cpuMs.toFixed(2)} / {(scripts?.cpu_limit_ms ?? 10).toFixed(2)} ms · 缓存{' '}
+            {(
+              scripts?.last_output?.cpu_bucket_ms ??
+              scripts?.cpu_bucket_ms ??
+              (scripts?.cpu_limit_ms ?? 10) * 5
+            ).toFixed(1)}
+            /{(scripts?.cpu_bucket_limit_ms ?? (scripts?.cpu_limit_ms ?? 10) * 5).toFixed(0)} ms
           </span>
           {dirty && (
             <button

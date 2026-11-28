@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { useGameStore } from '../store/useGameStore';
 import { useSessionStore } from '../store/useSessionStore';
+import { PORTRAIT_MEDIA_QUERY, useIsPortrait } from '../utils/useViewportMode';
 import { accountApi } from '../api/client';
 import { moneyToCredits } from '../types/meridian';
 import {
@@ -150,22 +151,6 @@ function slotPosition(index: number, width: number, height: number): { x: number
     x: Math.max(12, Math.min(window.innerWidth - width - 12, 64 + col * 46)),
     y: Math.max(44, Math.min(window.innerHeight - height - 12, 52 + row * 38)),
   };
-}
-
-const PORTRAIT_MEDIA_QUERY = '(max-width: 767px), ((orientation: portrait) and (max-width: 1024px))';
-
-function useIsPortrait(): boolean {
-  const [portrait, setPortrait] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.matchMedia(PORTRAIT_MEDIA_QUERY).matches : false,
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(PORTRAIT_MEDIA_QUERY);
-    const update = () => setPortrait(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-  return portrait;
 }
 
 export const DesktopShell: React.FC = () => {
@@ -629,102 +614,182 @@ export const DesktopShell: React.FC = () => {
   return (
     <div className="h-full w-full flex flex-col bg-[#161b22] text-slate-200 overflow-hidden">
       {/* Top Telemetry Chrome */}
-      <header className="min-h-9 bg-[#1f2630] border-b border-sky-500/15 px-2 sm:px-3 py-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 shrink-0">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0 max-w-full">
-          <div className="flex items-center gap-1.5 sm:gap-2 pr-2 sm:pr-3 border-r border-slate-800 shrink-0">
-            <MeridianLogo className="w-4 h-4 shrink-0" />
-            <span className="font-semibold tracking-[0.14em] sm:tracking-[0.18em] text-[11px] text-slate-100 whitespace-nowrap">
-              <span className="hidden sm:inline">子午线 · </span>MERIDIAN
-            </span>
+      <header className="min-h-9 bg-[#1f2630] border-b border-sky-500/15 px-2 sm:px-3 py-1 flex flex-col gap-1 shrink-0">
+        <div className="flex items-center justify-between gap-2 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 sm:gap-2 pr-2 sm:pr-3 border-r border-slate-800 shrink-0">
+              <MeridianLogo className="w-4 h-4 shrink-0" />
+              <span className="font-semibold tracking-[0.14em] sm:tracking-[0.18em] text-[11px] text-slate-100 whitespace-nowrap">
+                <span className="hidden sm:inline">子午线 · </span>MERIDIAN
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 overflow-x-auto min-w-0">
+              {workspaces.map((w) => {
+                const isTutTarget = tutorialHighlight === `ws:${w.id}`;
+                return (
+                  <button
+                    key={w.id}
+                    onClick={() => switchWorkspace(w.id)}
+                    className={`pill-btn shrink-0 whitespace-nowrap ${w.id === activeWsId ? 'active' : ''} ${
+                      isTutTarget ? 'ring-1 ring-cyan-400 border-cyan-400/80 text-cyan-200 animate-pulse' : ''
+                    }`}
+                  >
+                    {w.name}
+                  </button>
+                );
+              })}
+              {addingWs ? (
+                <div className="flex items-center gap-1 shrink-0 bg-[#1b212b] border border-sky-500/40 rounded px-1.5 py-0.5">
+                  <input
+                    autoFocus
+                    value={newWsName}
+                    onChange={(e) => setNewWsName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        commitAddWorkspace();
+                      } else if (e.key === 'Escape') {
+                        setAddingWs(false);
+                      }
+                    }}
+                    placeholder="工作区名称"
+                    className="bg-transparent text-[11px] text-slate-100 outline-none w-24"
+                  />
+                  <button
+                    onClick={commitAddWorkspace}
+                    className="text-[10px] text-emerald-300 hover:text-emerald-200 px-1"
+                  >
+                    创建
+                  </button>
+                  <button
+                    onClick={() => setAddingWs(false)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 px-0.5"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button onClick={openAddWorkspace} className="pill-btn px-1.5 shrink-0" title="新建空白自定义工作区">
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center gap-1 overflow-x-auto">
-            {workspaces.map((w) => {
-              const isTutTarget = tutorialHighlight === `ws:${w.id}`;
-              return (
-                <button
-                  key={w.id}
-                  onClick={() => switchWorkspace(w.id)}
-                  className={`pill-btn shrink-0 whitespace-nowrap ${w.id === activeWsId ? 'active' : ''} ${
-                    isTutTarget ? 'ring-1 ring-cyan-400 border-cyan-400/80 text-cyan-200 animate-pulse' : ''
-                  }`}
+          {/* Player Metrics (desktop/landscape inline) & Window Palette */}
+          <div className="flex items-center gap-2 sm:gap-3 text-[11px] mono shrink-0">
+            {!isPortrait && (
+              <div className="flex items-center gap-3 text-slate-400">
+                <span className="whitespace-nowrap">
+                  回合 <strong className="text-slate-100">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
+                </span>
+                <span className="whitespace-nowrap">
+                  物价指数 <strong className="text-sky-400">{(state?.cpi ?? 1).toFixed(3)}</strong>
+                </span>
+                <span className="whitespace-nowrap">
+                  现金 <strong className="text-emerald-400">{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+                </span>
+                <span
+                  className="flex items-center gap-1 text-[10px] whitespace-nowrap text-slate-400"
+                  title={
+                    paused
+                      ? '仿真已暂停'
+                      : wsStatus === 'connected'
+                        ? 'WebSocket 在线同步中'
+                        : '连接同步中'
+                  }
                 >
-                  {w.name}
-                </button>
-              );
-            })}
-            {addingWs ? (
-              <div className="flex items-center gap-1 shrink-0 bg-[#1b212b] border border-sky-500/40 rounded px-1.5 py-0.5">
-                <input
-                  autoFocus
-                  value={newWsName}
-                  onChange={(e) => setNewWsName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      commitAddWorkspace();
-                    } else if (e.key === 'Escape') {
-                      setAddingWs(false);
-                    }
-                  }}
-                  placeholder="工作区名称"
-                  className="bg-transparent text-[11px] text-slate-100 outline-none w-24"
-                />
-                <button
-                  onClick={commitAddWorkspace}
-                  className="text-[10px] text-emerald-300 hover:text-emerald-200 px-1"
-                >
-                  创建
-                </button>
-                <button
-                  onClick={() => setAddingWs(false)}
-                  className="text-[10px] text-slate-400 hover:text-slate-200 px-0.5"
-                >
-                  取消
-                </button>
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      paused
+                        ? 'bg-amber-400'
+                        : wsStatus === 'connected'
+                          ? 'bg-emerald-400'
+                          : 'bg-amber-400 animate-pulse'
+                    }`}
+                  />
+                  {paused ? <span className="text-amber-300">已暂停</span> : null}
+                </span>
               </div>
-            ) : (
-              <button onClick={openAddWorkspace} className="pill-btn px-1.5 shrink-0" title="新建空白自定义工作区">
-                <Plus className="w-3.5 h-3.5" />
-              </button>
             )}
+
+            <div className={`flex items-center gap-1.5 sm:gap-2 ${!isPortrait ? 'pl-2 sm:pl-2.5 border-l border-slate-700/60' : ''}`}>
+              <button
+                onClick={() => {
+                  setPresetMenuOpen((v) => !v);
+                  setWindowListOpen(false);
+                }}
+                className={`h-7 px-2 rounded-[2px] border text-[11px] inline-flex items-center gap-1 whitespace-nowrap transition-colors ${
+                  presetMenuOpen
+                    ? 'border-sky-400 bg-sky-500/15 text-sky-100'
+                    : 'border-slate-700/80 bg-[#232a36] text-slate-300 hover:border-sky-400/50 hover:text-sky-100'
+                }`}
+                title="切换或保存多设备窗口预设"
+              >
+                <Monitor className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
+                <span className="max-w-[72px] truncate font-sans">{activePreset?.name ?? '预设'}</span>
+                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+              </button>
+              {floatingWindows.length > 0 && (
+                <button
+                  onClick={() => {
+                    setWindowListOpen((v) => !v);
+                    setPresetMenuOpen(false);
+                  }}
+                  className="h-7 px-2 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1 whitespace-nowrap transition-colors"
+                  title="列出/切换已打开的临时窗口"
+                >
+                  <span>悬浮窗</span>
+                  <span className="text-sky-300">{floatingWindows.length}</span>
+                </button>
+              )}
+              <button
+                onClick={() => setPaletteOpen(true)}
+                title="全局搜索 (Ctrl / ⌘ + K)"
+                className="h-7 px-2 sm:px-3 rounded-[2px] border border-slate-700/80 bg-[#181e26] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-slate-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              >
+                <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <span className="hidden sm:inline font-sans">搜索</span>
+              </button>
+              <button
+                onClick={() => {
+                  bringTutorialToFront();
+                  openTutorial();
+                }}
+                className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                title="打开新手引导教程"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
+                <span className="hidden sm:inline font-sans">引导</span>
+              </button>
+              <button
+                onClick={() => openTemp('settings')}
+                title="个人设置"
+                className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/70 bg-[#232a36]/80 text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
+              >
+                <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <span className="max-w-[72px] sm:max-w-[96px] truncate font-sans">{playerName}</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Player Metrics & Window Palette */}
-        <div className="flex items-center gap-2 sm:gap-3 text-[11px] mono shrink-0">
-          {/* Compact mobile summary so cash & tick stay visible below md */}
-          <div className="flex md:hidden items-center gap-2 text-[10px] text-slate-400">
-            <span className="whitespace-nowrap">
-              T<strong className="text-slate-100">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
-            </span>
-            <span className="whitespace-nowrap">
-              <strong className="text-emerald-400">
-                {cash.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </strong>
-            </span>
+        {isPortrait && (
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 pt-1 border-t border-slate-800/80 text-[11px] mono text-slate-400">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+              <span className="whitespace-nowrap">
+                回合 <strong className="text-slate-100 tabular-nums">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
+              </span>
+              <span className="whitespace-nowrap">
+                物价指数 <strong className="text-sky-400 tabular-nums">{(state?.cpi ?? 1).toFixed(3)}</strong>
+              </span>
+              <span className="whitespace-nowrap">
+                现金 <strong className="text-emerald-400 tabular-nums">{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+              </span>
+            </div>
             <span
-              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                paused
-                  ? 'bg-amber-400'
-                  : wsStatus === 'connected'
-                    ? 'bg-emerald-400'
-                    : 'bg-amber-400 animate-pulse'
-              }`}
-            />
-          </div>
-          <div className="hidden md:flex items-center gap-3 text-slate-400">
-            <span className="whitespace-nowrap">
-              回合 <strong className="text-slate-100">{String(state?.tick ?? 0).padStart(4, '0')}</strong>
-            </span>
-            <span className="whitespace-nowrap">
-              物价指数 <strong className="text-sky-400">{(state?.cpi ?? 1).toFixed(3)}</strong>
-            </span>
-            <span className="whitespace-nowrap">
-              现金 <strong className="text-emerald-400">{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
-            </span>
-            <span
-              className="flex items-center gap-1 text-[10px] whitespace-nowrap text-slate-400"
+              className="flex items-center gap-1 text-[10px] whitespace-nowrap text-slate-400 shrink-0"
               title={
                 paused
                   ? '仿真已暂停'
@@ -742,69 +807,10 @@ export const DesktopShell: React.FC = () => {
                       : 'bg-amber-400 animate-pulse'
                 }`}
               />
-              {paused ? <span className="text-amber-300">已暂停</span> : null}
+              <span>{paused ? '已暂停' : wsStatus === 'connected' ? '同步中' : '重连中'}</span>
             </span>
           </div>
-
-          <div className="flex items-center gap-1.5 sm:gap-2 pl-2 sm:pl-2.5 border-l border-slate-700/60">
-            <button
-              onClick={() => {
-                setPresetMenuOpen((v) => !v);
-                setWindowListOpen(false);
-              }}
-              className={`h-7 px-2 rounded-[2px] border text-[11px] inline-flex items-center gap-1 whitespace-nowrap transition-colors ${
-                presetMenuOpen
-                  ? 'border-sky-400 bg-sky-500/15 text-sky-100'
-                  : 'border-slate-700/80 bg-[#232a36] text-slate-300 hover:border-sky-400/50 hover:text-sky-100'
-              }`}
-              title="切换或保存多设备窗口预设"
-            >
-              <Monitor className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
-              <span className="max-w-[72px] truncate font-sans">{activePreset?.name ?? '预设'}</span>
-              <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
-            </button>
-            {floatingWindows.length > 0 && (
-              <button
-                onClick={() => {
-                  setWindowListOpen((v) => !v);
-                  setPresetMenuOpen(false);
-                }}
-                className="h-7 px-2 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1 whitespace-nowrap transition-colors"
-                title="列出/切换已打开的临时窗口"
-              >
-                <span>悬浮窗</span>
-                <span className="text-sky-300">{floatingWindows.length}</span>
-              </button>
-            )}
-            <button
-              onClick={() => setPaletteOpen(true)}
-              title="全局搜索 (Ctrl / ⌘ + K)"
-              className="h-7 px-2 sm:px-3 rounded-[2px] border border-slate-700/80 bg-[#181e26] text-[11px] text-slate-300 hover:border-sky-400/50 hover:text-slate-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
-            >
-              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span className="hidden sm:inline font-sans">搜索</span>
-            </button>
-            <button
-              onClick={() => {
-                bringTutorialToFront();
-                openTutorial();
-              }}
-              className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/80 bg-[#232a36] text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
-              title="打开新手引导教程"
-            >
-              <HelpCircle className="w-3.5 h-3.5 text-sky-400/85 shrink-0" />
-              <span className="hidden sm:inline font-sans">引导</span>
-            </button>
-            <button
-              onClick={() => openTemp('settings')}
-              title="个人设置"
-              className="h-7 px-2 sm:px-2.5 rounded-[2px] border border-slate-700/70 bg-[#232a36]/80 text-[11px] text-slate-200 hover:border-sky-400/50 hover:text-sky-100 inline-flex items-center gap-1.5 whitespace-nowrap transition-colors"
-            >
-              <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span className="max-w-[72px] sm:max-w-[96px] truncate font-sans">{playerName}</span>
-            </button>
-          </div>
-        </div>
+        )}
       </header>
 
       {lastError && (

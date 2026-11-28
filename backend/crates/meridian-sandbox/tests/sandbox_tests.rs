@@ -609,3 +609,71 @@ fn test_v2_sites_shadow_checks_last_tick_and_console_eval() {
     assert!(eval_empty_ship.result_json.contains("\"value\":0"), "got {}", eval_empty_ship.result_json);
     assert_eq!(eval_empty_ship.intents.len(), 1);
 }
+
+#[test]
+fn test_cpu_bucket_burst_cap_and_refill() {
+    let catalog = load_catalog();
+    let mut world = World::new_standard(catalog);
+    world
+        .spawn_company("p_bucket", "Bucket Corp", true, "mining_ind", "P1", 5_000.0)
+        .unwrap();
+
+    let mut runner = SimulationRunner::new(PlayerRunConfig {
+        cpu_limit_ms: 8,
+        ..Default::default()
+    });
+    assert_eq!(runner.config.cpu_bucket_limit_ms(), 40.0);
+
+    // Burst past 8ms base limit (~18ms) should succeed inside the 5x (40ms) bucket and drain it.
+    runner.set_player_script(
+        "p_bucket",
+        PlayerScriptBundle::single_main(
+            r#"
+            module.exports.loop = function () {
+              Memory.limit = Game.cpu.limit;
+              Memory.bucketStart = Game.cpu.bucket;
+              Memory.bucketLimit = Game.cpu.bucketLimit;
+              Memory.tickLimit = Game.cpu.tickLimit;
+              while (Game.cpu.getUsed() < 18) {}
+            };
+        "#,
+        ),
+    );
+    runner.step_world(&mut world);
+    let out_burst = &runner.last_player_outputs["p_bucket"];
+    assert!(out_burst.error.is_none(), "burst should not time out: {:?}", out_burst.error);
+    assert!(!out_burst.timed_out);
+    assert!(out_burst.cpu_used_ms >= 17.5, "used={}", out_burst.cpu_used_ms);
+    let m: serde_json::Value = serde_json::from_str(&out_burst.memory_json).unwrap();
+    assert_eq!(m["limit"], 8);
+    assert_eq!(m["bucketStart"], 40.0);
+    assert_eq!(m["bucketLimit"], 40.0);
+    assert_eq!(m["tickLimit"], 40.0);
+    assert!(
+        out_burst.cpu_bucket_ms < 32.0,
+        "expected bucket drain after ~18ms vs 8ms base, got {}",
+        out_burst.cpu_bucket_ms
+    );
+
+    // Subsequent lightweight ticks refill the bucket, capped at 5x base limit (40ms).
+    let bucket_after_burst = out_burst.cpu_bucket_ms;
+    runner.set_player_script(
+        "p_bucket",
+        PlayerScriptBundle::single_main("module.exports.loop = function () {};"),
+    );
+    for _ in 0..5 {
+        runner.step_world(&mut world);
+    }
+    let out_refill = &runner.last_player_outputs["p_bucket"];
+    assert!(
+        out_refill.cpu_bucket_ms > bucket_after_burst,
+        "expected bucket refill from {} to increase, got {}",
+        bucket_after_burst,
+        out_refill.cpu_bucket_ms
+    );
+    assert!(
+        out_refill.cpu_bucket_ms <= 40.0,
+        "bucket must never exceed 5x limit (40.0), got {}",
+        out_refill.cpu_bucket_ms
+    );
+}

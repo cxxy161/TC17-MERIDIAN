@@ -183,6 +183,9 @@ struct BootPayload<'a> {
     tick: u64,
     cpi: f64,
     cpu_limit_ms: u64,
+    cpu_tick_limit_ms: f64,
+    cpu_bucket_ms: f64,
+    cpu_bucket_limit_ms: f64,
     resources: Vec<&'a str>,
     company: BootCompany<'a>,
     systems: Vec<BootSystem<'a>>,
@@ -637,6 +640,7 @@ impl PlayerVmHandle {
         catalog: Arc<ProductionCatalog>,
         bundle: Arc<PlayerScriptBundle>,
         config: &PlayerRunConfig,
+        cpu_bucket_ms: f64,
         last_tick: Option<&LastTickFeedback>,
     ) -> Result<(), String> {
         self.rt.set_memory_limit(config.memory_limit_bytes);
@@ -661,7 +665,7 @@ impl PlayerVmHandle {
 
         let empty_feedback = LastTickFeedback::default();
         let feedback = last_tick.unwrap_or(&empty_feedback);
-        let boot_json = build_boot_json(&snapshot, &catalog, config, feedback);
+        let boot_json = build_boot_json(&snapshot, &catalog, config, cpu_bucket_ms, feedback);
 
         let mut err_out = None;
         self.ctx.with(|ctx| {
@@ -708,6 +712,7 @@ impl PlayerVmHandle {
             bundle,
             previous_memory_json,
             config,
+            config.cpu_bucket_limit_ms(),
             None,
         )
     }
@@ -719,15 +724,27 @@ impl PlayerVmHandle {
         bundle: Arc<PlayerScriptBundle>,
         previous_memory_json: &str,
         config: &PlayerRunConfig,
+        cpu_bucket_ms: f64,
         last_tick: Option<&LastTickFeedback>,
     ) -> (PlayerRunOutput, bool) {
-        if let Err(err) =
-            self.refresh_tick_state(snapshot, catalog, bundle, config, last_tick)
-        {
+        let base_ms = config.cpu_limit_ms.max(1) as f64;
+        let bucket_cap = config.cpu_bucket_limit_ms();
+        let bucket_before = cpu_bucket_ms.clamp(0.0, bucket_cap);
+        let tick_budget_ms = (base_ms + bucket_before).min(bucket_cap);
+
+        if let Err(err) = self.refresh_tick_state(
+            snapshot,
+            catalog,
+            bundle,
+            config,
+            bucket_before,
+            last_tick,
+        ) {
             let oom = err.to_ascii_lowercase().contains("out of memory");
             return (
                 PlayerRunOutput {
                     memory_json: previous_memory_json.to_string(),
+                    cpu_bucket_ms: bucket_before,
                     error: Some(err),
                     oom,
                     ..Default::default()
@@ -744,7 +761,7 @@ impl PlayerVmHandle {
             let user_started = Instant::now();
             self.host.tick.lock().unwrap().user_started_at = user_started;
             self.timed_out_flag.store(false, Ordering::Release);
-            let limit_us = config.cpu_limit_ms.max(1).saturating_mul(1_000);
+            let limit_us = (tick_budget_ms * 1000.0).ceil().max(1.0) as u64;
             self.deadline_us
                 .store(now_us().saturating_add(limit_us), Ordering::Release);
 
@@ -781,8 +798,8 @@ impl PlayerVmHandle {
 
         if timed_out && run_error.is_none() {
             run_error = Some(format!(
-                "Script execution timed out after {:.2}ms (limit: {}ms)",
-                cpu_used_ms, config.cpu_limit_ms
+                "Script execution timed out after {:.2}ms (budget: {:.2}ms, base limit: {}ms)",
+                cpu_used_ms, tick_budget_ms, config.cpu_limit_ms
             ));
         }
 
@@ -795,12 +812,14 @@ impl PlayerVmHandle {
         } else {
             std::mem::take(&mut guard.intents)
         };
+        let cpu_bucket_after = (bucket_before + (base_ms - cpu_used_ms)).clamp(0.0, bucket_cap);
 
         let out = PlayerRunOutput {
             intents,
             memory_json: next_memory_json,
             logs,
             cpu_used_ms,
+            cpu_bucket_ms: cpu_bucket_after,
             error: run_error,
             timed_out,
             oom,
@@ -817,12 +836,18 @@ impl PlayerVmHandle {
         bundle: Arc<PlayerScriptBundle>,
         previous_memory_json: &str,
         config: &PlayerRunConfig,
+        cpu_bucket_ms: f64,
         last_tick: Option<&LastTickFeedback>,
         code: &str,
     ) -> (ConsoleEvalOutput, bool) {
-        if let Err(err) =
-            self.refresh_tick_state(snapshot, catalog, bundle, config, last_tick)
-        {
+        if let Err(err) = self.refresh_tick_state(
+            snapshot,
+            catalog,
+            bundle,
+            config,
+            cpu_bucket_ms,
+            last_tick,
+        ) {
             let oom = err.to_ascii_lowercase().contains("out of memory");
             return (
                 ConsoleEvalOutput {
@@ -2189,6 +2214,7 @@ fn build_boot_json(
     snap: &WorldSnapshot,
     catalog: &ProductionCatalog,
     config: &PlayerRunConfig,
+    cpu_bucket_ms: f64,
     last_tick: &LastTickFeedback,
 ) -> String {
     let mut resources: Vec<&str> = catalog.items.keys().map(|s| s.as_str()).collect();
@@ -2340,10 +2366,18 @@ fn build_boot_json(
         .map(to_js_order)
         .collect();
 
+    let cpu_bucket_limit_ms = config.cpu_bucket_limit_ms();
+    let clamped_bucket = cpu_bucket_ms.clamp(0.0, cpu_bucket_limit_ms);
+    let base_limit = config.cpu_limit_ms.max(1) as f64;
+    let cpu_tick_limit_ms = (base_limit + clamped_bucket).min(cpu_bucket_limit_ms);
+
     let payload = BootPayload {
         tick: snap.tick,
         cpi: snap.cpi,
         cpu_limit_ms: config.cpu_limit_ms,
+        cpu_tick_limit_ms,
+        cpu_bucket_ms: clamped_bucket,
+        cpu_bucket_limit_ms,
         resources,
         company: BootCompany {
             id: &snap.company.id,

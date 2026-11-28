@@ -285,14 +285,20 @@ export const ConsolePanel: React.FC<PaneProps> = () => {
   };
 
   const cpuLimit = scripts?.cpu_limit_ms ?? 10;
+  const cpuBucketLimit = scripts?.cpu_bucket_limit_ms ?? cpuLimit * 5;
+  const cpuBucket = lastOut?.cpu_bucket_ms ?? scripts?.cpu_bucket_ms ?? cpuBucketLimit;
 
   return (
     <div className="h-full flex flex-col bg-[#191f27] text-slate-200 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-sky-500/15 bg-[#232a36] flex items-center justify-between text-[11px] shrink-0">
         <span className="font-medium">F12 真沙盒控制台</span>
         <div className="flex items-center gap-3">
-          <span className="mono text-[10px] text-emerald-400">
-            沙盒耗时 {(lastOut?.cpu_used_ms ?? 0).toFixed(2)} / {cpuLimit.toFixed(2)} ms
+          <span
+            className="mono text-[10px] text-emerald-400"
+            title="每回合基础配额与可透支 CPU 缓存桶（上限为每 tick 配额的 5 倍）"
+          >
+            沙盒耗时 {(lastOut?.cpu_used_ms ?? 0).toFixed(2)} / {cpuLimit.toFixed(2)} ms · 缓存{' '}
+            {cpuBucket.toFixed(1)}/{cpuBucketLimit.toFixed(0)} ms
           </span>
           <button onClick={clearConsole} className="pill-btn py-0 text-[10px]">
             清空

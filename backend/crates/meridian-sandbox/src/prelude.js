@@ -600,6 +600,9 @@
       cpi: boot.cpi,
       cpu: Object.freeze({
         limit: boot.cpuLimitMs,
+        tickLimit: boot.cpuTickLimitMs,
+        bucket: boot.cpuBucketMs,
+        bucketLimit: boot.cpuBucketLimitMs,
         getUsed() {
           return global.__meridian_cpu_used();
         },

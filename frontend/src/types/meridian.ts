@@ -358,6 +358,7 @@ export interface PlayerRunOutput {
   memory_json: string;
   logs: ConsoleEntry[];
   cpu_used_ms: number;
+  cpu_bucket_ms?: number;
   error: string | null;
   timed_out: boolean;
   oom: boolean;
@@ -478,6 +479,8 @@ export interface ScriptsResp {
   company_id: string;
   enabled: boolean;
   cpu_limit_ms?: number;
+  cpu_bucket_ms?: number;
+  cpu_bucket_limit_ms?: number;
   modules: Record<string, string>;
   memory_json: string;
   last_output: PlayerRunOutput | null;
@@ -492,6 +495,8 @@ export interface ConsoleEvalResp {
   intents_queued: number;
   cpu_used_ms: number;
   cpu_limit_ms: number;
+  cpu_bucket_ms?: number;
+  cpu_bucket_limit_ms?: number;
   error: string | null;
   timed_out: boolean;
   oom: boolean;
