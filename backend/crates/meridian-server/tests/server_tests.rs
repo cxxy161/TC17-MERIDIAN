@@ -104,7 +104,7 @@ async fn test_server_http_endpoints_hot_reload_and_sqlite_persistence() {
         )
         .await;
         assert_eq!(st, StatusCode::OK);
-        assert_eq!(cat["items"].as_array().unwrap().len(), 16);
+        assert_eq!(cat["items"].as_array().unwrap().len(), 18);
 
         // 2. Fetch /api/state to inspect procedural 3..=9 planets, single S1 system, and player1 home planet
         let (st, init_state) = read_json(

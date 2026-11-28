@@ -425,6 +425,8 @@ const RESOURCE_BUILDING_MAT: 'building_mat' = 'building_mat';
           ['`cast_building_mat`', '`infra_factory`（4t / 3电 / 8.0）', '5 `ore` + 3 `steel` → 8 `building_mat`'],
           ['`craft_daily_goods`', '`infra_factory`（4t / 3电 / 10.0）', '3 `steel` + 2 `bio_fiber` → 6 `daily_goods`'],
           ['`build_ship_small`', '`shipyard`（10t / 12电 / 30.0）', '12 `steel` + 8 `building_mat` + 6 `daily_goods` → 1 `ship_small`'],
+          ['`build_ship_medium`', '`shipyard`（18t / 24电 / 65.0）', '36 `steel` + 22 `building_mat` + 18 `daily_goods` → 1 `ship_medium`'],
+          ['`build_ship_large`', '`shipyard`（28t / 42电 / 140.0）', '100 `steel` + 60 `building_mat` + 50 `daily_goods` → 1 `ship_large`'],
         ],
       },
       {

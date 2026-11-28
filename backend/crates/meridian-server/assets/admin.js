@@ -9,10 +9,49 @@ let detailTab = 'overview';
 let rawJsonOpen = false;
 let confirmingReset = false;
 let uiFrozen = false;
+let isPointerDown = false;
+
+window.addEventListener('pointerdown', () => { isPointerDown = true; }, true);
+window.addEventListener('pointerup', () => { isPointerDown = false; }, true);
+window.addEventListener('pointercancel', () => { isPointerDown = false; }, true);
+window.addEventListener('blur', () => { isPointerDown = false; });
 
 function hasTextSelection() {
   const sel = window.getSelection();
   return !!sel && !sel.isCollapsed && String(sel).trim().length > 0;
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.top = '-9999px';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (_) {}
+  document.body.removeChild(ta);
+  return ok;
+}
+
+function copyText(text, btn, resetLabel) {
+  const done = () => {
+    if (!btn) return;
+    const prev = resetLabel || btn.textContent;
+    btn.textContent = '已复制';
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(() => {
+      if (fallbackCopy(text)) done();
+    });
+  } else if (fallbackCopy(text)) {
+    done();
+  }
 }
 
 function captureScrolls() {
@@ -55,6 +94,7 @@ function appendSysLog(tick, level, message) {
 }
 
 function renderSysLogs() {
+  if (uiFrozen || isPointerDown || hasTextSelection()) return;
   const box = document.getElementById('sysLogList');
   const cnt = document.getElementById('sysLogCount');
   cnt.textContent = `${sysLogs.length} 条`;
@@ -326,22 +366,19 @@ function renderAll() {
   document.getElementById('kWs').textContent = `${rt.ws_total || 0}`;
   document.getElementById('kRtt').textContent = `${lastRttMs.toFixed(0)}ms`;
 
-  if (uiFrozen) return;
+  if (uiFrozen || isPointerDown || hasTextSelection()) return;
   const savedScrolls = captureScrolls();
-  const selecting = hasTextSelection();
 
   renderRuntime();
   renderEconCharts();
-  if (!selecting) {
-    renderAccounts();
-    renderPlanetFilters();
-    renderPlanets();
-    renderCompanies();
-    renderMatrix();
-    renderFlights();
-    renderTrades();
-    renderDetail();
-  }
+  renderAccounts();
+  renderPlanetFilters();
+  renderPlanets();
+  renderCompanies();
+  renderMatrix();
+  renderFlights();
+  renderTrades();
+  renderDetail(false);
   restoreScrolls(savedScrolls);
 }
 
@@ -608,7 +645,7 @@ async function inspectPlayerSandbox(cid) {
     }
     selectedSandbox = await res.json();
     selectedCompId = cid;
-    renderDetail();
+    renderDetail(true);
   } catch (_) {}
 }
 
@@ -899,13 +936,9 @@ function renderCompanies() {
       selectedCompId = tr.dataset.cid;
       selectedSandbox = null;
       renderCompanies();
-      renderDetail();
+      renderDetail(true);
     };
   });
-
-  if (selectedCompId) {
-    renderDetail();
-  }
 }
 
 function renderInvSection(title, mapObj) {
@@ -923,10 +956,16 @@ function renderInvSection(title, mapObj) {
   }).join('');
 }
 
-function renderDetail() {
+function renderDetail(force = false) {
   const titleEl = document.getElementById('detailTitle');
   const subEl = document.getElementById('detailSub');
   const box = document.getElementById('detailBox');
+
+  if (!force) {
+    if (isPointerDown || hasTextSelection()) return;
+    if (box && box.matches(':hover')) return;
+    if (selectedSandbox || rawJsonOpen) return;
+  }
 
   if (selectedSandbox && selectedSandbox.company_id === selectedCompId) {
     const sb = selectedSandbox;
@@ -934,20 +973,28 @@ function renderDetail() {
     const logsHtml = (out.logs || []).slice(-60).map((l) =>
       `<div class="mono" style="font-size:10.5px;padding:1px 0;border-bottom:1px dashed rgba(148,163,184,0.08);">[${esc(l.level)}] ${esc(l.message)}</div>`
     ).join('') || '<span class="muted">最近一次运行无控制台日志</span>';
-    titleEl.textContent = `沙盒实时快照 · ${sb.company_id}`;
-    subEl.innerHTML = `<button class="xs" data-action="clear-sandbox">返回企业体检</button>`;
+    titleEl.textContent = `沙盒实时快照 · ${sb.company_id}（已锁定防刷新，点刷新更新）`;
+    subEl.innerHTML =
+      `<button class="xs" data-action="inspect-sandbox" data-company-id="${esc(sb.company_id)}">刷新快照</button> ` +
+      `<button class="xs" data-action="copy-sandbox-all">复制全部快照</button> ` +
+      `<button class="xs" data-action="copy-sandbox-memory">复制Memory</button> ` +
+      `<button class="xs" data-action="copy-sandbox-modules">复制源码</button> ` +
+      `<button class="xs" data-action="clear-sandbox">返回企业体检</button>`;
     box.innerHTML = `
       <div class="kpi-grid">
         <div class="kpi-box"><div class="kpi-label">脚本状态 / CPU</div><div class="kpi-val">${sb.enabled ? '<span class="green">运行中</span>' : '<span class="red">已停用</span>'} · ${Number(out.cpu_used_ms || 0).toFixed(2)} ms</div></div>
         <div class="kpi-box"><div class="kpi-label">Memory 占用</div><div class="kpi-val">${fmtBytes(sb.memory_bytes)} / ${fmtBytes(sb.memory_limit_bytes)}</div></div>
       </div>
       ${out.error ? `<div class="tag off mono" style="display:block;padding:4px 6px;margin-bottom:8px;">最近异常: ${esc(out.error)}</div>` : ''}
-      <div class="muted" style="margin:6px 0 3px;">最近控制台日志（最多 60 条）：</div>
+      <div class="muted" style="margin:6px 0 3px;display:flex;justify-content:space-between;align-items:center;">
+        <span>最近控制台日志（最多 60 条）：</span>
+        <button class="xs" data-action="copy-sandbox-logs">复制日志</button>
+      </div>
       <div style="background:#12171f; padding:6px; border-radius:2px; margin-bottom:8px; max-height:170px; overflow:auto;">${logsHtml}</div>
       <div class="muted" style="margin:6px 0 3px;">Memory JSON：</div>
-      <pre style="margin-bottom:8px;background:#12171f;padding:6px;border-radius:2px;">${esc(sb.memory_json)}</pre>
+      <pre style="margin-bottom:8px;background:#12171f;padding:6px;border-radius:2px;max-height:220px;overflow:auto;">${esc(sb.memory_json)}</pre>
       <details class="raw-json"${rawJsonOpen ? ' open' : ''}>
-        <summary>展开脚本模块源码（${Object.keys(sb.modules || {}).length} 个文件）</summary>
+        <summary>展开脚本模块源码（${Object.keys(sb.modules || {}).length} 个文件，展开时暂停刷新）</summary>
         <pre>${esc(JSON.stringify(sb.modules, null, 2))}</pre>
       </details>
     `;
@@ -1314,19 +1361,20 @@ document.addEventListener('click', (e) => {
   } else if (action === 'inspect-sandbox') {
     inspectPlayerSandbox(btn.dataset.companyId);
   } else if (action === 'copy-comp-id') {
-    navigator.clipboard?.writeText(btn.dataset.companyId || '').then(() => {
-      btn.textContent = '已复制';
-      setTimeout(() => { btn.textContent = '复制ID'; }, 1200);
-    }).catch(() => {});
+    copyText(btn.dataset.companyId || '', btn, '复制ID');
   } else if (action === 'copy-comp-json') {
     const cid = btn.dataset.companyId;
     const comp = (overview?.companies || []).find((c) => c.id === cid);
-    if (comp) {
-      navigator.clipboard?.writeText(JSON.stringify(comp, null, 2)).then(() => {
-        btn.textContent = '已复制';
-        setTimeout(() => { btn.textContent = '复制JSON'; }, 1200);
-      }).catch(() => {});
-    }
+    if (comp) copyText(JSON.stringify(comp, null, 2), btn, '复制JSON');
+  } else if (action === 'copy-sandbox-all') {
+    if (selectedSandbox) copyText(JSON.stringify(selectedSandbox, null, 2), btn, '复制全部快照');
+  } else if (action === 'copy-sandbox-memory') {
+    if (selectedSandbox) copyText(String(selectedSandbox.memory_json || '{}'), btn, '复制Memory');
+  } else if (action === 'copy-sandbox-modules') {
+    if (selectedSandbox) copyText(JSON.stringify(selectedSandbox.modules || {}, null, 2), btn, '复制源码');
+  } else if (action === 'copy-sandbox-logs') {
+    const logs = (selectedSandbox?.last_output?.logs || []).map((l) => `[${l.level}] ${l.message}`).join('\n');
+    copyText(logs, btn, '复制日志');
   } else if (action === 'reset-password') {
     resetUserPassword(Number(btn.dataset.userId), btn.dataset.email || '');
   } else if (action === 'kick-user') {
@@ -1335,9 +1383,9 @@ document.addEventListener('click', (e) => {
     setUserStatus(Number(btn.dataset.userId), btn.dataset.status || 'disabled', btn.dataset.nickname || '');
   } else if (action === 'clear-sandbox') {
     selectedSandbox = null;
-    renderDetail();
+    renderDetail(true);
   } else if (action === 'detail-tab') {
     detailTab = btn.dataset.tab || 'overview';
-    renderDetail();
+    renderDetail(true);
   }
 });
