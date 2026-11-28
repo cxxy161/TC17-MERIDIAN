@@ -381,6 +381,15 @@ impl Planet {
         self.recompute_unclaimed_count();
     }
 
+    /// Release a foreclosed/abandoned surface tile completely back into the unclaimed pool.
+    pub fn release_tile(&mut self, slot_id: SlotId) {
+        if let Some(tile) = self.surface_tiles.iter_mut().find(|t| t.slot_id == slot_id) {
+            tile.owner_id = None;
+            tile.plot_id = None;
+        }
+        self.recompute_unclaimed_count();
+    }
+
     /// Claim either an explicit `slot_id` or (for internal/NPC spawns) the best matching unclaimed tile.
     pub fn claim_surface_tile(
         &mut self,

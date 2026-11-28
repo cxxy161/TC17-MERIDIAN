@@ -588,15 +588,26 @@ impl World {
         x
     }
 
-    /// Count how many developable plots on `planet_id` are currently owned by NPCs.
+    /// Count how many developable plots on `planet_id` are currently held by NPCs or BANK foreclosures.
     pub fn npc_plot_count_on(&self, planet_id: &str) -> u32 {
+        let bank_plot_ids: std::collections::HashSet<PlotId> = self
+            .planets
+            .get(planet_id)
+            .map(|p| {
+                p.land_listings
+                    .iter()
+                    .filter(|l| l.seller_id == "BANK")
+                    .map(|l| l.plot_id)
+                    .collect()
+            })
+            .unwrap_or_default();
         self.plots
             .values()
             .filter(|pl| {
                 pl.planet_id == planet_id
-                    && pl.owner_id.as_deref().is_some_and(|oid| {
+                    && (pl.owner_id.as_deref().is_some_and(|oid| {
                         self.companies.get(oid).is_some_and(|c| !c.is_player)
-                    })
+                    }) || (pl.owner_id.is_none() && bank_plot_ids.contains(&pl.id)))
             })
             .count() as u32
     }
@@ -632,9 +643,6 @@ impl World {
         if !self.planets.contains_key(home_planet_id) {
             return Err(format!("Unknown planet '{home_planet_id}'"));
         }
-        if !is_player && self.npc_plot_count_on(home_planet_id) >= self.npc_plot_cap_on(home_planet_id) {
-            return Err(format!("NPC 90% plot cap reached on '{home_planet_id}'"));
-        }
 
         // Reuse cheapest BANK-foreclosed secondhand plot first for NPCs so bankruptcies recycle land.
         let bank_listing_idx = if !is_player {
@@ -648,6 +656,16 @@ impl World {
         } else {
             None
         };
+
+        if !is_player && bank_listing_idx.is_none() {
+            let planet = &self.planets[home_planet_id];
+            let reserved_player_plots = (planet.total_developable_plots / 10).max(1);
+            if self.npc_plot_count_on(home_planet_id) >= self.npc_plot_cap_on(home_planet_id)
+                || planet.unclaimed_plots_remaining <= reserved_player_plots
+            {
+                return Err(format!("NPC 90% plot cap reached on '{home_planet_id}'"));
+            }
+        }
 
         let (plot_id, mut plot) = if let Some(idx) = bank_listing_idx {
             let lst = self
@@ -1198,6 +1216,10 @@ impl World {
         }
         self.accrue_bank_interest();
         let bankruptcies = self.process_npc_bankruptcies(t);
+        if t % 24 == 0 {
+            self.process_bank_liquidations(t);
+            self.rebalance_bank_and_liquidity();
+        }
 
         TickReport {
             tick: t,
@@ -1548,26 +1570,15 @@ impl World {
     }
 
     fn place_planet_demands(&mut self, planet_id: &str, tick: u64) -> HashMap<ItemId, u32> {
-        let demands = {
-            let Some(p) = self.planets.get_mut(planet_id) else {
-                return HashMap::new();
-            };
-            if p.city_count == 0 || p.population <= 0.0 {
-                return HashMap::new();
-            }
-            // Restored steady civic money faucet (#8 fix) scaled smoothly by CPI
-            let civic_cpi = self.cpi.clamp(0.5, 3.0);
-            let civic_mint = to_money(p.population * p.civic_output_per_capita * p.prosperity * civic_cpi);
-            p.treasury += civic_mint;
-            self.ledger.record_mint(civic_mint);
-            p.last_bought = std::mem::take(&mut p.bought_this_tick);
-            p.compute_demands(&self.catalog)
-        };
-        if demands.is_empty() {
-            return demands;
+        let can_run = self
+            .planets
+            .get(planet_id)
+            .is_some_and(|p| p.city_count > 0 && p.population > 0.0);
+        if !can_run {
+            return HashMap::new();
         }
 
-        // Cancel previous PLANET:* buy orders on this station and refund their remaining escrow cleanly
+        // Refund previous PLANET:* buy orders on this station FIRST so treasury reflects true liquid cash
         let sid = format!("ST:{planet_id}");
         let planet_owner = format!("PLANET:{planet_id}");
         let prev_ids: Vec<OrderId> = self
@@ -1589,7 +1600,42 @@ impl World {
             }
         }
 
-        // Wallet-constrained budget allocation (NO hardcoded BASE_PRICES cap!)
+        // Reality-aligned monetary loop: cities normally run on wages, taxes, storage rent, and bank
+        // excess remittances rather than unconditional printing. Only drip an emergency subsistence
+        // backstop when BOTH local treasury is below operational floor AND global circulation isn't bloated.
+        let total_pop: f64 = self.planets.values().map(|pl| pl.population).sum();
+        let active_companies = self.companies.len() as f64;
+        let civic_cpi = self.cpi.clamp(0.5, 3.0);
+        let max_comfortable_money = to_money(
+            ((total_pop * 18.0 + active_companies * 12_000.0) * civic_cpi).max(300_000.0),
+        ) as i128;
+        let total_circ = self.total_currency_in_system();
+
+        let demands = {
+            let Some(p) = self.planets.get_mut(planet_id) else {
+                return HashMap::new();
+            };
+            let treasury_floor = to_money((p.population * 2.2 * civic_cpi).max(2_500.0 * civic_cpi));
+            if p.treasury < treasury_floor && total_circ < max_comfortable_money {
+                let normal_drip =
+                    to_money(p.population * p.civic_output_per_capita * p.prosperity * civic_cpi);
+                let gap_drip = ((treasury_floor - p.treasury) / 4).max(1);
+                let civic_mint = normal_drip.min(gap_drip).max(0);
+                if civic_mint > 0 {
+                    p.treasury += civic_mint;
+                    self.ledger.record_mint(civic_mint);
+                }
+            }
+            p.last_bought = std::mem::take(&mut p.bought_this_tick);
+            p.compute_demands(&self.catalog)
+        };
+        if demands.is_empty() {
+            return demands;
+        }
+
+        // Independent per-item budget allocation (Engel's Law): share weights use structural
+        // catalog baselines & necessity priorities rather than live runaway `ema_slow` prices,
+        // so one spiked good (e.g. disposal_cert) can NEVER starve food/water/oxygen/power.
         let budget = {
             let p = &self.planets[planet_id];
             (p.treasury * 18) / 100
@@ -1598,23 +1644,36 @@ impl World {
             return demands;
         }
 
+        let hab = self.planets[planet_id].habitability;
+        let env_mult = 1.0
+            + (1.0 - if hab > 0.0 { hab.clamp(0.05, 1.0) } else { 0.85 }).max(0.0) * 0.35;
+        let pop = self.planets[planet_id].population;
+
         let mut weights: HashMap<ItemId, f64> = HashMap::new();
         for (item, &qty) in &demands {
             let p = &self.planets[planet_id];
             let prev_q = *p.last_demands.get(item).unwrap_or(&qty);
             let prev_got = *p.last_bought.get(item).unwrap_or(&0);
             let prev_sat = (prev_got as f64 / prev_q.max(1) as f64).min(1.0);
-            let urgency = 1.0 + 1.5 * (1.0 - prev_sat);
-            let st = &self.stations[&sid];
-            let ref_m = st
-                .ema_slow
-                .get(item)
-                .copied()
-                .or_else(|| st.last_trade_price.get(item).copied())
-                .unwrap_or_else(|| to_money(self.catalog.items[item].ref_price));
+            let urgency = 1.0 + 0.35 * (1.0 - prev_sat);
+
+            let it_def = self.catalog.items.get(item);
+            let base_ref = it_def.map(|i| i.ref_price).unwrap_or(4.0).max(0.5) * self.cpi;
+            let priority = match it_def {
+                Some(it) if it.has_tag("basic_survival") || it.has_tag("power") => 2.5,
+                Some(it) if it.id == "disposal_cert" || it.has_tag("waste_service") => 0.70,
+                Some(it) if it.wealth_tier <= 1 => 1.0,
+                Some(_) => 0.85,
+                None => 1.0,
+            };
+            let normal_q = it_def
+                .map(|i| ((pop / 1000.0) * i.base_demand_per_1k * env_mult).round().max(1.0))
+                .unwrap_or(qty as f64);
+            let share_qty = (qty as f64).min(normal_q * 1.6);
+
             weights.insert(
                 item.clone(),
-                (qty as f64 * from_money(ref_m).max(0.05 * self.cpi) * urgency).max(0.05),
+                (share_qty * base_ref * priority * urgency).max(0.05),
             );
         }
         let total_w: f64 = weights.values().sum::<f64>().max(0.1);
@@ -1624,10 +1683,11 @@ impl World {
         for (item, &qty) in &demands {
             let share = weights[item] / total_w;
             let item_budget = ((budget as f64) * share) as Money;
-            let item_cap = item_budget / (qty.max(1) as Money);
-            if item_cap <= 0 {
+            if item_budget <= 0 {
                 continue;
             }
+            let item_cap = item_budget / (qty.max(1) as Money);
+
             let st = &self.stations[&sid];
             let ba = st.best_ask(item);
             let last_p = *st
@@ -1643,20 +1703,49 @@ impl World {
                 .saturating_mul(108)
                 .saturating_div(100)
                 .max(to_money(0.05 * self.cpi));
-            let raw_bid = match ba {
-                Some(ask_p) => item_cap.min(ask_p.saturating_mul(103) / 100).min(ramp_cap),
-                None => item_cap
+            let band_cap = price_band_max(slow_p);
+
+            let (order_qty, raw_bid) = if let Some(ask_p) = ba {
+                let admissible_ask = ask_p.min(ramp_cap).min(band_cap);
+                if item_cap >= admissible_ask {
+                    (qty, ask_p.saturating_mul(103) / 100)
+                } else if item_budget >= admissible_ask && admissible_ask > 0 {
+                    // Within this item's isolated budget, buy as many units as affordable
+                    let afford_q = (item_budget / admissible_ask)
+                        .min(qty as Money)
+                        .clamp(0, u32::MAX as Money) as u32;
+                    if afford_q == 0 {
+                        continue;
+                    }
+                    (afford_q, admissible_ask)
+                } else {
+                    if item_cap <= 0 {
+                        continue;
+                    }
+                    (qty, item_cap)
+                }
+            } else {
+                if item_cap <= 0 {
+                    continue;
+                }
+                let b = item_cap
                     .min(last_p.saturating_mul(6))
                     .min((last_p.saturating_mul(108) / 100).max(prev_bid.saturating_mul(102) / 100))
-                    .min(ramp_cap),
+                    .min(ramp_cap);
+                (qty, b)
             };
-            // Keep planet bids inside the same admissible band the matcher enforces.
-            let band_cap = price_band_max(slow_p);
-            let clean_bid = raw_bid.max(to_money(0.02 * self.cpi)).min(band_cap);
+
+            let clean_bid = raw_bid
+                .min(ramp_cap)
+                .min(band_cap)
+                .max(to_money(0.02 * self.cpi));
             // Checked qty*price: never let planet escrow wrap into a negative/free treasury.
-            let Some(needed_escrow) = checked_notional(qty, clean_bid) else {
+            let Some(needed_escrow) = checked_notional(order_qty, clean_bid) else {
                 continue;
             };
+            if needed_escrow > item_budget {
+                continue;
+            }
             let Some(new_spent) = spent_escrow.checked_add(needed_escrow) else {
                 continue;
             };
@@ -1681,8 +1770,8 @@ impl World {
                 side: OrderSide::Buy,
                 station_id: sid.clone(),
                 item_id: item.clone(),
-                qty,
-                total_qty: qty,
+                qty: order_qty,
+                total_qty: order_qty,
                 price: clean_bid,
                 escrow_cash: needed_escrow,
                 created_tick: tick,
@@ -2123,10 +2212,25 @@ impl World {
                 if self.companies[company_id].is_debt_overdue(tick) {
                     return Err((ERR_NOT_ENOUGH_CREDITS, "loan overdue blocks land purchase"));
                 }
-                if !self.companies[company_id].is_player
-                    && self.npc_plot_count_on(&planet_id) >= self.npc_plot_cap_on(&planet_id)
-                {
-                    return Err((ERR_FULL, "NPC planet plot cap reached"));
+                if !self.companies[company_id].is_player {
+                    let buying_bank_listing = listing_id.is_some_and(|lid| {
+                        self.planets[&planet_id]
+                            .land_listings
+                            .iter()
+                            .any(|l| l.listing_id == lid && l.seller_id == "BANK")
+                    });
+                    if !buying_bank_listing {
+                        let reserved_player_plots =
+                            (self.planets[&planet_id].total_developable_plots / 10).max(1);
+                        let cap_hit = self.npc_plot_count_on(&planet_id)
+                            >= self.npc_plot_cap_on(&planet_id);
+                        let virgin_reserve_hit = listing_id.is_none()
+                            && self.planets[&planet_id].unclaimed_plots_remaining
+                                <= reserved_player_plots;
+                        if cap_hit || virgin_reserve_hit {
+                            return Err((ERR_FULL, "NPC planet plot cap reached"));
+                        }
+                    }
                 }
                 if let Some(lid) = listing_id {
                     let pos = self.planets[&planet_id]
@@ -2787,6 +2891,221 @@ impl World {
             }
         }
         dead
+    }
+
+    /// Periodically markdown unsold BANK foreclosures & confiscated inventory; reclaim long-abandoned
+    /// foreclosed land back into the undeveloped land pool (demolishing ruined idle factories)
+    /// and write off persistently unsellable BANK liquidation asks.
+    fn process_bank_liquidations(&mut self, tick: u64) {
+        const LAND_MARKDOWN_INTERVAL: u64 = 120;
+        const LAND_RECLAIM_AGE: u64 = 1_440;
+        const GOOD_MARKDOWN_INTERVAL: u64 = 48;
+        const GOOD_EXPIRE_AGE: u64 = 720;
+
+        let pids: Vec<PlanetId> = self.planets.keys().cloned().collect();
+        for pid in pids {
+            let (land_base, reclaim_ids): (Money, Vec<PlotId>) = {
+                let Some(p) = self.planets.get_mut(&pid) else {
+                    continue;
+                };
+                let land_base = p.primary_land_price(self.cpi);
+                let floor_price = (land_base / 5).max(to_money(10.0 * self.cpi));
+                let mut reclaim = Vec::new();
+                p.land_listings.retain_mut(|lst| {
+                    if lst.seller_id != "BANK" {
+                        return true;
+                    }
+                    let age = tick.saturating_sub(lst.listed_tick);
+                    if age >= LAND_RECLAIM_AGE {
+                        reclaim.push(lst.plot_id);
+                        return false;
+                    }
+                    if age >= LAND_MARKDOWN_INTERVAL && tick % LAND_MARKDOWN_INTERVAL == 0 {
+                        lst.ask_price = (lst.ask_price.saturating_mul(85) / 100).max(floor_price);
+                    }
+                    true
+                });
+                (land_base, reclaim)
+            };
+            let _ = land_base;
+
+            for pl_id in reclaim_ids {
+                if let Some(pl) = self.plots.remove(&pl_id) {
+                    for old_bid in pl.building_ids {
+                        self.buildings.remove(&old_bid);
+                    }
+                    if let Some(p) = self.planets.get_mut(&pid) {
+                        p.release_tile(pl.slot_id);
+                    }
+                }
+            }
+        }
+
+        // Discount unsold BANK confiscated inventory asks over time; expire chronically unsellable dust.
+        if tick % GOOD_MARKDOWN_INTERVAL == 0 {
+            let floor_px = to_money(0.05 * self.cpi).max(1);
+            for st in self.stations.values_mut() {
+                for asks in st.asks.values_mut() {
+                    let mut dirty = false;
+                    asks.retain_mut(|o| {
+                        if o.owner_id != "BANK" {
+                            return true;
+                        }
+                        let age = tick.saturating_sub(o.created_tick);
+                        if age >= GOOD_EXPIRE_AGE {
+                            dirty = true;
+                            return false;
+                        }
+                        if age >= GOOD_MARKDOWN_INTERVAL {
+                            o.price = (o.price.saturating_mul(82) / 100).max(floor_px);
+                            dirty = true;
+                        }
+                        true
+                    });
+                    if dirty {
+                        asks.sort_by(|a, b| {
+                            a.price
+                                .cmp(&b.price)
+                                .then_with(|| a.created_tick.cmp(&b.created_tick))
+                                .then_with(|| a.order_id.cmp(&b.order_id))
+                        });
+                    }
+                }
+                st.asks.retain(|_, v| !v.is_empty());
+            }
+        }
+    }
+
+    /// Reality-aligned fiscal recycling & central-bank balance sheet contraction (runs daily / 24T):
+    /// 1) Light progressive multi-plot & excess idle-cash maintenance tax remitted to city treasuries
+    ///    (startups & companies under 40k * cpi with 1 plot pay 0, preventing dead cash hoarding);
+    /// 2) Remit excess bank reserves above safe deposit+lending cushions back to fiscally tight cities;
+    /// 3) Contract (burn via ledger) bloated reserves above 2x safe reserve so money never balloons infinitely.
+    fn rebalance_bank_and_liquidity(&mut self) {
+        let cpi_hold = self.cpi.clamp(0.25, 10.0);
+        let cash_floor = to_money(40_000.0 * cpi_hold);
+        let mut tax_remittances: Vec<(PlanetId, Money)> = Vec::new();
+
+        for comp in self.companies.values_mut() {
+            let cash_fee = if comp.cash > cash_floor {
+                bps_of(comp.cash - cash_floor, 15)
+            } else {
+                0
+            };
+            let extra_plots = comp.plots.len().saturating_sub(1) as f64;
+            let land_tax = if extra_plots > 0.0 {
+                to_money(extra_plots * 12.0 * cpi_hold)
+            } else {
+                0
+            };
+            let due = cash_fee.saturating_add(land_tax);
+            let paid = comp.cash.min(due);
+            if paid > 0 {
+                comp.cash -= paid;
+                tax_remittances.push((comp.home_planet_id.clone(), paid));
+            }
+        }
+
+        for (pid, amt) in tax_remittances {
+            let is_city = self
+                .planets
+                .get(&pid)
+                .is_some_and(|p| p.city_count > 0);
+            if is_city {
+                if let Some(p) = self.planets.get_mut(&pid) {
+                    credit_cash(&mut p.treasury, amt);
+                }
+            } else {
+                let local = (amt * 35) / 100;
+                let remit = amt - local;
+                if let Some(p) = self.planets.get_mut(&pid) {
+                    credit_cash(&mut p.treasury, local);
+                }
+                self.credit_habitable_cities(remit);
+            }
+        }
+
+        let bank_cpi = self.cpi.clamp(0.5, 4.0);
+        let pids: Vec<PlanetId> = self.planets.keys().cloned().collect();
+        for pid in pids {
+            let mut outpost_remit: Option<(String, Money)> = None;
+            {
+                let Some(p) = self.planets.get_mut(&pid) else {
+                    continue;
+                };
+                let op_cushion = if p.city_count > 0 {
+                    to_money((p.population * 6.0).max(40_000.0) * bank_cpi)
+                } else {
+                    to_money(25_000.0 * bank_cpi)
+                };
+                let safe_reserve = p.bank.total_deposits.saturating_add(op_cushion);
+
+                if p.bank.reserves > safe_reserve {
+                    let excess = p.bank.reserves - safe_reserve;
+                    if p.city_count > 0 {
+                        let treasury_target =
+                            to_money((p.population * 8.0).max(20_000.0) * bank_cpi);
+                        if p.treasury < treasury_target {
+                            let remit = (excess / 8).min(treasury_target - p.treasury);
+                            if remit > 0 {
+                                p.bank.reserves -= remit;
+                                credit_cash(&mut p.treasury, remit);
+                            }
+                        }
+                    } else {
+                        let cand = excess / 16;
+                        if cand > 0 {
+                            outpost_remit = Some((p.system_id.clone(), cand));
+                        }
+                    }
+                }
+            }
+
+            if let Some((sys_id, cand)) = outpost_remit {
+                let sys_shortfall: Money = self
+                    .planets
+                    .values()
+                    .filter(|pl| pl.system_id == sys_id && pl.city_count > 0 && pl.population > 0.0)
+                    .map(|pl| {
+                        let target = to_money((pl.population * 8.0).max(20_000.0) * bank_cpi);
+                        target.saturating_sub(pl.treasury)
+                    })
+                    .sum();
+                let remit = cand.min(sys_shortfall);
+                if remit > 0 {
+                    let debited = if let Some(p) = self.planets.get_mut(&pid) {
+                        if p.bank.reserves >= remit {
+                            p.bank.reserves -= remit;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if debited {
+                        self.credit_habitable_cities_for_system(Some(&sys_id), remit);
+                    }
+                }
+            }
+
+            if let Some(p) = self.planets.get_mut(&pid) {
+                let op_cushion = if p.city_count > 0 {
+                    to_money((p.population * 6.0).max(40_000.0) * bank_cpi)
+                } else {
+                    to_money(25_000.0 * bank_cpi)
+                };
+                let safe_reserve = p.bank.total_deposits.saturating_add(op_cushion);
+                let bloat_ceiling = safe_reserve.saturating_mul(2);
+                if p.bank.reserves > bloat_ceiling {
+                    let contract = (p.bank.reserves - bloat_ceiling) / 10;
+                    if contract > 0 {
+                        p.bank.reserves -= contract;
+                        self.ledger.record_burn(contract);
+                    }
+                }
+            }
+        }
     }
 
     /// Precompute immutable per-tick shared snapshot state once across all companies.
