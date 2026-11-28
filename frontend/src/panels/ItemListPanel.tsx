@@ -31,7 +31,7 @@ const ROW_HEIGHT = 26;
  * my holdings and my open orders attached. This is the "what do I have / what is it worth" screen
  * that previously did not exist at all (you had to open one location at a time).
  */
-export const ItemListPanel: React.FC<PaneProps> = ({ setParams, openInPlace, openTemp }) => {
+export const ItemListPanel: React.FC<PaneProps> = ({ setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
 
@@ -231,7 +231,7 @@ export const ItemListPanel: React.FC<PaneProps> = ({ setParams, openInPlace, ope
           const r = filtered[idx];
           return (
             <div
-              onClick={() => openInPlace('item', { itemId: r.id })}
+              onClick={() => openTemp('item', { itemId: r.id })}
               className="h-[26px] grid grid-cols-[1fr_52px_50px_50px_50px_44px_36px] gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40"
             >
               <span className="flex items-center gap-1 min-w-0">

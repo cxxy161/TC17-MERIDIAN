@@ -212,7 +212,7 @@ fn decode_candle_chunk(chunk_start: u64, payload: &[u8]) -> Result<Vec<CandleRow
 }
 
 use meridian_core::{from_money, TradeFill, World};
-use meridian_sandbox::{NpcGenome, PlayerScriptBundle};
+use meridian_sandbox::{NpcGenome, NpcMemory, PlayerScriptBundle};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -366,6 +366,12 @@ impl SqliteStore {
                 updated_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS npc_memories (
+                company_id TEXT PRIMARY KEY,
+                memory_json TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS candles (
                 station_id TEXT NOT NULL,
                 item_id TEXT NOT NULL,
@@ -503,6 +509,7 @@ impl SqliteStore {
                 r#"
                 DELETE FROM world_state;
                 DELETE FROM npc_genomes;
+                DELETE FROM npc_memories;
                 DELETE FROM candles;
                 DELETE FROM candle_chunks;
                 DELETE FROM trade_history;
@@ -647,6 +654,60 @@ impl SqliteStore {
             }
         }
         Ok(out)
+    }
+
+    pub fn load_all_npc_memories(&self) -> Result<HashMap<String, NpcMemory>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT company_id, memory_json FROM npc_memories")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(|e| e.to_string())?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (cid, json) = row.map_err(|e| e.to_string())?;
+            if let Ok(m) = serde_json::from_str::<NpcMemory>(&json) {
+                out.insert(cid, m);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn save_all_npc_memories(
+        &mut self,
+        memories: &HashMap<String, NpcMemory>,
+    ) -> Result<(), String> {
+        if memories.is_empty() {
+            return Ok(());
+        }
+        let now = unix_secs();
+        let mut pairs = Vec::with_capacity(memories.len());
+        for (cid, mem) in memories {
+            if let Ok(json) = serde_json::to_string(mem) {
+                pairs.push((cid.as_str(), json));
+            }
+        }
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare_cached(
+                    r#"
+                    INSERT INTO npc_memories (company_id, memory_json, updated_at)
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(company_id) DO UPDATE SET
+                        memory_json = excluded.memory_json,
+                        updated_at = excluded.updated_at
+                    "#,
+                )
+                .map_err(|e| e.to_string())?;
+            for (cid, json) in &pairs {
+                stmt.execute(params![cid, json, now])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     fn seed_chunk_if_needed(
@@ -1175,8 +1236,14 @@ impl SqliteStore {
             let mut del_stmt = tx
                 .prepare_cached("DELETE FROM npc_genomes WHERE company_id = ?1")
                 .map_err(|e| e.to_string())?;
+            let mut del_mem_stmt = tx
+                .prepare_cached("DELETE FROM npc_memories WHERE company_id = ?1")
+                .map_err(|e| e.to_string())?;
             for dead_cid in dead_npc_ids {
                 del_stmt
+                    .execute(params![dead_cid])
+                    .map_err(|e| e.to_string())?;
+                del_mem_stmt
                     .execute(params![dead_cid])
                     .map_err(|e| e.to_string())?;
             }

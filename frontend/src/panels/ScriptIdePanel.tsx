@@ -252,7 +252,17 @@ const SANDBOX_STD_SCOPE = {
 };
 const sandboxScopeCompletions = scopeCompletionSource(SANDBOX_STD_SCOPE);
 
+interface SavedEditorViewport {
+  scrollTop: number;
+  scrollLeft: number;
+  anchor: number;
+  head: number;
+}
+
+const savedEditorViewports = new Map<string, SavedEditorViewport>();
+
 export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
+  const companyId = useGameStore((s) => s.companyId);
   const scripts = useGameStore((s) => s.scripts);
   const catalog = useGameStore((s) => s.catalog);
   const draftModules = useGameStore((s) => s.draftModules);
@@ -367,9 +377,33 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
       };
     };
 
+    const viewportKey = `${companyId}::${activeMod}`;
+    const savedViewport = savedEditorViewports.get(viewportKey);
     const startDoc = draftModules[activeMod] ?? scripts?.modules[activeMod] ?? '';
+    const clampedAnchor = savedViewport ? Math.min(savedViewport.anchor, startDoc.length) : 0;
+    const clampedHead = savedViewport ? Math.min(savedViewport.head, startDoc.length) : clampedAnchor;
+    let restoringViewport = !!savedViewport;
+
+    const saveCurrentViewport = (targetView: EditorView, includeScroll: boolean) => {
+      const sel = targetView.state.selection.main;
+      const prev = savedEditorViewports.get(viewportKey);
+      savedEditorViewports.set(viewportKey, {
+        scrollTop:
+          includeScroll && targetView.scrollDOM.isConnected
+            ? targetView.scrollDOM.scrollTop
+            : (prev?.scrollTop ?? 0),
+        scrollLeft:
+          includeScroll && targetView.scrollDOM.isConnected
+            ? targetView.scrollDOM.scrollLeft
+            : (prev?.scrollLeft ?? 0),
+        anchor: sel.anchor,
+        head: sel.head,
+      });
+    };
+
     const state = EditorState.create({
       doc: startDoc,
+      selection: { anchor: clampedAnchor, head: clampedHead },
       extensions: [
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -416,6 +450,9 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
             const code = upd.state.doc.toString();
             lastLocalDocRef.current = { mod: activeMod, code };
             updateDraftRef.current(activeMod, code);
+          }
+          if (!restoringViewport && (upd.selectionSet || upd.docChanged)) {
+            saveCurrentViewport(upd.view, upd.view.scrollDOM.isConnected);
           }
         }),
         EditorView.theme(
@@ -469,11 +506,44 @@ export const ScriptIdePanel: React.FC<PaneProps> = ({ openTemp }) => {
     const view = new EditorView({ state, parent: host });
     viewRef.current = view;
 
+    const onEditorScroll = () => {
+      if (restoringViewport || !view.scrollDOM.isConnected) return;
+      saveCurrentViewport(view, true);
+    };
+    view.scrollDOM.addEventListener('scroll', onEditorScroll, { passive: true });
+
+    let destroyed = false;
+    let raf1 = 0;
+    let raf2 = 0;
+    if (savedViewport) {
+      view.scrollDOM.scrollTop = savedViewport.scrollTop;
+      view.scrollDOM.scrollLeft = savedViewport.scrollLeft;
+      raf1 = window.requestAnimationFrame(() => {
+        if (destroyed) return;
+        view.requestMeasure();
+        view.scrollDOM.scrollTop = savedViewport.scrollTop;
+        view.scrollDOM.scrollLeft = savedViewport.scrollLeft;
+        raf2 = window.requestAnimationFrame(() => {
+          if (destroyed) return;
+          view.scrollDOM.scrollTop = savedViewport.scrollTop;
+          view.scrollDOM.scrollLeft = savedViewport.scrollLeft;
+          restoringViewport = false;
+        });
+      });
+    }
+
     return () => {
+      destroyed = true;
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+      if (!restoringViewport && view.scrollDOM.isConnected) {
+        saveCurrentViewport(view, true);
+      }
+      view.scrollDOM.removeEventListener('scroll', onEditorScroll);
       view.destroy();
       viewRef.current = null;
     };
-  }, [activeMod]);
+  }, [companyId, activeMod]);
 
   // Sync content when active file is updated externally (e.g., reset, draft restore, or discard)
   useEffect(() => {

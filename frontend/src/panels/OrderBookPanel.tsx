@@ -21,7 +21,7 @@ const TRADE_ROWS = 14;
  * The book subscription follows the params, price history is only fetched for the watched pair,
  * and every derived array is memoised so the per-tick re-render stays cheap.
  */
-export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openInPlace, openTemp }) => {
+export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   const books = useGameStore((s) => s.books);
@@ -183,8 +183,8 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openInP
         {item && (
           <button
             className="pill-btn py-0 text-[10px]"
-            onClick={() => openInPlace('item', { itemId: item.id })}
-            title="在当前窗口打开物品详情（配方、库存分布、全站行情）"
+            onClick={() => openTemp('item', { itemId: item.id })}
+            title="在新窗口打开物品详情（库存分布、全站行情）"
           >
             详情
           </button>
@@ -403,8 +403,8 @@ export const OrderBookPanel: React.FC<PaneProps> = ({ params, setParams, openInP
             该物品在全站共 <span className="text-amber-300 mono">{allStationOrders.length}</span> 个挂单 ·{' '}
             <button
               className="hover:text-sky-300 underline decoration-dotted"
-              onClick={() => openInPlace('item', { itemId: item.id })}
-              title="打开物品详情，查看全部站点的挂单与库存分布"
+              onClick={() => openTemp('item', { itemId: item.id })}
+              title="在新窗口打开物品详情，查看全部站点的挂单与库存分布"
             >
               查看物品总览
             </button>

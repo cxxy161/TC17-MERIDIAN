@@ -1338,3 +1338,51 @@ fn test_out_of_band_evicted_valid_bid_refunds_escrow_and_conserves_currency() {
         "out-of-band bid must be removed from top of book so it does not wedge matching"
     );
 }
+
+#[test]
+fn test_deal_order_can_fill_resting_planet_buy_order() {
+    let catalog = load_production_catalog();
+    let mut world = World::new_standard(catalog);
+    world
+        .spawn_company("player1", "Player Corp", true, "env_recycle", "P2", 10_000.0)
+        .expect("spawn player1");
+    world
+        .companies
+        .get_mut("player1")
+        .unwrap()
+        .add_station_qty("ST:P2", "water", 100);
+
+    // Tick 1: planet places its resting PLANET:P2 buy order at end of 1c
+    let rep1 = world.step_tick(vec![]);
+    assert_eq!(rep1.rejected_intents, 0);
+
+    let planet_bid = world.stations["ST:P2"]
+        .bids
+        .get("water")
+        .and_then(|v| v.iter().find(|o| o.owner_id == "PLANET:P2"))
+        .cloned()
+        .expect("PLANET:P2 water bid should exist after tick 1");
+
+    let cash_before = world.companies["player1"].cash;
+    let take_qty = planet_bid.qty.min(5).max(1);
+    let rep2 = world.step_tick(vec![(
+        "player1".to_string(),
+        vec![Intent::DealOrder {
+            order_id: planet_bid.order_id,
+            amount: take_qty,
+        }],
+    )]);
+    assert_eq!(
+        rep2.rejected_intents, 0,
+        "DealOrder targeting a visible PLANET:* bid from previous tick must not fail with -5"
+    );
+    assert!(
+        world.companies["player1"].cash > cash_before,
+        "player1 must receive sale proceeds from filling PLANET:P2 bid"
+    );
+    assert!(
+        world.planets["P2"].bought_this_tick.get("water").copied().unwrap_or(0) >= take_qty,
+        "PLANET:P2 bought_this_tick must count DealOrder fills"
+    );
+    assert_eq!(world.conservation_error(), 0);
+}

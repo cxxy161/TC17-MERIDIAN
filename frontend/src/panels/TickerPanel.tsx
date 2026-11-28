@@ -34,7 +34,7 @@ const GRID = 'grid-cols-[1fr_50px_50px_50px_42px_44px_84px]';
  * of filtering the full ticker array on every tick. The search box and the three toggles are pure
  * view state, which is exactly what `useState` is for.
  */
-export const TickerPanel: React.FC<PaneProps> = ({ params, setParams, openInPlace, openTemp }) => {
+export const TickerPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   const state = useGameStore((s) => s.state);
@@ -270,7 +270,7 @@ export const TickerPanel: React.FC<PaneProps> = ({ params, setParams, openInPlac
           const r = filtered[idx];
           return (
             <div
-              onClick={() => openInPlace('item', { itemId: r.id })}
+              onClick={() => openTemp('item', { itemId: r.id })}
               className={`h-[22px] grid ${GRID} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40`}
               title={`${r.name}（${r.id}）· ${r.category}`}
             >

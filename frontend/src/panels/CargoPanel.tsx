@@ -35,7 +35,7 @@ function fmtNum(n: number): string {
  * Now the location is `params.locationId` (the pane title derives from it), the inventory is a
  * virtualized table, and zero-stock items collapse into one expandable line.
  */
-export const CargoPanel: React.FC<PaneProps> = ({ params, setParams, openInPlace }) => {
+export const CargoPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
 
@@ -268,11 +268,11 @@ export const CargoPanel: React.FC<PaneProps> = ({ params, setParams, openInPlace
               const r = visible[idx];
               return (
                 <div
-                  onClick={() => openInPlace('item', { itemId: r.id })}
+                  onClick={() => openTemp('item', { itemId: r.id })}
                   className={`h-[26px] grid ${COLS} gap-1 items-center px-2 text-[11px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/40 ${
                     r.qty > 0 ? '' : 'opacity-60'
                   }`}
-                  title="打开物品详情（在当前位置展开）"
+                  title="在新窗口打开物品详情"
                 >
                   <span className="truncate text-slate-100">{r.name}</span>
                   <span className={`text-right mono ${r.qty > 0 ? 'text-emerald-300' : 'text-slate-600'}`}>

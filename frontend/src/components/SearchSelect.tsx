@@ -90,6 +90,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
 
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+  const listBoxRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const selected = options.find((o) => o.id === value);
@@ -124,10 +125,12 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     return filtered;
   }, [options, query, facetSel]);
 
+  const listDesiredHeight = Math.min(300, Math.max(120, measured.length * ROW_HEIGHT + 4));
+
   /**
-   * 用「弹层真实高度」决定朝上还是朝下，并始终与触发按钮保持 4px 间距、夹在视口内。
-   * 旧实现用固定 320px 估算：条目少的列表会离按钮很远（看起来像"飞上去"），
-   * 条目多时又会反过来盖住按钮。
+   * 用「弹层真实目标高度」决定朝上还是朝下，并始终与触发按钮保持 4px 间距、夹在视口内。
+   * 注意不能用 `pop.scrollHeight`：弹层自身 `border-box` 含 2px 边框且列表容器会 `flex-shrink`，
+   * 若滚轮滚动触发重算并把 `scrollHeight` 回写进 `maxHeight`，每滚一次都会被边框吃掉 2px 直到缩死。
    */
   const reposition = useCallback(() => {
     const trigger = triggerRef.current;
@@ -139,9 +142,15 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
     const vh = window.innerHeight;
     const width = Math.min(Math.max(r.width, 320), Math.max(240, vw - margin * 2));
     const left = Math.min(Math.max(margin, r.left), Math.max(margin, vw - width - margin));
-    // scrollHeight 是内容自然高度（即使 maxHeight 已经把它裁短）
     const pop = popRef.current;
-    const naturalHeight = pop ? Math.max(pop.scrollHeight, 160) : 320;
+    let naturalHeight = 320;
+    if (pop) {
+      let chromeH = 2; // 1px top + 1px bottom border
+      for (const child of Array.from(pop.children) as HTMLElement[]) {
+        chromeH += child === listBoxRef.current ? listDesiredHeight : child.offsetHeight;
+      }
+      naturalHeight = Math.max(160, chromeH);
+    }
     const spaceBelow = vh - r.bottom - gap - margin;
     const spaceAbove = r.top - gap - margin;
     const openUp = spaceBelow < naturalHeight && spaceAbove > spaceBelow;
@@ -155,7 +164,7 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
         ? prev
         : { top, left, width, maxHeight },
     );
-  }, []);
+  }, [listDesiredHeight]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -180,13 +189,18 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
       if (popRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
       setOpen(false);
     };
-    const onScroll = () => reposition();
+    const onScroll = (e: Event) => {
+      // 弹层内部列表/筛选条自己滚轮时不要触发重定位
+      if (e.target instanceof Node && popRef.current?.contains(e.target)) return;
+      reposition();
+    };
+    const onResize = () => reposition();
     window.addEventListener('mousedown', onDocDown, true);
-    window.addEventListener('resize', onScroll);
+    window.addEventListener('resize', onResize);
     document.addEventListener('scroll', onScroll, true);
     return () => {
       window.removeEventListener('mousedown', onDocDown, true);
-      window.removeEventListener('resize', onScroll);
+      window.removeEventListener('resize', onResize);
       document.removeEventListener('scroll', onScroll, true);
     };
   }, [open, reposition]);
@@ -327,8 +341,9 @@ export const SearchSelect: React.FC<SearchSelectProps> = ({
           {header}
 
           <div
+            ref={listBoxRef}
             style={{
-              height: Math.min(300, Math.max(120, measured.length * ROW_HEIGHT + 4)),
+              height: listDesiredHeight,
               minHeight: 0,
             }}
           >

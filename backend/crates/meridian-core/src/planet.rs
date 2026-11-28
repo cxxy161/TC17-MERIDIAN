@@ -541,16 +541,22 @@ impl Planet {
             self.wealth_tier = self.wealth_tier.saturating_sub(1).max(1);
         }
 
-        // City capacity vertical upgrade
+        // City capacity vertical upgrade: requires full upgrade material demand (scaling with level)
+        let mat_req = (self.city_level * 2).max(2);
         let mat_bought = *self.bought_this_tick.get("building_mat").unwrap_or(&0);
-        if self.population >= self.city_capacity * 0.85 && mat_bought >= 2 {
+        if self.city_level < 12
+            && self.prosperity_window.len() >= 120
+            && self.population >= self.city_capacity * 0.85
+            && mat_bought >= mat_req
+        {
             self.city_level += 1;
             self.city_capacity += (self.city_count * 1000) as f64;
         }
 
         if self.prosperity_window.len() >= 120 {
             if self.prosperity > 0.85 {
-                let grown = self.population * (1.0 + 0.00018 * (self.prosperity - 0.75));
+                let growth_driver = (self.prosperity - 0.75).min(1.5);
+                let grown = self.population * (1.0 + 0.00018 * growth_driver);
                 self.population = grown.min(self.city_capacity);
             } else if self.prosperity < 0.50 {
                 self.population = (self.population * 0.99994).max(500.0);

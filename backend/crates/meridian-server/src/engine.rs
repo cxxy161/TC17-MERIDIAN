@@ -206,6 +206,7 @@ impl GameEngine {
             let bundles = store.load_all_player_bundles()?;
             let memories = store.load_all_player_memories()?;
             let genomes = store.load_all_npc_genomes()?;
+            let mut npc_memories = store.load_all_npc_memories()?;
 
             for (cid, bundle) in bundles {
                 runner.set_player_script(cid, bundle);
@@ -217,7 +218,8 @@ impl GameEngine {
                 entry.enabled = enabled;
             }
             for (cid, genome) in genomes {
-                runner.register_npc(cid, genome);
+                let mem = npc_memories.remove(&cid).unwrap_or_default();
+                runner.register_npc_with_memory(cid, genome, mem);
             }
 
             // Ensure default player has a script if spawned without one
@@ -592,6 +594,10 @@ impl GameEngine {
         };
         self.store
             .persist_tick_batch(&[], 1, false, &dirty_refs, &[], &[], world_ref)?;
+        if self.world_dirty {
+            self.store
+                .save_all_npc_memories(&self.runner.npc_memories)?;
+        }
         for (cid, mem, en) in dirty_memories {
             self.saved_player_memories.insert(cid, (mem, en));
         }
@@ -643,6 +649,8 @@ impl GameEngine {
             self.saved_player_memories.insert(cid, (mem, en));
         }
         if save_world_now {
+            self.store
+                .save_all_npc_memories(&self.runner.npc_memories)?;
             self.world_dirty = false;
         }
 
@@ -877,23 +885,41 @@ impl GameEngine {
         } else {
             ranked.iter().map(|r| r.1.as_str()).collect()
         };
-        let genome = if pool.len() >= 2 {
-            let elite_len = (pool.len() / 4).max(2).min(pool.len());
-            let idx_a = (seq as usize) % elite_len;
-            let idx_b = ((seq as usize).wrapping_mul(7) + 1) % elite_len;
-            let ga = self
-                .runner
-                .npc_genomes
-                .get(pool[idx_a])
-                .cloned()
-                .unwrap_or_default();
-            let gb = self
-                .runner
-                .npc_genomes
-                .get(pool[idx_b])
-                .cloned()
-                .unwrap_or_default();
-            NpcGenome::crossover_mutate(&ga, &gb, seq.wrapping_mul(1315423911), 0.15)
+        let genome = if pool.len() >= 2 && seq % 5 != 0 {
+            // Diverse niche-balanced evolution (PSRO / quality-diversity style):
+            // preserve top performers across distinct `NpcGenome::niche_bucket` personality quadrants
+            // instead of letting a single top-quartile wealth cluster monoculture the whole server.
+            let mut niche_elites: std::collections::BTreeMap<(u8, u8), Vec<&str>> =
+                std::collections::BTreeMap::new();
+            for &cid in &pool {
+                if let Some(g) = self.runner.npc_genomes.get(cid) {
+                    niche_elites.entry(g.niche_bucket()).or_default().push(cid);
+                }
+            }
+            if niche_elites.is_empty() {
+                NpcGenome::from_seed(seq.wrapping_mul(2654435761))
+            } else {
+                let buckets: Vec<(u8, u8)> = niche_elites.keys().copied().collect();
+                let ba = buckets[(seq as usize) % buckets.len()];
+                let bb = buckets[((seq as usize) + 1) % buckets.len()];
+                let list_a = &niche_elites[&ba];
+                let list_b = &niche_elites[&bb];
+                let cid_a = list_a[(seq as usize) % list_a.len().min(2).max(1)];
+                let cid_b = list_b[((seq as usize) / buckets.len()) % list_b.len().min(2).max(1)];
+                let ga = self
+                    .runner
+                    .npc_genomes
+                    .get(cid_a)
+                    .cloned()
+                    .unwrap_or_default();
+                let gb = self
+                    .runner
+                    .npc_genomes
+                    .get(cid_b)
+                    .cloned()
+                    .unwrap_or_default();
+                NpcGenome::crossover_mutate(&ga, &gb, seq.wrapping_mul(1315423911), 0.15)
+            }
         } else {
             NpcGenome::from_seed(seq.wrapping_mul(2654435761))
         };
@@ -933,7 +959,11 @@ impl GameEngine {
         ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
         let cpi = self.world.cpi.max(0.25);
-        let profs = ["env_recycle", "agri_bio", "mining_ind"];
+        let mut profs: Vec<String> = self.world.catalog.professions.keys().cloned().collect();
+        profs.sort();
+        if profs.is_empty() {
+            return spawned;
+        }
         let mut planet_order: Vec<(String, u32, f64)> = self
             .world
             .planets
@@ -1013,10 +1043,11 @@ impl GameEngine {
                 let (best_prof, best_margin) = {
                     let st_opt = self.world.stations.get(&sid);
                     let hub_opt = self.world.stations.get(&hub_sid);
-                    let mut best_prof = profs[0];
+                    let mut best_prof = profs[0].as_str();
                     let mut best_score = f64::NEG_INFINITY;
                     let mut best_margin = 0.0;
-                    for &pr_id in &profs {
+                    for pr_id in &profs {
+                        let pr_id = pr_id.as_str();
                         let Some(pr_def) = self.world.catalog.professions.get(pr_id) else {
                             continue;
                         };
@@ -1164,6 +1195,7 @@ impl GameEngine {
         self.store.clear_world_and_history()?;
         let _ = self.store.mark_all_users_needs_onboarding();
         self.runner.npc_genomes.clear();
+        self.runner.npc_memories.clear();
         self.runner.extra_intents.clear();
         self.runner.last_player_outputs.clear();
 

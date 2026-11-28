@@ -11,7 +11,7 @@ use meridian_core::{from_money, CompanyId, Intent, ProductionCatalog, TickReport
 use rayon::prelude::*;
 
 use crate::js_runner::PlayerVmHandle;
-use crate::npc::{decide_npc_intents, NpcGenome};
+use crate::npc::{decide_npc_intents_with_memory, NpcGenome, NpcMemory};
 use crate::types::{
     ConsoleEntry, ConsoleEvalOutput, ConsoleLevel, JsLastTickFill, LastTickFeedback,
     PlayerRunConfig, PlayerRunOutput, PlayerScriptBundle,
@@ -58,6 +58,7 @@ pub struct StepTiming {
 pub struct SimulationRunner {
     pub players: HashMap<CompanyId, PlayerVmState>,
     pub npc_genomes: HashMap<CompanyId, NpcGenome>,
+    pub npc_memories: HashMap<CompanyId, NpcMemory>,
     pub extra_intents: HashMap<CompanyId, Vec<Intent>>,
     pub config: PlayerRunConfig,
     pub last_player_outputs: HashMap<CompanyId, PlayerRunOutput>,
@@ -70,6 +71,7 @@ impl Default for SimulationRunner {
         Self {
             players: HashMap::new(),
             npc_genomes: HashMap::new(),
+            npc_memories: HashMap::new(),
             extra_intents: HashMap::new(),
             config: PlayerRunConfig::default(),
             last_player_outputs: HashMap::new(),
@@ -116,7 +118,20 @@ impl SimulationRunner {
     }
 
     pub fn register_npc(&mut self, company_id: impl Into<CompanyId>, genome: NpcGenome) {
-        self.npc_genomes.insert(company_id.into(), genome);
+        let cid = company_id.into();
+        self.npc_genomes.insert(cid.clone(), genome);
+        self.npc_memories.entry(cid).or_default();
+    }
+
+    pub fn register_npc_with_memory(
+        &mut self,
+        company_id: impl Into<CompanyId>,
+        genome: NpcGenome,
+        memory: NpcMemory,
+    ) {
+        let cid = company_id.into();
+        self.npc_genomes.insert(cid.clone(), genome);
+        self.npc_memories.insert(cid, memory);
     }
 
     pub fn eval_console(
@@ -184,6 +199,7 @@ impl SimulationRunner {
         struct NpcJob<'a> {
             cid: CompanyId,
             genome: Option<&'a NpcGenome>,
+            memory: NpcMemory,
         }
 
         let mut cids: Vec<CompanyId> = world.companies.keys().cloned().collect();
@@ -212,7 +228,8 @@ impl SimulationRunner {
                 }
             } else {
                 let genome = self.npc_genomes.get(&cid);
-                npc_jobs.push(NpcJob { cid, genome });
+                let memory = self.npc_memories.remove(&cid).unwrap_or_default();
+                npc_jobs.push(NpcJob { cid, genome, memory });
             }
         }
 
@@ -225,13 +242,14 @@ impl SimulationRunner {
         let world_ref: &World = world;
 
         let t_npc = Instant::now();
-        let npc_outcomes: Vec<(CompanyId, Vec<Intent>)> = npc_jobs
+        let npc_outcomes: Vec<(CompanyId, Vec<Intent>, NpcMemory)> = npc_jobs
             .into_par_iter()
-            .filter_map(|job| {
+            .filter_map(|mut job| {
                 let snap = world_ref.snapshot_for_with_shared(&job.cid, &shared, false)?;
                 let g = job.genome.unwrap_or(&default_genome);
-                let intents = decide_npc_intents(&snap, &world_ref.catalog, g);
-                Some((job.cid, intents))
+                let intents =
+                    decide_npc_intents_with_memory(&snap, &world_ref.catalog, g, &mut job.memory);
+                Some((job.cid, intents, job.memory))
             })
             .collect();
         let npc_ms = t_npc.elapsed().as_secs_f64() * 1000.0;
@@ -317,7 +335,8 @@ impl SimulationRunner {
             .collect();
         manual_intents_by_company.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (cid, intents) in npc_outcomes {
+        for (cid, intents, mem) in npc_outcomes {
+            self.npc_memories.insert(cid.clone(), mem);
             if !intents.is_empty() {
                 intents_by_company.push((cid, intents));
             }
@@ -353,6 +372,36 @@ impl SimulationRunner {
             let notional = from_money(fill.notional);
             let fee = from_money(fill.fee);
             let refund = from_money(fill.buyer_refund);
+            if let Some(bmem) = self.npc_memories.get_mut(&fill.buyer_id) {
+                let inv_before = world
+                    .companies
+                    .get(&fill.buyer_id)
+                    .map(|c| {
+                        c.station_qty(&fill.station_id, &fill.item_id)
+                            .saturating_sub(fill.qty)
+                    })
+                    .unwrap_or(0);
+                bmem.record_fill(
+                    fill.tick,
+                    &fill.station_id,
+                    &fill.item_id,
+                    true,
+                    fill.qty,
+                    price,
+                    inv_before,
+                );
+            }
+            if let Some(smem) = self.npc_memories.get_mut(&fill.seller_id) {
+                smem.record_fill(
+                    fill.tick,
+                    &fill.station_id,
+                    &fill.item_id,
+                    false,
+                    fill.qty,
+                    price,
+                    0,
+                );
+            }
             self.last_tick_feedback
                 .entry(fill.buyer_id.clone())
                 .or_default()
@@ -402,9 +451,10 @@ impl SimulationRunner {
             }
         }
 
-        // Respawn bankrupt NPC slots cleanly or prune dead NPC genomes
+        // Respawn bankrupt NPC slots cleanly or prune dead NPC genomes & memories
         for dead_cid in &report.bankruptcies {
             self.npc_genomes.remove(dead_cid);
+            self.npc_memories.remove(dead_cid);
         }
 
         let _ = ProductionCatalog::from_json_str; // keeps catalog type cleanly referenced

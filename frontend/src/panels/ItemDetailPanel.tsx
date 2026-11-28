@@ -4,15 +4,12 @@ import type { PaneProps } from '../layout/paneRegistry';
 import { useCatalogIndex, useWorldIndex } from '../entities/hooks';
 import { SearchSelect, type PickerOption } from '../components/SearchSelect';
 import { VirtualList } from '../components/VirtualList';
-import type { RecipeDef } from '../types/meridian';
 import { moneyToCredits } from '../types/meridian';
 
 /**
- * Item-centric detail: what it is, who makes/consumes it, where mine is, my orders, and every
- * station quoting it. This is the drill-down that turns an id into knowledge instead of making the
- * player read production.json.
+ * Item-centric detail: what it is, where mine is, my orders, and every station quoting it.
  */
-export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openInPlace }) => {
+export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openTemp }) => {
   const catalog = useCatalogIndex();
   const world = useWorldIndex();
   const itemId = params.itemId;
@@ -49,14 +46,6 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
     />
   );
 
-  const recipesIn = useMemo(
-    () => (itemId ? catalog.recipesConsuming.get(itemId) ?? [] : []),
-    [catalog, itemId],
-  );
-  const recipesOut = useMemo(
-    () => (itemId ? catalog.recipesProducing.get(itemId) ?? [] : []),
-    [catalog, itemId],
-  );
   const holding = itemId ? world.holding(itemId) : undefined;
   const myOrders = useMemo(
     () => (itemId ? world.openOrdersByItem.get(itemId) ?? [] : []),
@@ -77,12 +66,6 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
       return la.localeCompare(lb, 'zh-Hans-CN');
     });
   }, [quotes, world]);
-
-  const recipeLine = (r: RecipeDef) => {
-    const inputs = r.inputs.map((i) => `${catalog.itemName(i.item)}×${i.qty}`).join(' + ') || '—';
-    const outputs = r.outputs.map((o) => `${catalog.itemName(o.item)}×${o.qty}`).join(' + ') || '—';
-    return { inputs, outputs, building: catalog.buildingName(r.building_id) };
-  };
 
   if (!item) {
     return (
@@ -119,14 +102,15 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
           {picker}
           <button
             className="pill-btn py-0 text-[10px]"
-            onClick={() => openInPlace('chart', { stationId: params.stationId, itemId: item.id })}
-            title="在当前窗口打开 K 线"
+            onClick={() => openTemp('chart', { stationId: params.stationId, itemId: item.id })}
+            title="在新窗口打开 K 线"
           >
             K线
           </button>
           <button
             className="pill-btn py-0 text-[10px]"
-            onClick={() => openInPlace('orderbook', { stationId: params.stationId, itemId: item.id })}
+            onClick={() => openTemp('orderbook', { stationId: params.stationId, itemId: item.id })}
+            title="在新窗口打开盘口"
           >
             盘口
           </button>
@@ -147,7 +131,7 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-2.5 space-y-2.5">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
           <div className="border border-slate-800 bg-[#1b212b] p-2 rounded-sm space-y-1">
             <div className="text-[10px] text-slate-400 border-b border-slate-800 pb-1">
               我的持有（合计 <span className="text-emerald-300 mono">{holding?.total ?? 0}</span>）
@@ -198,44 +182,12 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
               跨全部站点的该物品挂单（这是原先只能在盘口逐个物品查看的总览）
             </div>
           </div>
-
-          <div className="border border-slate-800 bg-[#1b212b] p-2 rounded-sm space-y-1">
-            <div className="text-[10px] text-slate-400 border-b border-slate-800 pb-1">配方关系</div>
-            <div className="text-[10px] text-slate-300">
-              产出配方 <span className="text-sky-300 mono">{recipesOut.length}</span> 条 · 消耗配方{' '}
-              <span className="text-rose-300 mono">{recipesIn.length}</span> 条
-            </div>
-            {recipesOut.length === 0 && recipesIn.length === 0 ? (
-              <div className="text-[10px] text-slate-600">该物品不参与任何配方（可能只由城市消费）</div>
-            ) : (
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {recipesOut.slice(0, 6).map((r) => {
-                  const line = recipeLine(r);
-                  return (
-                    <div key={r.id} className="text-[10px] leading-tight">
-                      <span className="text-emerald-300">{line.building}</span>
-                      <span className="text-slate-500"> · {r.cycle_ticks}回合 · </span>
-                      <span className="text-slate-300">{line.inputs}</span>
-                      <span className="text-slate-500"> → </span>
-                      <span className="text-sky-300">{line.outputs}</span>
-                    </div>
-                  );
-                })}
-                {recipesIn.length > 0 && (
-                  <div className="text-[9px] text-slate-500 pt-0.5">
-                    被消耗于：{recipesIn.slice(0, 4).map((r) => catalog.buildingName(r.building_id)).join('、')}
-                    {recipesIn.length > 4 ? ` 等 ${recipesIn.length} 条` : ''}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
         </div>
 
         <div className="border border-slate-800 bg-[#1b212b] rounded-sm flex flex-col min-h-[140px]">
           <div className="px-2 py-1 border-b border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
             <span>全站行情（{sortedQuotes.length} 个站点报价）</span>
-            <span className="text-slate-600">点击站点行 → 在该站点打开行情</span>
+            <span className="text-slate-600">点击站点行 → 新开该站点行情</span>
           </div>
           <div className="px-2 py-1 grid grid-cols-[1fr_56px_56px_56px_50px] gap-1 text-[9px] text-slate-500 border-b border-slate-800/60">
             <span>站点</span>
@@ -257,7 +209,7 @@ export const ItemDetailPanel: React.FC<PaneProps> = ({ params, setParams, openIn
               const q = sortedQuotes[idx];
               return (
                 <div
-                  onClick={() => openInPlace('ticker', { stationId: q.stationId })}
+                  onClick={() => openTemp('ticker', { stationId: q.stationId })}
                   className="h-[22px] grid grid-cols-[1fr_56px_56px_56px_50px] gap-1 items-center px-2 text-[10px] cursor-pointer hover:bg-sky-500/10 border-b border-slate-800/30"
                 >
                   <span className="truncate text-slate-300">{world.stationLabel(q.stationId)}</span>
